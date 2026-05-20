@@ -1,0 +1,9 @@
+# Python environment
+venv/
+__pycache__/
+
+# Database (Keep medical data local!)
+pathology.db
+
+# OS generated files
+.DS_Store
