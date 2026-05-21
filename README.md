@@ -27,4 +27,4 @@ This app is designed to run in an isolated Python virtual environment.
 
 3. Boot the Stramlit server (accessible via local network):
    ```bash
-   stramlit run app.py --server.address 0.0.0.0
+   streamlit run app.py --server.address 0.0.0.0
