@@ -62,7 +62,7 @@ elif app_mode == "Workspace (Daily Ops)":
         }
 
         if shared_fields:
-            st.markdown("### ⚙️ Global Modifiers")
+            st.subheader("⚙️ Global Modifiers", anchor=False)
             st.caption("Applies to all matching specimens below at once — still editable per specimen.")
             for field_key, entries in shared_fields.items():
                 label = entries[0][1]["label"]
@@ -82,7 +82,7 @@ elif app_mode == "Workspace (Daily Ops)":
                 )
             st.divider()
 
-        st.subheader("1. Medical Variables")
+        st.subheader("1. Medical Variables", anchor=False)
         micro_blocks, conc_blocks = [], []
 
         for i, block in enumerate(blocks):
@@ -116,7 +116,7 @@ elif app_mode == "Workspace (Daily Ops)":
             conc_blocks.append((block["name"], conc_txt))
             st.divider()
 
-        st.subheader("2. Final Report (Review & Edit)")
+        st.subheader("2. Final Report (Review & Edit)", anchor=False)
         master_lock = st.toggle("🔒 Enable Manual Edit Mode", key="master_lock")
 
         raw_compiled_micro = engine.format_micro_plain(micro_blocks)
