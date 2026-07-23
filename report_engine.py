@@ -1,62 +1,128 @@
+import re
+from jinja2 import Template
+
+# Lightweight Markdown-style bold convention for Master Lock manual edits.
+# Plain text areas have no concept of bold, and guessing which lines
+# "should" be bold from structure (numbered headers vs. bulleted labels vs.
+# whatever the next case type needs) is a losing game. Instead, the user
+# marks bold explicitly with **like this**, same as Markdown — works for
+# any report structure without special-casing any of them.
+BOLD_MARKUP_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+
+def text_to_html(text):
+    """Converts Master Lock manual-edit plain text into HTML: **bold** markup
+    becomes <b>, newlines become <br>."""
+    html = BOLD_MARKUP_RE.sub(r"<b>\1</b>", text)
+    return html.replace("\n", "<br>")
+
+
 def format_fragment_text(count):
-    """Returns the grammatically correct French description for biopsy counts."""
+    """Grammatically correct French description for a biopsy fragment count."""
+    count = int(count)
     if count == 1:
         return "Un fragment biopsique inclus en totalité."
     return f"{count} fragments biopsiques inclus en totalité."
 
-def generate_block_text(block_name, block_type, def_micro, def_conc, fragments, is_normal, inflam, global_hp):
-    """
-    Computes the microscopy text and conclusion text for an individual block 
-    based on user selected clinical variables.
-    """
-    frag_text = format_fragment_text(fragments)
-    
-    if block_type != "Smart":
-        return f"<b>{block_name}</b>\n{frag_text}\n\n{def_micro}", def_conc
 
-    if block_name == "Duodenum":
-        micro_txt = f"{frag_text}\n\n{def_micro}" if is_normal else f"{frag_text}\n\nAnomalie détectée."
-        conc_txt = def_conc if is_normal else "Duodénite."
-        return micro_txt, conc_txt
-        
-    # Default processing for Antrum and Fundus
-    base_micro = def_micro.replace("{inflam}", inflam)
-    micro_txt = f"{frag_text}\n\n{base_micro}"
-    conc_txt = f"Gastrite chronique interstitielle {block_name.lower()} {inflam}, active, sans métaplasie intestinale ni atrophie glandulaire."
-    
-    if global_hp: 
-        micro_txt += "\nPrésence d'éléments ayant la morphologie d'Helicobacter pylori en HES."
-        if block_name == "Antrum":
-            micro_txt += "\n\nEtude immunohistochimique :\n- HP : positif"
-        conc_txt += "\nPrésence d'une infection à hélicobacter pylori."
-        
-    return micro_txt, conc_txt
+def coerce_field_value(field_type, raw_value):
+    """Converts a stored/override string value into the right Python type
+    for use inside a Jinja2 template context (checkboxes need real bools,
+    numbers need real ints, otherwise Jinja truthiness/formatting breaks)."""
+    if raw_value is None:
+        return None
+    if field_type == "checkbox":
+        return str(raw_value) in ("1", "True", "true")
+    if field_type == "number":
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError):
+            return raw_value
+    return raw_value
 
-def compile_final_html(case_id, clinical_info, protocol_title, micro_blocks, conc_blocks):
-    """Combines all blocks into the final precise HTML layout ready for clipboard extraction."""
-    # 1. Build Microscopy section safely by handling the newline replacement out of the f-string string interpolation
-    formatted_micro_list = []
+
+def build_context(block, field_values_override=None):
+    """
+    block: a block dict from database.get_preset_blocks(), including 'fields'.
+    field_values_override: optional {field_key: value} from live UI widgets,
+    which takes priority over the block's already-resolved defaults.
+
+    Returns the dict passed into the Jinja2 template as render context.
+    """
+    context = {}
+    for field in block["fields"]:
+        value = field["value"]
+        if field_values_override and field["key"] in field_values_override:
+            value = field_values_override[field["key"]]
+        context[field["key"]] = coerce_field_value(field["type"], value)
+
+    if "fragments" in context and context["fragments"] is not None:
+        context["fragment_text"] = format_fragment_text(context["fragments"])
+
+    return context
+
+
+def render_block(block, field_values_override=None):
+    """Renders one block instance's microscopy and conclusion text."""
+    context = build_context(block, field_values_override)
+    micro_txt = Template(block["micro_template"]).render(**context)
+    conc_txt = Template(block["conclusion_template"]).render(**context)
+    return micro_txt.strip(), conc_txt.strip()
+
+
+def format_micro_plain(micro_blocks):
+    """
+    Plain text for the microscopy section, with **bold** already at the
+    block-header spots — matches the sample reports: header line bold,
+    body text plain. This is the single source of truth: used for the
+    auto-render preview AND as the exact pre-fill when switching into
+    Master Lock, so existing bold never needs retyping.
+    """
+    parts = []
     for i, (name, text) in enumerate(micro_blocks):
-        safe_text = text.replace('\n', '<br>')
-        formatted_micro_list.append(f"<b>{i+1}. {name}</b><br>{safe_text}")
-    html_micro = "<br><br>".join(formatted_micro_list)
-    
-    # 2. Build Conclusion section safely
-    formatted_conc_list = []
+        parts.append(f"**{i+1}. {name}**\n{text}")
+    return "\n\n".join(parts)
+
+
+def format_conc_plain(conc_blocks):
+    """
+    Plain text for the conclusion section, with each line fully bolded —
+    matches the sample reports, where every conclusion line is bold in
+    full (not just the number). Bolded per physical line rather than per
+    block, since a block's conclusion can itself span multiple lines
+    (e.g. the HP-positive addendum).
+    """
+    lines = []
     for i, (_, text) in enumerate(conc_blocks):
-        safe_text = text.replace('\n', '<br>')
-        formatted_conc_list.append(f"<b>{i+1}.</b> {safe_text}")
-    html_conc = "<br>".join(formatted_conc_list)
-    
-    display_title = "BIOPSIES GASTRODUODENALES" if protocol_title == "Gastric Trio" else protocol_title.upper()
-    
+        text_lines = text.split("\n")
+        for j, line in enumerate(text_lines):
+            prefix = f"{i+1}. " if j == 0 else ""
+            lines.append(f"**{prefix}{line}**")
+    return "\n".join(lines)
+
+
+def assemble_report_html(case_id, clinical_info, preset_title, micro_html, conc_html):
+    """
+    Final report shell. Takes already-converted HTML for microscopy/
+    conclusion — call text_to_html() on the plain text first. Bold comes
+    entirely from **markers** in that plain text now; nothing here forces
+    extra bolding, so auto-render and manual edits stay visually identical
+    for identical content.
+    """
     return f"""
     <div style="font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;">
         N° {case_id}<br>
         <b><i>Renseignements cliniques :</i></b> <i>{clinical_info}</i><br><br><br>
-        <div style="text-align: center;"><b>{display_title}</b></div><br><br>
-        <u>MICROSCOPY:</u><br>{html_micro}<br><br><br>
+        <div style="text-align: center;"><b>{preset_title.upper()}</b></div><br><br>
+        <u>MICROSCOPY:</u><br>{micro_html}<br><br><br>
         <b>CONCLUSION</b><br><br>
-        <b>{html_conc}</b>
+        {conc_html}
     </div>
     """
+
+
+def compile_final_html(case_id, clinical_info, preset_title, micro_blocks, conc_blocks):
+    """Convenience wrapper for the auto-render path."""
+    micro_html = text_to_html(format_micro_plain(micro_blocks))
+    conc_html = text_to_html(format_conc_plain(conc_blocks))
+    return assemble_report_html(case_id, clinical_info, preset_title, micro_html, conc_html)

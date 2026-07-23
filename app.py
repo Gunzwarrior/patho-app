@@ -1,5 +1,4 @@
 import streamlit as st
-import json
 import database as db
 import report_engine as engine
 
@@ -15,105 +14,155 @@ with st.sidebar:
 # ==========================================
 if app_mode == "Manager (Settings)":
     st.title("⚙️ System Manager")
-    tab1, tab2, tab3, tab4 = st.tabs(["Templates", "Master Templates", "Snippets", "Cases"])
-    with tab1: st.dataframe(db.load_table_as_df("Templates"), use_container_width=True, hide_index=True)
-    with tab2: st.dataframe(db.load_table_as_df("Master_Templates"), use_container_width=True, hide_index=True)
-    with tab3: st.dataframe(db.load_table_as_df("Snippets"), use_container_width=True, hide_index=True)
-    with tab4: st.dataframe(db.load_table_as_df("Cases"), use_container_width=True, hide_index=True)
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Fields", "Blocks", "Presets", "Snippets", "Cases"])
+    with tab1: st.dataframe(db.load_table_as_df("Fields"), use_container_width=True, hide_index=True)
+    with tab2: st.dataframe(db.load_table_as_df("Blocks"), use_container_width=True, hide_index=True)
+    with tab3: st.dataframe(db.load_table_as_df("Presets"), use_container_width=True, hide_index=True)
+    with tab4: st.dataframe(db.load_table_as_df("Snippets"), use_container_width=True, hide_index=True)
+    with tab5: st.dataframe(db.load_table_as_df("Cases"), use_container_width=True, hide_index=True)
+    st.caption(
+        "Read-only for now — a proper Fields/Blocks/Presets/Snippets editor "
+        "(add, edit, reorder without touching code) is a later step."
+    )
 
 # ==========================================
 # MODE B: THE WORKSPACE (DAILY OPS)
 # ==========================================
 elif app_mode == "Workspace (Daily Ops)":
     st.title("🔬 Workspace")
-    
-    # 1. TOP BAR
+
     c1, c2, c3 = st.columns([1, 2, 2])
     with c1: case_id = st.text_input("📁 Case ID", key="case_id")
     with c2: clinical_info = st.text_input("🩺 Renseignements cliniques", key="clin_info")
     with c3:
-        master_templates = db.get_all_master_template_names()
-        selected_master = st.selectbox("📋 Select Protocol", ["-- Select --"] + master_templates)
+        presets = db.get_all_presets()
+        preset_labels = ["-- Select --"] + [f"{p['name']} ({p['short_code']})" for p in presets]
+        selected_label = st.selectbox("📋 Select Preset", preset_labels)
 
     st.markdown("---")
 
-    if selected_master != "-- Select --":
-        # Fetch template sequence from database module
-        raw_sequence = db.get_master_template_sequence(selected_master)
-        template_sequence = json.loads(raw_sequence[0])
-        
-        micro_blocks = []
-        conc_blocks = []
+    if selected_label != "-- Select --":
+        preset = presets[preset_labels.index(selected_label) - 1]
+        blocks = db.get_preset_blocks(preset["id"])
 
-        # Global Modifiers
-        global_hp = False
-        if selected_master == "Gastric Trio":
+        # --- Detect fields shared across 2+ blocks in this preset, with
+        # matching current default values (e.g. HP status on Antrum+Fundus).
+        # These get a single "global" control as a time-saver; per-block
+        # controls stay available underneath for individual overrides.
+        shared_candidates = {}
+        for block in blocks:
+            for field in block["fields"]:
+                if field["type"] != "checkbox":
+                    continue
+                shared_candidates.setdefault(field["key"], []).append((block, field))
+
+        shared_fields = {
+            key: entries for key, entries in shared_candidates.items()
+            if len(entries) >= 2 and len({e[1]["value"] for e in entries}) == 1
+        }
+
+        if shared_fields:
             st.markdown("### ⚙️ Global Modifiers")
-            global_hp = st.checkbox("🦠 Global H. Pylori (+) - Applies to Antrum & Fundus", value=True)
+            st.caption("Applies to all matching specimens below at once — still editable per specimen.")
+            for field_key, entries in shared_fields.items():
+                label = entries[0][1]["label"]
+                block_names = ", ".join(b["name"] for b, _ in entries)
+                default_val = str(entries[0][1]["value"]) in ("1", "True", "true")
+                shared_key = f"shared_{field_key}"
+
+                def _apply_shared(field_key=field_key, entries=entries, shared_key=shared_key):
+                    for b, _ in entries:
+                        st.session_state[f"field_{b['block_id']}_{field_key}"] = st.session_state[shared_key]
+
+                st.checkbox(
+                    f"{label} — {block_names}",
+                    value=default_val,
+                    key=shared_key,
+                    on_change=_apply_shared,
+                )
             st.divider()
 
         st.subheader("1. Medical Variables")
-        with st.container():
-            for i, block_name in enumerate(template_sequence):
-                block_data = db.get_template_details(block_name)
-                
-                if block_data:
-                    block_type, def_micro, def_conc = block_data
-                    
-                    c_label, c_frag, c1 = st.columns([1.5, 1, 4])
-                    c_label.markdown(f"**{i+1}. {block_name}**")
-                    fragments = c_frag.number_input("Fragments", min_value=1, value=2 if block_name=="Duodenum" else 3 if block_name=="Antrum" else 1, key=f"frag_{i}")
-                    
-                    # Track simple element selections
-                    is_normal = True
-                    inflam = "modérée"
-                    
-                    if block_type == "Smart":
-                        if block_name == "Duodenum":
-                            is_normal = c1.checkbox("Normal?", value=True, key=f"norm_{i}")
-                        else:
-                            inflam = c1.selectbox("Inflammation", ["légère", "modérée", "sévère"], index=1, key=f"inf_{i}", label_visibility="collapsed")
-                    
-                    # Delegate text production to report engine module
-                    micro_txt, conc_txt = engine.generate_block_text(block_name, block_type, def_micro, def_conc, fragments, is_normal, inflam, global_hp)
-                    
-                    micro_blocks.append((block_name, micro_txt))
-                    conc_blocks.append((block_name, conc_txt))
+        micro_blocks, conc_blocks = [], []
 
-        st.divider()
+        for i, block in enumerate(blocks):
+            st.markdown(f"**{i+1}. {block['name']}**")
+            cols = st.columns(max(len(block["fields"]), 1))
+            overrides = {}
+
+            for col, field in zip(cols, block["fields"]):
+                widget_key = f"field_{block['block_id']}_{field['key']}"
+
+                with col:
+                    if field["type"] == "number":
+                        val = st.number_input(
+                            field["label"], min_value=0,
+                            value=int(field["value"]), key=widget_key,
+                        )
+                    elif field["type"] == "select":
+                        options = field["options"] or []
+                        idx = options.index(field["value"]) if field["value"] in options else 0
+                        val = st.selectbox(field["label"], options, index=idx, key=widget_key)
+                    elif field["type"] == "checkbox":
+                        default_bool = str(field["value"]) in ("1", "True", "true")
+                        val = st.checkbox(field["label"], value=default_bool, key=widget_key)
+                    else:
+                        val = st.text_input(field["label"], value=field["value"] or "", key=widget_key)
+
+                overrides[field["key"]] = val
+
+            micro_txt, conc_txt = engine.render_block(block, overrides)
+            micro_blocks.append((block["name"], micro_txt))
+            conc_blocks.append((block["name"], conc_txt))
+            st.divider()
 
         st.subheader("2. Final Report (Review & Edit)")
         master_lock = st.toggle("🔒 Enable Manual Edit Mode", key="master_lock")
-        
-        # Format strings raw array conversions for input boxes
-        raw_compiled_micro = "\n\n".join([f"{i+1}. {name}:\n{text}" for i, (name, text) in enumerate(micro_blocks)])
-        raw_compiled_conc = "\n".join([f"{i+1}. {text}" for i, (_, text) in enumerate(conc_blocks)])
+
+        raw_compiled_micro = engine.format_micro_plain(micro_blocks)
+        raw_compiled_conc = engine.format_conc_plain(conc_blocks)
 
         if not master_lock:
-            st.session_state['final_micro_edit'] = raw_compiled_micro
-            st.session_state['final_conc_edit'] = raw_compiled_conc
+            st.session_state["final_micro_edit"] = raw_compiled_micro
+            st.session_state["final_conc_edit"] = raw_compiled_conc
 
         final_micro = st.text_area("Microscopy", key="final_micro_edit", height=300, disabled=not master_lock)
         final_conc = st.text_area("Conclusion", key="final_conc_edit", height=150, disabled=not master_lock)
 
         st.divider()
 
-        # Build clean markup via logic engine
-        final_html = engine.compile_final_html(case_id, clinical_info, selected_master, micro_blocks, conc_blocks)
+        # Single code path regardless of Master Lock: final_html is always
+        # built from the text areas' current content. When the lock is off
+        # that content is auto-synced from the blocks every rerun; when it's
+        # on, it's whatever was typed — including any **bold** the blocks
+        # already put there, since raw_compiled_micro/conc carried it over.
+        final_html = engine.assemble_report_html(
+            case_id, clinical_info, preset["name"],
+            engine.text_to_html(final_micro),
+            engine.text_to_html(final_conc),
+        )
         st.markdown(final_html, unsafe_allow_html=True)
-        
-        # --- ACTION BUTTONS ---
+
         c_save, c_copy = st.columns(2)
         with c_save:
             if st.button("💾 Save Case to Database", use_container_width=True, type="primary"):
                 if case_id:
-                    if db.save_case(case_id, selected_master, final_html):
+                    structured_input = {
+                        block["key"]: {
+                            field["key"]: st.session_state[f"field_{block['block_id']}_{field['key']}"]
+                            for field in block["fields"]
+                        }
+                        for block in blocks
+                    }
+                    if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html):
                         st.success("✅ Case saved successfully!")
-                    else: st.error("❌ Error saving case.")
-                else: st.warning("⚠️ Please enter a Case ID before saving.")
+                    else:
+                        st.error("❌ Error saving case.")
+                else:
+                    st.warning("⚠️ Please enter a Case ID before saving.")
 
         with c_copy:
-            safe_html = final_html.replace('`', "'").replace('\n', '')
+            safe_html = final_html.replace("`", "'").replace("\n", "")
             components_html = f"""
             <button onclick="copyRichText()" style="padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%;">📋 Copy to Diamic</button>
             <script>
