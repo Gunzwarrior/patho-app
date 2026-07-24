@@ -50,7 +50,15 @@ def setup_database():
             label TEXT NOT NULL,
             type TEXT NOT NULL,           -- 'text' | 'number' | 'select' | 'checkbox'
             options JSON,                 -- e.g. ["légère","modérée","sévère"]
-            default_value TEXT
+            default_value TEXT,
+            conclusion_addendum_template TEXT   -- optional Jinja2 template (context: {value}).
+                                                 -- When set, this field's statement is removed
+                                                 -- from every block's own conclusion_template and
+                                                 -- instead rendered once, at the end of the whole
+                                                 -- case's conclusion, from the value every block
+                                                 -- using it agrees on. For facts that are really
+                                                 -- case-level (e.g. overall H. pylori status) even
+                                                 -- though captured per-specimen.
         );
 
         -- BLOCKS: one specimen/component type
@@ -59,6 +67,10 @@ def setup_database():
             key TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
             is_table BOOLEAN DEFAULT 0,
+            site_label TEXT,               -- e.g. 'antrale', 'fundique' — the site-specific
+                                            -- word a groupable conclusion_template substitutes
+                                            -- via {{site_label}}. NULL for blocks that don't
+                                            -- participate in site-word grouping.
             micro_template TEXT NOT NULL,
             conclusion_template TEXT NOT NULL
         );
@@ -132,16 +144,21 @@ def setup_database():
     """)
 
     print("Seeding Fields...")
+    hp_addendum = (
+        "{% if value %}Présence d'une infection à hélicobacter pylori."
+        "{% else %}Absence d'hélicobacter pylori.{% endif %}"
+    )
     fields = [
-        # key, label, type, options(json or None), default_value
-        ("fragments", "Fragments", "number", None, "1"),
+        # key, label, type, options(json or None), default_value, conclusion_addendum_template
+        ("fragments", "Fragments", "number", None, "1", None),
         ("inflammation_intensity", "Inflammation", "select",
-         json.dumps(["légère", "modérée", "sévère"]), "modérée"),
-        ("is_normal", "Normal ?", "checkbox", None, "1"),
-        ("hp_positive", "Helicobacter pylori positif", "checkbox", None, "1"),
+         json.dumps(["légère", "modérée", "sévère"]), "modérée", None),
+        ("is_normal", "Normal ?", "checkbox", None, "1", None),
+        ("hp_positive", "Helicobacter pylori positif", "checkbox", None, "1", hp_addendum),
     ]
     cursor.executemany(
-        "INSERT INTO Fields (key, label, type, options, default_value) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO Fields (key, label, type, options, default_value, conclusion_addendum_template) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         fields,
     )
 
@@ -171,16 +188,21 @@ def setup_database():
         "Il s'agit d'une muqueuse antrale dont les cryptes sont régulières et bien "
         "différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un "
         "infiltrat inflammatoire polymorphe d'intensité {{inflammation_intensity}}. "
-        "Les glandes antrales sont en nombre normal."
-        "{% if hp_positive %}\n"
+        "Les glandes antrales sont en nombre normal.\n"
+        "{% if hp_positive %}"
         "Présence d'éléments ayant la morphologie d'Helicobacter pylori en HES.\n\n"
         "Etude immunohistochimique :\n- HP : positif"
+        "{% else %}"
+        "Absence d'Helicobacter pylori en HES.\n\n"
+        "Etude immunohistochimique :\n- HP : négatif"
         "{% endif %}"
     )
+    # HP status is a case-level fact (see hp_positive.conclusion_addendum_template),
+    # not a per-block one — deliberately not mentioned here, even though the
+    # field is captured per-block for the HES/immunohisto findings above.
     antrum_conc = (
-        "Gastrite chronique interstitielle antrale {{inflammation_intensity}}, active, "
+        "Gastrite chronique interstitielle {{site_label}} {{inflammation_intensity}}, active, "
         "sans métaplasie intestinale ni atrophie glandulaire."
-        "{% if hp_positive %}\nPrésence d'une infection à hélicobacter pylori.{% endif %}"
     )
 
     fundus_micro = (
@@ -188,25 +210,27 @@ def setup_database():
         "Il s'agit d'une muqueuse fundique dont les cryptes sont régulières et bien "
         "différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un "
         "infiltrat inflammatoire polymorphe d'intensité {{inflammation_intensity}}. "
-        "Les glandes fundiques sont en nombre normal."
-        "{% if hp_positive %}\n"
+        "Les glandes fundiques sont en nombre normal.\n"
+        "{% if hp_positive %}"
         "Présence d'éléments ayant la morphologie d'Helicobacter pylori en HES."
+        "{% else %}"
+        "Absence d'Helicobacter pylori en HES."
         "{% endif %}"
     )
     fundus_conc = (
-        "Gastrite chronique interstitielle fundique {{inflammation_intensity}}, active, "
+        "Gastrite chronique interstitielle {{site_label}} {{inflammation_intensity}}, active, "
         "sans métaplasie intestinale ni atrophie glandulaire."
-        "{% if hp_positive %}\nPrésence d'une infection à hélicobacter pylori.{% endif %}"
     )
 
     blocks = [
-        ("duodenum", "Duodenum", 0, duodenum_micro, duodenum_conc),
-        ("antrum", "Antrum", 0, antrum_micro, antrum_conc),
-        ("fundus", "Fundus", 0, fundus_micro, fundus_conc),
+        # key, name, is_table, site_label, micro_template, conclusion_template
+        ("duodenum", "Duodenum", 0, None, duodenum_micro, duodenum_conc),
+        ("antrum", "Antrum", 0, "antrale", antrum_micro, antrum_conc),
+        ("fundus", "Fundus", 0, "fundique", fundus_micro, fundus_conc),
     ]
     cursor.executemany(
-        "INSERT INTO Blocks (key, name, is_table, micro_template, conclusion_template) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO Blocks (key, name, is_table, site_label, micro_template, conclusion_template) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         blocks,
     )
 
@@ -251,7 +275,7 @@ def setup_database():
     print("Seeding Conclusion_Group_Labels...")
     cursor.execute(
         "INSERT INTO Conclusion_Group_Labels (block_key_set, combined_label) VALUES (?, ?)",
-        ("antrum,fundus", "antrale et fundique"),
+        ("antrum,fundus", "antro-fundique"),
     )
 
     print("Seeding Snippets...")

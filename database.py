@@ -62,7 +62,8 @@ def get_preset_blocks(preset_id):
 
         field_rows = conn.execute(
             """SELECT bf.*, f.key AS field_key, f.label AS field_label, f.type AS field_type,
-                      f.options AS field_options, f.default_value AS field_default
+                      f.options AS field_options, f.default_value AS field_default,
+                      f.conclusion_addendum_template AS field_addendum_template
                FROM Block_Fields bf
                JOIN Fields f ON f.id = bf.field_id
                WHERE bf.block_id = ?
@@ -84,6 +85,7 @@ def get_preset_blocks(preset_id):
                 "type": fr["field_type"],
                 "options": json.loads(fr["field_options"]) if fr["field_options"] else None,
                 "value": value,
+                "conclusion_addendum_template": fr["field_addendum_template"],
             })
 
         block["fields"] = resolved_fields

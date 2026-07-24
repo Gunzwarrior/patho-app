@@ -83,7 +83,7 @@ elif app_mode == "Workspace (Daily Ops)":
             st.divider()
 
         st.subheader("1. Medical Variables", anchor=False)
-        micro_blocks, conc_blocks = [], []
+        micro_blocks, conclusion_entries = [], []
 
         for i, block in enumerate(blocks):
             st.markdown(f"**{i+1}. {block['name']}**")
@@ -113,14 +113,21 @@ elif app_mode == "Workspace (Daily Ops)":
 
             micro_txt, conc_txt = engine.render_block(block, overrides)
             micro_blocks.append((block["name"], micro_txt))
-            conc_blocks.append((block["name"], conc_txt))
+            conclusion_entries.append({"block": block, "overrides": overrides, "conc_txt": conc_txt})
             st.divider()
 
         st.subheader("2. Final Report (Review & Edit)", anchor=False)
         master_lock = st.toggle("🔒 Enable Manual Edit Mode", key="master_lock")
 
+        grouped_conc = engine.group_conclusions(conclusion_entries)
+        addenda, conflicts = engine.compute_conclusion_addenda(conclusion_entries)
+        if conflicts:
+            st.warning(
+                f"⚠️ {', '.join(conflicts)} differs between specimens — not auto-added to the "
+                "conclusion. Add a summary line yourself via Manual Edit Mode below."
+            )
         raw_compiled_micro = engine.format_micro_plain(micro_blocks)
-        raw_compiled_conc = engine.format_conc_plain(conc_blocks)
+        raw_compiled_conc = engine.format_conc_plain(grouped_conc, addenda)
 
         if not master_lock:
             st.session_state["final_micro_edit"] = raw_compiled_micro
