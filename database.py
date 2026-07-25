@@ -134,6 +134,25 @@ def get_all_snippets():
     return [dict(r) for r in rows]
 
 
+def add_snippet(shortcut, expansion, category):
+    """Inserts a new Snippet. Returns (success, error_message)."""
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            "INSERT INTO Snippets (shortcut, expansion, category) VALUES (?, ?, ?)",
+            (shortcut, expansion, category),
+        )
+        conn.commit()
+        return True, None
+    except sqlite3.IntegrityError:
+        return False, f"Shortcut '{shortcut}' already exists — shortcuts must be unique."
+    except Exception as e:
+        print(f"Database error adding snippet: {e}")
+        return False, "Unexpected database error — check the server log."
+    finally:
+        conn.close()
+
+
 def save_case(case_number, preset_id, clinical_info, structured_input, rendered_html, status="in_progress"):
     """
     Saves both the structured input (for reopening/reusing the case later) and
