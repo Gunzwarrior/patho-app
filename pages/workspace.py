@@ -93,15 +93,14 @@ if selected_label != "-- Select --":
     st.subheader("2. Final Report (Review & Edit)", anchor=False)
     master_lock = st.toggle("🔒 Enable Manual Edit Mode", key="master_lock")
 
-    grouped_conc = grouping.group_conclusions(conclusion_entries)
-    addenda, conflicts = grouping.compute_conclusion_addenda(conclusion_entries)
+    grouped_conc_text, conflicts = grouping.render_conclusion_plain(conclusion_entries)
     if conflicts:
         st.warning(
             f"⚠️ {', '.join(conflicts)} differs between specimens — not auto-added to the "
             "conclusion. Add a summary line yourself via Manual Edit Mode below."
         )
     raw_compiled_micro = rendering.format_micro_plain(micro_blocks)
-    raw_compiled_conc = rendering.format_conc_plain(grouped_conc, addenda)
+    raw_compiled_conc = grouped_conc_text
 
     if not master_lock:
         st.session_state["final_micro_edit"] = raw_compiled_micro

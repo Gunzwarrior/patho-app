@@ -87,29 +87,6 @@ def format_micro_plain(micro_blocks):
     return "\n\n".join(parts)
 
 
-def format_conc_plain(grouped_entries, addendum_lines=None):
-    """
-    grouped_entries: ordered list of (number_label, text) tuples — the
-    output of grouping.group_conclusions(), so number_label may be "1" or
-    a merged range like "2-3". Each physical line of text gets its own
-    **bold** wrap, matching the sample reports.
-
-    addendum_lines: optional list of case-level strings (the output of
-    grouping.compute_conclusion_addenda()) appended at the end, unnumbered
-    — matching how the real reports state e.g. overall HP status as a
-    final line.
-    """
-    lines = []
-    for number_label, text in grouped_entries:
-        text_lines = text.split("\n")
-        for j, line in enumerate(text_lines):
-            prefix = f"{number_label}. " if j == 0 else ""
-            lines.append(f"**{prefix}{line}**")
-    for line in (addendum_lines or []):
-        lines.append(f"**{line}**")
-    return "\n".join(lines)
-
-
 def assemble_report_html(case_id, clinical_info, preset_title, micro_html, conc_html):
     """
     Final report shell. Takes already-converted HTML for microscopy/
@@ -130,9 +107,9 @@ def assemble_report_html(case_id, clinical_info, preset_title, micro_html, conc_
     """
 
 
-def compile_final_html(case_id, clinical_info, preset_title, micro_blocks, grouped_conc_entries):
-    """Convenience wrapper for the auto-render path. grouped_conc_entries
-    must already be the output of grouping.group_conclusions()."""
+def compile_final_html(case_id, clinical_info, preset_title, micro_blocks, conclusion_plain_text):
+    """Convenience wrapper for the auto-render path. conclusion_plain_text
+    must already be the output of grouping.render_conclusion_plain()."""
     micro_html = text_to_html(format_micro_plain(micro_blocks))
-    conc_html = text_to_html(format_conc_plain(grouped_conc_entries))
+    conc_html = text_to_html(conclusion_plain_text)
     return assemble_report_html(case_id, clinical_info, preset_title, micro_html, conc_html)

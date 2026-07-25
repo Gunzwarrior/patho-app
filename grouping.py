@@ -47,33 +47,33 @@ def get_combined_label(run):
     return ", ".join(parts)
 
 
-def group_conclusions(entries):
+def _merge_section(section_entries, index_offset):
     """
-    entries: ordered list of {'block': block_dict, 'overrides': {...},
-    'conc_txt': already-rendered text} — one per block instance, in final
-    display order.
+    Merges contiguous entries within ONE section (all already guaranteed to
+    share the same conclusion_group) that also share an identical text
+    signature. Numbers are computed from index_offset so they stay correct
+    within the whole case, not just this section.
 
-    Merges contiguous runs sharing an identical signature into one entry.
-    Returns an ordered list of (number_label, text) tuples ready for
-    rendering.format_conc_plain, e.g. [("1", "..."), ("2-3", "...")].
+    Returns an ordered list of (number_label, text) tuples, e.g.
+    [("1", "..."), ("2-3", "...")].
     """
     results = []
-    i, n = 0, len(entries)
+    i, n = 0, len(section_entries)
     while i < n:
-        run = [entries[i]]
-        signature = render_conclusion_signature(entries[i]["block"], entries[i]["overrides"])
+        run = [section_entries[i]]
+        signature = render_conclusion_signature(section_entries[i]["block"], section_entries[i]["overrides"])
         j = i + 1
         while j < n:
-            sig_j = render_conclusion_signature(entries[j]["block"], entries[j]["overrides"])
+            sig_j = render_conclusion_signature(section_entries[j]["block"], section_entries[j]["overrides"])
             if sig_j != signature:
                 break
-            run.append(entries[j])
+            run.append(section_entries[j])
             j += 1
 
-        numbers = "-".join(str(k + 1) for k in range(i, j))
+        numbers = "-".join(str(index_offset + k + 1) for k in range(i, j))
 
         if len(run) == 1:
-            results.append((numbers, entries[i]["conc_txt"]))
+            results.append((numbers, section_entries[i]["conc_txt"]))
         else:
             combined_label = get_combined_label(run)
             merged_text = signature.replace(GROUP_SENTINEL, combined_label)
@@ -82,6 +82,67 @@ def group_conclusions(entries):
         i = j
 
     return results
+
+
+def _partition_into_sections(entries):
+    """
+    Splits the ordered entries into contiguous runs by Blocks.conclusion_group.
+    A block with conclusion_group=None joins a shared default bucket — if
+    NO block in the case sets conclusion_group, this produces exactly one
+    section covering everything, reproducing the old (pre-sectioning)
+    behavior with no forced blank lines. Sectioning only activates once
+    blocks are actually tagged with real conclusion_group values.
+    """
+    sections = []
+    current_key = object()  # sentinel: never equals a real key or None on first entry
+    for idx, entry in enumerate(entries):
+        key = entry["block"].get("conclusion_group")
+        if not sections or key != current_key:
+            sections.append({"key": key, "start": idx, "entries": []})
+            current_key = key
+        sections[-1]["entries"].append(entry)
+    return sections
+
+
+def render_conclusion_plain(entries):
+    """
+    entries: ordered list of {'block': block_dict, 'overrides': {...},
+    'conc_txt': already-rendered text} — one per block instance, case order.
+
+    Builds the complete conclusion plain text (with **bold** markers, ready
+    for rendering.text_to_html):
+    - Merges contiguous blocks sharing both an identical text signature AND
+      the same conclusion_group into combined-number lines.
+    - Inserts a blank line at every conclusion_group boundary, clustering
+      each clinical category visually.
+    - Places each case-level addendum (Fields.conclusion_addendum_template)
+      right after the section it belongs to, using only that section's
+      blocks to determine the value and check for disagreement — not at
+      the end of the whole conclusion.
+
+    Returns (plain_text, conflicting_field_labels) — conflicts collected
+    across all sections, for a single combined warning to the user.
+    """
+    sections = _partition_into_sections(entries)
+
+    section_texts = []
+    all_conflicts = []
+    for section in sections:
+        merged = _merge_section(section["entries"], section["start"])
+        addenda, conflicts = compute_conclusion_addenda(section["entries"])
+        all_conflicts.extend(conflicts)
+
+        lines = []
+        for number_label, text in merged:
+            for j, line in enumerate(text.split("\n")):
+                prefix = f"{number_label}. " if j == 0 else ""
+                lines.append(f"**{prefix}{line}**")
+        for line in addenda:
+            lines.append(f"**{line}**")
+
+        section_texts.append("\n".join(lines))
+
+    return "\n\n".join(section_texts), all_conflicts
 
 
 def compute_conclusion_addenda(entries):

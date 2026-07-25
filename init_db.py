@@ -71,6 +71,12 @@ def setup_database():
                                             -- word a groupable conclusion_template substitutes
                                             -- via {{site_label}}. NULL for blocks that don't
                                             -- participate in site-word grouping.
+            conclusion_group TEXT,         -- e.g. 'gastric', 'duodenum' — clinical category
+                                            -- for conclusion sectioning: contiguous blocks
+                                            -- sharing this value are visually clustered
+                                            -- (blank line between different groups) and share
+                                            -- one addendum placement. NULL = default bucket,
+                                            -- behaves as if sectioning weren't in use at all.
             micro_template TEXT NOT NULL,
             conclusion_template TEXT NOT NULL
         );
@@ -223,14 +229,14 @@ def setup_database():
     )
 
     blocks = [
-        # key, name, is_table, site_label, micro_template, conclusion_template
-        ("duodenum", "Duodenum", 0, None, duodenum_micro, duodenum_conc),
-        ("antrum", "Antrum", 0, "antrale", antrum_micro, antrum_conc),
-        ("fundus", "Fundus", 0, "fundique", fundus_micro, fundus_conc),
+        # key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template
+        ("duodenum", "Duodenum", 0, None, "duodenum", duodenum_micro, duodenum_conc),
+        ("antrum", "Antrum", 0, "antrale", "gastric", antrum_micro, antrum_conc),
+        ("fundus", "Fundus", 0, "fundique", "gastric", fundus_micro, fundus_conc),
     ]
     cursor.executemany(
-        "INSERT INTO Blocks (key, name, is_table, site_label, micro_template, conclusion_template) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         blocks,
     )
 
