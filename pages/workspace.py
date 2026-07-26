@@ -3,15 +3,57 @@ import database as db
 import rendering
 import grouping
 
+# --- Reset everything scoped to "the case currently on screen" the moment
+# we land back on "-- Select --". This must run at the very top of a fresh
+# rerun, before any widget below is instantiated — Streamlit refuses to
+# clear a widget's session_state value in the same run where that widget
+# already rendered, so the actual clearing is deferred one rerun via this
+# flag (set further down, where the "-- Select --" transition is detected).
+if st.session_state.pop("_do_workspace_reset", False):
+    # case_id/clin_info are unconditionally re-instantiated on every run
+    # (unlike Field widgets, which sit inside the preset-selected block and
+    # so structurally disappear/reappear on reset). Bumping this counter
+    # and folding it into their keys below gives them a genuinely new
+    # widget identity after a reset, rather than relying on the frontend
+    # re-syncing a cleared value for the same persistent key.
+    st.session_state["_form_generation"] = st.session_state.get("_form_generation", 0) + 1
+
+    prefixes = ("field_", "shared_", "wildcard_")
+    exact_keys = (
+        "_wildcard_preset_id", "final_micro_edit", "final_conc_edit", "master_lock",
+    )
+    for key in list(st.session_state.keys()):
+        if key.startswith(prefixes) or key in exact_keys:
+            del st.session_state[key]
+
+form_gen = st.session_state.get("_form_generation", 0)
+
+# A confirmation set right before a reset-triggering rerun (e.g. after a
+# successful save) — st.toast() does NOT survive a rerun called right
+# after it (confirmed open Streamlit issue), so this is stored in
+# session_state instead and shown once, here, before anything else renders.
+if "_save_confirmation" in st.session_state:
+    st.success(st.session_state.pop("_save_confirmation"))
+
 st.title("🔬 Workspace")
 
 c1, c2, c3 = st.columns([1, 2, 2])
-with c1: case_id = st.text_input("📁 Case ID", key="case_id")
-with c2: clinical_info = st.text_input("🩺 Renseignements cliniques", key="clin_info")
+with c1: case_id = st.text_input("📁 Case ID", key=f"case_id_{form_gen}")
+with c2: clinical_info = st.text_input("🩺 Renseignements cliniques", key=f"clin_info_{form_gen}")
 with c3:
     presets = db.get_all_presets()
     preset_labels = ["-- Select --"] + [f"{p['name']} ({p['short_code']})" for p in presets]
     selected_label = st.selectbox("📋 Select Preset", preset_labels)
+
+# Detect a fresh transition INTO "-- Select --" (not just already sitting
+# there — that would rerun forever) and schedule the reset for next run.
+if selected_label == "-- Select --":
+    if st.session_state.get("_last_selected_label") != "-- Select --":
+        st.session_state["_last_selected_label"] = "-- Select --"
+        st.session_state["_do_workspace_reset"] = True
+        st.rerun()
+else:
+    st.session_state["_last_selected_label"] = selected_label
 
 st.markdown("---")
 
@@ -90,6 +132,67 @@ if selected_label != "-- Select --":
         conclusion_entries.append({"block": block, "overrides": overrides, "conc_txt": conc_txt})
         st.divider()
 
+    # --- Wildcard notes: for unpredictable additions (niveaux, IHC,
+    # colorations) that don't belong to any specific Block's own template.
+    # One shared panel per case — not one per block — so the tab cost of
+    # NOT needing it stays at a single stop, regardless of how many
+    # specimens are in the case. Reset if the preset changes, so stale
+    # notes don't linger referencing a different case's specimens.
+    if st.session_state.get("_wildcard_preset_id") != preset["id"]:
+        st.session_state["wildcard_notes"] = []
+        st.session_state["_wildcard_preset_id"] = preset["id"]
+
+    with st.expander("➕ Niveaux / IHC / Colorations (cas particuliers)"):
+        st.caption("Pour tout ce qui est imprévisible — attache une note à n'importe quel spécimen de ce cas.")
+
+        block_names = [b["name"] for b in blocks]
+        wc1, wc2 = st.columns(2)
+        with wc1:
+            target_name = st.selectbox("Spécimen", block_names, key="wildcard_target")
+        with wc2:
+            note_type = st.selectbox(
+                "Type", ["Niveaux", "Immunohistochimie", "Coloration", "Autre"], key="wildcard_type"
+            )
+
+        default_text = (
+            "Les niveaux supplémentaires ne mettent pas en évidence de lésion additionnelle."
+            if note_type == "Niveaux" else ""
+        )
+        note_text = st.text_area("Texte (**gras** possible)", value=default_text, key="wildcard_text")
+
+        if st.button("➕ Ajouter", key="wildcard_add"):
+            if note_text.strip():
+                st.session_state.setdefault("wildcard_notes", []).append({
+                    "target_idx": block_names.index(target_name),
+                    "target_name": target_name,
+                    "note_type": note_type,
+                    "text": note_text.strip(),
+                })
+                st.rerun()
+            else:
+                st.warning("⚠️ Le texte ne peut pas être vide.")
+
+        notes = st.session_state.get("wildcard_notes", [])
+        if notes:
+            st.markdown("**Notes ajoutées :**")
+            for note_idx, note in enumerate(notes):
+                nc1, nc2 = st.columns([6, 1])
+                with nc1:
+                    st.markdown(f"- **{note['target_name']}** ({note['note_type']}) : {note['text']}")
+                with nc2:
+                    if st.button("🗑️", key=f"wildcard_del_{note_idx}"):
+                        st.session_state["wildcard_notes"].pop(note_idx)
+                        st.rerun()
+
+    # Apply wildcard notes to their target block's micro text before
+    # formatting — plain continuation text, same as the rest of that
+    # block's own body (only the block's header line is forced bold).
+    for note in st.session_state.get("wildcard_notes", []):
+        idx = note["target_idx"]
+        if 0 <= idx < len(micro_blocks):
+            name, text = micro_blocks[idx]
+            micro_blocks[idx] = (name, text + "\n\n" + note["text"])
+
     st.subheader("2. Final Report (Review & Edit)", anchor=False)
     master_lock = st.toggle("🔒 Enable Manual Edit Mode", key="master_lock")
 
@@ -135,7 +238,9 @@ if selected_label != "-- Select --":
                     for block in blocks
                 }
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html):
-                    st.success("✅ Case saved successfully!")
+                    st.session_state["_save_confirmation"] = f"✅ Case '{case_id}' saved — workspace reset for the next case."
+                    st.session_state["_do_workspace_reset"] = True
+                    st.rerun()
                 else:
                     st.error("❌ Error saving case.")
             else:
