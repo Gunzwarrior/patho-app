@@ -153,11 +153,27 @@ def add_snippet(shortcut, expansion, category):
         conn.close()
 
 
-def save_case(case_number, preset_id, clinical_info, structured_input, rendered_html, status="in_progress"):
+def get_case_by_number(case_number):
+    """Returns a saved Case as a dict, with structured_input already parsed
+    from JSON, or None if no case with that number exists."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM Cases WHERE case_number = ?", (case_number,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    case = dict(row)
+    case["structured_input"] = json.loads(case["structured_input"]) if case["structured_input"] else {}
+    return case
+
+
+def save_case(case_number, preset_id, clinical_info, structured_input, rendered_html,
+              status="pending", pending_reason=None):
     """
     Saves both the structured input (for reopening/reusing the case later) and
-    the frozen rendered HTML (the archived artifact). rendered_html is never
-    regenerated after this point, even if Blocks/templates change later.
+    the frozen rendered HTML (the archived artifact). 'validated' cases are
+    frozen forever, never regenerated even if Blocks/templates change later
+    — 'pending' cases are live drafts, expected to be reopened and
+    re-rendered from current templates.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -168,17 +184,19 @@ def save_case(case_number, preset_id, clinical_info, structured_input, rendered_
         if existing:
             cursor.execute(
                 """UPDATE Cases
-                   SET preset_id = ?, status = ?, clinical_info = ?,
+                   SET preset_id = ?, status = ?, pending_reason = ?, clinical_info = ?,
                        structured_input = ?, rendered_html = ?, updated_at = CURRENT_TIMESTAMP
                    WHERE case_number = ?""",
-                (preset_id, status, clinical_info, json.dumps(structured_input), rendered_html, case_number),
+                (preset_id, status, pending_reason, clinical_info,
+                 json.dumps(structured_input), rendered_html, case_number),
             )
         else:
             cursor.execute(
                 """INSERT INTO Cases
-                   (case_number, preset_id, status, clinical_info, structured_input, rendered_html)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (case_number, preset_id, status, clinical_info, json.dumps(structured_input), rendered_html),
+                   (case_number, preset_id, status, pending_reason, clinical_info, structured_input, rendered_html)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (case_number, preset_id, status, pending_reason, clinical_info,
+                 json.dumps(structured_input), rendered_html),
             )
         conn.commit()
         return True

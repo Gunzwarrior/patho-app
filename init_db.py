@@ -128,12 +128,20 @@ def setup_database():
             category TEXT
         );
 
-        -- CASES: structured input (reopen/reuse) + frozen rendered text (archive)
+        -- CASES: structured input (reopen/reuse) + frozen rendered text (archive).
+        -- 'pending' cases stay live drafts — reopening one re-renders from
+        -- current templates, so a template fix since the case was started
+        -- is reflected. 'validated' cases are frozen forever, exactly as
+        -- originally rendered, never retroactively changed.
         CREATE TABLE Cases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             case_number TEXT NOT NULL UNIQUE,
             preset_id INTEGER REFERENCES Presets(id),
-            status TEXT DEFAULT 'in_progress',   -- 'in_progress' | 'finished'
+            status TEXT DEFAULT 'pending',   -- 'pending' | 'validated'
+            pending_reason TEXT,             -- e.g. 'IHC', 'Niveaux', 'Avis', 'Colo', 'Autre' —
+                                              -- free text by convention, not schema-enforced,
+                                              -- so a new reason never needs a migration.
+                                              -- NULL once validated.
             clinical_info TEXT,
             structured_input JSON,
             rendered_html TEXT,
