@@ -68,6 +68,28 @@ if st.session_state.pop("_do_case_reopen", False):
 
 form_gen = st.session_state.get("_form_generation", 0)
 
+# Compact pending-cases panel — lives in the sidebar so it's visible
+# alongside the form without navigating away. Clicking an item reuses the
+# exact same reopen mechanism as the manual reopen form above (same
+# session_state flags, same rerun) — no page switch involved, so this
+# sidesteps the cross-page session_state reliability concerns that a
+# separate Worklist page's "click to reopen" would need to handle.
+with st.sidebar:
+    st.markdown("### 📋 Pending Cases")
+    pending_cases = db.get_pending_cases()
+    if pending_cases:
+        with st.container(height=300):
+            for pc in pending_cases:
+                label = pc["case_number"]
+                if pc["pending_reason"]:
+                    label += f" — {pc['pending_reason']}"
+                if st.button(label, key=f"pending_quicklink_{pc['case_number']}_{form_gen}", use_container_width=True):
+                    st.session_state["_reopen_case_number"] = pc["case_number"]
+                    st.session_state["_do_case_reopen"] = True
+                    st.rerun()
+    else:
+        st.caption("No pending cases.")
+
 # One-shot messages: shown once here, before anything else renders, then
 # cleared. st.toast() does NOT survive a rerun called right after it
 # (confirmed open Streamlit issue), so these use session_state instead.

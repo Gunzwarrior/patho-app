@@ -153,6 +153,24 @@ def add_snippet(shortcut, expansion, category):
         conn.close()
 
 
+def get_pending_cases():
+    """
+    Returns all 'pending' Cases as dicts, ordered for the compact sidebar
+    list — grouped by pending_reason so similar work (all the IHC cases,
+    all the niveaux cases...) can be processed together, then by case
+    number within each reason.
+    """
+    conn = get_db_connection()
+    rows = conn.execute(
+        """SELECT case_number, pending_reason, preset_id, updated_at
+           FROM Cases
+           WHERE status = 'pending'
+           ORDER BY pending_reason, case_number"""
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_case_by_number(case_number):
     """Returns a saved Case as a dict, with structured_input already parsed
     from JSON, or None if no case with that number exists."""
