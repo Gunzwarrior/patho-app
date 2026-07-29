@@ -332,22 +332,61 @@ if selected_label != "-- Select --":
     )
     st.markdown(final_html, unsafe_allow_html=True)
 
-    c_save, c_copy = st.columns(2)
-    with c_save:
-        if st.button("💾 Save Case to Database", use_container_width=True, type="primary"):
+    st.divider()
+
+    reason_options = ["IHC", "Niveaux", "Avis", "Colo", "Autre"]
+    pending_reason_choice = st.selectbox(
+        "Raison (si sauvegardé en attente)", reason_options, key=f"pending_reason_select_{form_gen}"
+    )
+    pending_reason_value = pending_reason_choice
+    if pending_reason_choice == "Autre":
+        custom_reason = st.text_input(
+            "Préciser", key=f"pending_reason_custom_{form_gen}", placeholder="Préciser la raison"
+        )
+        pending_reason_value = custom_reason.strip() or "Autre"
+
+    st.caption(
+        "Pour revenir sur une validation par erreur : rouvrez le cas (barre latérale ou "
+        "ci-dessus) puis cliquez « Save as Pending »."
+    )
+
+    structured_input = {
+        "blocks": {
+            block["key"]: {
+                field["key"]: st.session_state[f"field_{block['block_id']}_{field['key']}_{form_gen}"]
+                for field in block["fields"]
+            }
+            for block in blocks
+        },
+        "wildcard_notes": st.session_state.get("wildcard_notes", []),
+    }
+
+    c_pending, c_validated, c_copy = st.columns(3)
+
+    with c_pending:
+        if st.button("💾 Save as Pending", use_container_width=True):
             if case_id:
-                structured_input = {
-                    "blocks": {
-                        block["key"]: {
-                            field["key"]: st.session_state[f"field_{block['block_id']}_{field['key']}_{form_gen}"]
-                            for field in block["fields"]
-                        }
-                        for block in blocks
-                    },
-                    "wildcard_notes": st.session_state.get("wildcard_notes", []),
-                }
-                if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html):
-                    st.session_state["_save_confirmation"] = f"✅ Case '{case_id}' saved — workspace reset for the next case."
+                if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
+                                 status="pending", pending_reason=pending_reason_value):
+                    st.session_state["_save_confirmation"] = (
+                        f"✅ Case '{case_id}' saved as pending ({pending_reason_value}) — "
+                        "workspace reset for the next case."
+                    )
+                    st.session_state["_do_workspace_reset"] = True
+                    st.rerun()
+                else:
+                    st.error("❌ Error saving case.")
+            else:
+                st.warning("⚠️ Please enter a Case ID before saving.")
+
+    with c_validated:
+        if st.button("✅ Save as Validated", use_container_width=True, type="primary"):
+            if case_id:
+                if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
+                                 status="validated", pending_reason=None):
+                    st.session_state["_save_confirmation"] = (
+                        f"✅ Case '{case_id}' saved as validated — workspace reset for the next case."
+                    )
                     st.session_state["_do_workspace_reset"] = True
                     st.rerun()
                 else:
