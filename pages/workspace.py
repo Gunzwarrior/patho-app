@@ -4,7 +4,9 @@ import rendering
 import grouping
 
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
-CASE_SCOPED_EXACT_KEYS = ("_wildcard_preset_id", "final_micro_edit", "final_conc_edit", "master_lock")
+CASE_SCOPED_EXACT_KEYS = (
+    "_wildcard_preset_id", "final_micro_edit", "final_conc_edit", "master_lock", "_loaded_case_number",
+)
 
 
 def _clear_case_scoped_state():
@@ -45,6 +47,7 @@ if st.session_state.pop("_do_case_reopen", False):
             gen = st.session_state["_form_generation"]
             st.session_state[f"case_id_{gen}"] = case["case_number"]
             st.session_state[f"clin_info_{gen}"] = case["clinical_info"] or ""
+            st.session_state["_loaded_case_number"] = case["case_number"]
 
             preset_label = f"{preset['name']} ({preset['short_code']})"
             st.session_state["preset_select"] = preset_label
@@ -110,6 +113,28 @@ with c3:
     presets = db.get_all_presets()
     preset_labels = ["-- Select --"] + [f"{p['name']} ({p['short_code']})" for p in presets]
     selected_label = st.selectbox("📋 Select Preset", preset_labels, key="preset_select")
+
+# Duplicate-case guard: warn the moment an existing case number is typed,
+# not just at save time — catches a typo/collision before any time is
+# spent writing a report, rather than after. A match is only a real
+# conflict if this case wasn't the one legitimately loaded via reopen —
+# resaving the case you just reopened is supposed to overwrite it.
+existing_case = db.get_case_by_number(case_id) if case_id.strip() else None
+is_legit_resave = existing_case and case_id == st.session_state.get("_loaded_case_number")
+duplicate_conflict = existing_case is not None and not is_legit_resave
+
+overwrite_confirmed = True
+if duplicate_conflict:
+    reason_note = f", {existing_case['pending_reason']}" if existing_case.get("pending_reason") else ""
+    last_touched = existing_case.get("updated_at") or existing_case.get("created_at")
+    st.warning(
+        f"⚠️ Case '{case_id}' already exists ({existing_case['status']}{reason_note}, "
+        f"last touched {last_touched}). Saving now will **overwrite it**. "
+        "To edit the existing case instead, reopen it via the sidebar or the reopen box below."
+    )
+    overwrite_confirmed = st.checkbox(
+        "I understand — overwrite the existing case anyway", key=f"overwrite_confirm_{form_gen}"
+    )
 
 # Detect a fresh transition INTO "-- Select --" (not just already sitting
 # there — that would rerun forever) and schedule the reset for next run.
@@ -364,7 +389,7 @@ if selected_label != "-- Select --":
     c_pending, c_validated, c_copy = st.columns(3)
 
     with c_pending:
-        if st.button("💾 Save as Pending", use_container_width=True):
+        if st.button("💾 Save as Pending", use_container_width=True, disabled=not overwrite_confirmed):
             if case_id:
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
                                  status="pending", pending_reason=pending_reason_value):
@@ -380,7 +405,7 @@ if selected_label != "-- Select --":
                 st.warning("⚠️ Please enter a Case ID before saving.")
 
     with c_validated:
-        if st.button("✅ Save as Validated", use_container_width=True, type="primary"):
+        if st.button("✅ Save as Validated", use_container_width=True, type="primary", disabled=not overwrite_confirmed):
             if case_id:
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
                                  status="validated", pending_reason=None):
