@@ -4,9 +4,7 @@ import rendering
 import grouping
 
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
-CASE_SCOPED_EXACT_KEYS = (
-    "_wildcard_preset_id", "final_micro_edit", "final_conc_edit", "master_lock", "_loaded_case_number",
-)
+CASE_SCOPED_EXACT_KEYS = ("_wildcard_preset_id", "_loaded_case_number")
 
 
 def _clear_case_scoped_state():
@@ -62,6 +60,15 @@ if st.session_state.pop("_do_case_reopen", False):
 
             st.session_state["wildcard_notes"] = case["structured_input"].get("wildcard_notes", [])
             st.session_state["_wildcard_preset_id"] = preset["id"]
+
+            # Restore Master Lock only if it was actually on when saved — if
+            # it was off, the auto-render path already fully reconstructs
+            # the report from blocks/notes alone, so there's nothing extra
+            # to restore and the text areas auto-sync normally as usual.
+            if case["structured_input"].get("master_lock"):
+                st.session_state[f"master_lock_{gen}"] = True
+                st.session_state[f"final_micro_edit_{gen}"] = case["structured_input"].get("final_micro_edit", "")
+                st.session_state[f"final_conc_edit_{gen}"] = case["structured_input"].get("final_conc_edit", "")
 
             reason_note = f" — {case['pending_reason']}" if case.get("pending_reason") else ""
             status_label = "en attente" if case["status"] == "pending" else "validé"
@@ -173,6 +180,14 @@ if selected_label != "-- Select --":
     preset = presets[preset_labels.index(selected_label) - 1]
     blocks = db.get_preset_blocks(preset["id"])
 
+    # Peeked early: the actual master_lock toggle widget is declared later
+    # (in "2. Final Report"), but field edits made while it's on have no
+    # effect on the final report until it's turned off — so fields get
+    # visually disabled here, before that widget itself even runs this
+    # pass. Reading the same session_state key it uses is safe since the
+    # value from the previous interaction is already there by rerun time.
+    master_lock_active = st.session_state.get(f"master_lock_{form_gen}", False)
+
     # --- Detect fields shared across 2+ blocks in this preset, with
     # matching current default values (e.g. HP status on Antrum+Fundus).
     # These get a single "global" control as a time-saver; per-block
@@ -207,6 +222,7 @@ if selected_label != "-- Select --":
                 value=default_val,
                 key=shared_key,
                 on_change=_apply_shared,
+                disabled=master_lock_active,
             )
         st.divider()
 
@@ -235,23 +251,23 @@ if selected_label != "-- Select --":
 
             with col:
                 if field["type"] == "number":
-                    kwargs = {"min_value": 0, "key": widget_key}
+                    kwargs = {"min_value": 0, "key": widget_key, "disabled": master_lock_active}
                     if is_fresh:
                         kwargs["value"] = int(field["value"])
                     val = st.number_input(field["label"], **kwargs)
                 elif field["type"] == "select":
                     options = field["options"] or []
-                    kwargs = {"key": widget_key}
+                    kwargs = {"key": widget_key, "disabled": master_lock_active}
                     if is_fresh:
                         kwargs["index"] = options.index(field["value"]) if field["value"] in options else 0
                     val = st.selectbox(field["label"], options, **kwargs)
                 elif field["type"] == "checkbox":
-                    kwargs = {"key": widget_key}
+                    kwargs = {"key": widget_key, "disabled": master_lock_active}
                     if is_fresh:
                         kwargs["value"] = str(field["value"]) in ("1", "True", "true")
                     val = st.checkbox(field["label"], **kwargs)
                 else:
-                    kwargs = {"key": widget_key}
+                    kwargs = {"key": widget_key, "disabled": master_lock_active}
                     if is_fresh:
                         kwargs["value"] = field["value"] or ""
                     val = st.text_input(field["label"], **kwargs)
@@ -279,19 +295,22 @@ if selected_label != "-- Select --":
         block_names = [b["name"] for b in blocks]
         wc1, wc2 = st.columns(2)
         with wc1:
-            target_name = st.selectbox("Spécimen", block_names, key="wildcard_target")
+            target_name = st.selectbox("Spécimen", block_names, key="wildcard_target", disabled=master_lock_active)
         with wc2:
             note_type = st.selectbox(
-                "Type", ["Niveaux", "Immunohistochimie", "Coloration", "Autre"], key="wildcard_type"
+                "Type", ["Niveaux", "Immunohistochimie", "Coloration", "Autre"],
+                key="wildcard_type", disabled=master_lock_active,
             )
 
         default_text = (
             "Les niveaux supplémentaires ne mettent pas en évidence de lésion additionnelle."
             if note_type == "Niveaux" else ""
         )
-        note_text = st.text_area("Texte (**gras** possible)", value=default_text, key="wildcard_text")
+        note_text = st.text_area(
+            "Texte (**gras** possible)", value=default_text, key="wildcard_text", disabled=master_lock_active
+        )
 
-        if st.button("➕ Ajouter", key="wildcard_add"):
+        if st.button("➕ Ajouter", key="wildcard_add", disabled=master_lock_active):
             if note_text.strip():
                 st.session_state.setdefault("wildcard_notes", []).append({
                     "target_idx": block_names.index(target_name),
@@ -311,7 +330,7 @@ if selected_label != "-- Select --":
                 with nc1:
                     st.markdown(f"- **{note['target_name']}** ({note['note_type']}) : {note['text']}")
                 with nc2:
-                    if st.button("🗑️", key=f"wildcard_del_{note_idx}"):
+                    if st.button("🗑️", key=f"wildcard_del_{note_idx}", disabled=master_lock_active):
                         st.session_state["wildcard_notes"].pop(note_idx)
                         st.rerun()
 
@@ -325,7 +344,7 @@ if selected_label != "-- Select --":
             micro_blocks[idx] = (name, text + "\n\n" + note["text"])
 
     st.subheader("2. Final Report (Review & Edit)", anchor=False)
-    master_lock = st.toggle("🔒 Enable Manual Edit Mode", key="master_lock")
+    master_lock = st.toggle("🔒 Enable Manual Edit Mode", key=f"master_lock_{form_gen}")
 
     grouped_conc_text, conflicts = grouping.render_conclusion_plain(conclusion_entries)
     if conflicts:
@@ -337,11 +356,11 @@ if selected_label != "-- Select --":
     raw_compiled_conc = grouped_conc_text
 
     if not master_lock:
-        st.session_state["final_micro_edit"] = raw_compiled_micro
-        st.session_state["final_conc_edit"] = raw_compiled_conc
+        st.session_state[f"final_micro_edit_{form_gen}"] = raw_compiled_micro
+        st.session_state[f"final_conc_edit_{form_gen}"] = raw_compiled_conc
 
-    final_micro = st.text_area("Microscopy", key="final_micro_edit", height=300, disabled=not master_lock)
-    final_conc = st.text_area("Conclusion", key="final_conc_edit", height=150, disabled=not master_lock)
+    final_micro = st.text_area("Microscopy", key=f"final_micro_edit_{form_gen}", height=300, disabled=not master_lock)
+    final_conc = st.text_area("Conclusion", key=f"final_conc_edit_{form_gen}", height=150, disabled=not master_lock)
 
     st.divider()
 
@@ -384,6 +403,15 @@ if selected_label != "-- Select --":
             for block in blocks
         },
         "wildcard_notes": st.session_state.get("wildcard_notes", []),
+        "master_lock": master_lock,
+        # Always saved, regardless of master_lock — final_micro/final_conc
+        # already hold the correct final text either way (that's how
+        # final_html gets built unconditionally). Kept as a fallback
+        # historical record: if a Block's template ever changes later,
+        # structured_input's field values alone might not reconstruct the
+        # exact original text on reopen, but this always will.
+        "final_micro_edit": final_micro,
+        "final_conc_edit": final_conc,
     }
 
     c_pending, c_validated, c_copy = st.columns(3)
