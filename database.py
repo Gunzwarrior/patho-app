@@ -153,6 +153,34 @@ def add_snippet(shortcut, expansion, category):
         conn.close()
 
 
+def get_all_cases(status=None, search_term=None):
+    """
+    Returns Cases for the Worklist page, optionally filtered by status
+    ('pending'/'validated') and/or a search term matched against case
+    number or clinical info. Joined with Presets for display. Ordered
+    most-recently-touched first.
+    """
+    conn = get_db_connection()
+    query = """
+        SELECT c.*, p.name AS preset_name, p.short_code AS preset_code
+        FROM Cases c
+        LEFT JOIN Presets p ON p.id = c.preset_id
+        WHERE 1=1
+    """
+    params = []
+    if status:
+        query += " AND c.status = ?"
+        params.append(status)
+    if search_term:
+        query += " AND (c.case_number LIKE ? OR c.clinical_info LIKE ?)"
+        like_term = f"%{search_term}%"
+        params.extend([like_term, like_term])
+    query += " ORDER BY COALESCE(c.updated_at, c.created_at) DESC"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_pending_cases():
     """
     Returns all 'pending' Cases as dicts, ordered for the compact sidebar

@@ -21,6 +21,18 @@ def _clear_case_scoped_state():
             del st.session_state[key]
 
 
+# --- Cross-page reopen trigger: the Worklist page links here with
+# ?reopen=CASE_NUMBER via st.page_link's query_params kwarg — the only
+# reliable way to carry data across a Streamlit page navigation (plain
+# session_state is confirmed unreliable across st.switch_page in some
+# cases; query params survive since they're baked into the destination
+# URL itself). Cleared immediately so it can't re-trigger on subsequent
+# reruns of this same page load.
+if "reopen" in st.query_params:
+    st.session_state["_reopen_case_number"] = st.query_params["reopen"]
+    st.session_state["_do_case_reopen"] = True
+    del st.query_params["reopen"]
+
 # --- Plain reset: returning to "-- Select --", or a fresh case after save.
 if st.session_state.pop("_do_workspace_reset", False):
     _clear_case_scoped_state()
