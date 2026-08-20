@@ -25,7 +25,7 @@ def _clear_case_scoped_state():
 # ?reopen=CASE_NUMBER via st.page_link's query_params kwarg — the only
 # reliable way to carry data across a Streamlit page navigation (plain
 # session_state is confirmed unreliable across st.switch_page in some
-# cases; query params survive since they're baked into the destination
+# cases; query params survive because they're baked into the destination
 # URL itself). Cleared immediately so it can't re-trigger on subsequent
 # reruns of this same page load.
 if "reopen" in st.query_params:
@@ -155,19 +155,21 @@ if duplicate_conflict:
         "I understand — overwrite the existing case anyway", key=f"overwrite_confirm_{form_gen}"
     )
 
-# Detect a fresh transition INTO "-- Select --" (not just already sitting
-# there — that would rerun forever) and schedule the reset for next run.
-if selected_label == "-- Select --":
-    if st.session_state.get("_last_selected_label") != "-- Select --":
-        st.session_state["_last_selected_label"] = "-- Select --"
+# Detect ANY change in preset selection (not just transitions to/from
+# "-- Select --") and schedule a reset for next run. This matters even
+# between two real presets: if they share the same underlying Block (e.g.
+# etc0 -> etc5, both pointing at the Thyroid Cytology block), the field
+# widget keys don't change either — without this, the stale value from
+# the previous preset would silently persist.
+_previous_label = st.session_state.get("_last_selected_label")
+if selected_label != _previous_label:
+    st.session_state["_last_selected_label"] = selected_label
+    if _previous_label is not None:  # skip the harmless no-op reset on cold start
         st.session_state["_do_workspace_reset"] = True
         st.rerun()
-else:
-    st.session_state["_last_selected_label"] = selected_label
 
-# --- Minimal reopen trigger. Temporary — the Worklist page (next slice)
-# will replace this with a proper case list; this just proves the
-# underlying mechanism works before building that UI around it.
+# --- Minimal reopen trigger. Temporary — the Worklist page now covers the
+# browsable case, but this stays as a fast direct-entry alternative.
 #
 # Wrapped in st.form(): a plain text_input doesn't commit its typed value
 # to the server until it loses focus (Enter or clicking away) — clicking
