@@ -37,6 +37,23 @@ if "reopen" in st.query_params:
 if st.session_state.pop("_do_workspace_reset", False):
     _clear_case_scoped_state()
 
+# --- Preset-switch reset: same Block-scoped clearing as a full reset, but
+# Case ID / Renseignements cliniques are entered *before* the preset in
+# the tab flow (Case ID -> Renseignements cliniques -> Preset) and aren't
+# specific to any one preset's blocks — switching presets mid-entry
+# shouldn't wipe them out from under the person. Captured under the OLD
+# generation's keys before clearing, then re-seeded under the NEW
+# generation's keys afterward, same pattern as case-reopen restoration.
+if st.session_state.pop("_do_preset_switch_reset", False):
+    _old_gen = st.session_state.get("_form_generation", 0)
+    _preserved_case_id = st.session_state.get(f"case_id_{_old_gen}", "")
+    _preserved_clin_info = st.session_state.get(f"clin_info_{_old_gen}", "")
+    _clear_case_scoped_state()
+    _new_gen = st.session_state["_form_generation"]
+    st.session_state[f"case_id_{_new_gen}"] = _preserved_case_id
+    st.session_state[f"clin_info_{_new_gen}"] = _preserved_clin_info
+
+
 # --- Reopen a saved case: same clearing, then layer the case's saved
 # values back on top of the freshly-cleared state, before any widget
 # below reads them.
@@ -165,8 +182,9 @@ _previous_label = st.session_state.get("_last_selected_label")
 if selected_label != _previous_label:
     st.session_state["_last_selected_label"] = selected_label
     if _previous_label is not None:  # skip the harmless no-op reset on cold start
-        st.session_state["_do_workspace_reset"] = True
+        st.session_state["_do_preset_switch_reset"] = True
         st.rerun()
+
 
 # --- Minimal reopen trigger. Temporary — the Worklist page now covers the
 # browsable case, but this stays as a fast direct-entry alternative.
