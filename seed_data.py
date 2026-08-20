@@ -197,8 +197,8 @@ def seed_gallbladder(cursor):
     gb_micro = (
         gb_macro + "\n\n"
         "La muqueuse est faite de franges tapissées par un épithélium cylindrique, "
-        "régulier et bien différencié.\n\n"
-        "{% if cholesterolosis %}Leurs axes comportent des macrophages spumeux.{% endif %}\n\n"
+        "régulier et bien différencié."
+        "{% if cholesterolosis %}\n\nLeurs axes comportent des macrophages spumeux.{% endif %}\n\n"
         "{% if inflammation_type == \"chronique\" %}"
         "Le chorion abrite un infiltrat inflammatoire mononucléé. Cet infiltrat s'étend "
         "jusqu'à la musculeuse et la sous-séreuse."
