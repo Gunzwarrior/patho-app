@@ -1,6 +1,6 @@
 from jinja2 import Template
 import database as db
-from rendering import build_context, coerce_field_value
+from rendering import build_context, coerce_field_value, snippet_lookup
 
 # ---------------------------------------------------------------------------
 # Grouping engine
@@ -28,7 +28,7 @@ def render_conclusion_signature(block, field_values_override=None):
     context = build_context(block, field_values_override)
     if block.get("site_label") is not None:
         context["site_label"] = GROUP_SENTINEL
-    return Template(block["conclusion_template"]).render(**context).strip()
+    return Template(block["conclusion_template"]).render(snippet=snippet_lookup, **context).strip()
 
 
 def get_combined_label(run):

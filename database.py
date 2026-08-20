@@ -127,6 +127,14 @@ def get_conclusion_group_label(block_keys):
     return row["combined_label"] if row else None
 
 
+def get_snippet_by_shortcut(shortcut):
+    """Looks up a single Snippet by its shortcut key. Returns a dict or None."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM Snippets WHERE shortcut = ?", (shortcut,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def get_all_snippets():
     conn = get_db_connection()
     rows = conn.execute("SELECT * FROM Snippets ORDER BY category, shortcut").fetchall()

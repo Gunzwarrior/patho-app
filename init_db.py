@@ -1,20 +1,17 @@
 """
-PathoPilot — database migration / initialization script (v2 schema).
+PathoPilot — database schema (v2). Content (Fields/Blocks/Presets/Snippets)
+lives in seed_data.py, not here — this file only defines table structure.
 
-Replaces the old flat 'Templates' / 'Master_Templates' model with the
-Fields / Blocks / Presets architecture. Running this DROPS and recreates
-all tables, then seeds them with a translation of the current "Gastric
-Trio" data so the app has one working, fully migrated case type to
-validate the new engine against.
+Running this DROPS and recreates all tables, then calls seed_data.seed_all()
+to populate them.
 
-⚠️ Destructive: wipes pathology.db and rebuilds from scratch. Any real
-saved Cases from the old schema are not migrated (there weren't any
-structured ones worth carrying over — the old Cases table only ever
-stored rendered HTML, never structured_input).
+⚠️ Destructive: wipes pathology.db and rebuilds from scratch. Cases are
+never migrated across a schema rebuild — this script is for development,
+not for a database holding real case history.
 """
 
 import sqlite3
-import json
+import seed_data
 
 DB_NAME = "pathology.db"
 
@@ -35,7 +32,8 @@ def setup_database():
         DROP TABLE IF EXISTS Blocks;
         DROP TABLE IF EXISTS Fields;
         DROP TABLE IF EXISTS Snippets;
-        -- old schema table names, dropped in case this runs against an old db
+        -- old (pre-v2) schema table names, dropped in case this runs
+        -- against a database that predates the Fields/Blocks rebuild
         DROP TABLE IF EXISTS Templates;
         DROP TABLE IF EXISTS Master_Templates;
     """)
@@ -121,6 +119,7 @@ def setup_database():
         );
 
         -- SNIPPETS: reusable text fragments, referenced by key from templates
+        -- via {{ snippet('shortcut') }}, or used standalone as a text expander.
         CREATE TABLE Snippets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             shortcut TEXT NOT NULL UNIQUE,
@@ -157,146 +156,7 @@ def setup_database():
         );
     """)
 
-    print("Seeding Fields...")
-    hp_addendum = (
-        "{% if value %}Présence d'une infection à hélicobacter pylori."
-        "{% else %}Absence d'hélicobacter pylori.{% endif %}"
-    )
-    fields = [
-        # key, label, type, options(json or None), default_value, conclusion_addendum_template
-        ("fragments", "Fragments", "number", None, "1", None),
-        ("inflammation_intensity", "Inflammation", "select",
-         json.dumps(["légère", "modérée", "sévère"]), "modérée", None),
-        ("is_normal", "Normal ?", "checkbox", None, "1", None),
-        ("hp_positive", "Helicobacter pylori positif", "checkbox", None, "1", hp_addendum),
-    ]
-    cursor.executemany(
-        "INSERT INTO Fields (key, label, type, options, default_value, conclusion_addendum_template) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        fields,
-    )
-
-    def field_id(key):
-        cursor.execute("SELECT id FROM Fields WHERE key = ?", (key,))
-        return cursor.fetchone()[0]
-
-    print("Seeding Blocks (Duodenum, Antrum, Fundus)...")
-
-    duodenum_micro = (
-        "{{fragment_text}}\n\n"
-        "{% if is_normal %}"
-        "Il s'agit d'une muqueuse duodénale dont les villosités sont de taille normale, "
-        "tapissées par un épithélium régulier et bien différencié, sans hyperlymphocytose "
-        "intraépithéliale. Le chorion est sans particularité.\n"
-        "Absence d'agent pathogène ou de signe de malignité."
-        "{% else %}"
-        "Anomalie détectée."
-        "{% endif %}"
-    )
-    duodenum_conc = (
-        "{% if is_normal %}Muqueuse duodénale normale.{% else %}Duodénite.{% endif %}"
-    )
-
-    antrum_micro = (
-        "{{fragment_text}}\n\n"
-        "Il s'agit d'une muqueuse antrale dont les cryptes sont régulières et bien "
-        "différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un "
-        "infiltrat inflammatoire polymorphe d'intensité {{inflammation_intensity}}. "
-        "Les glandes antrales sont en nombre normal.\n"
-        "{% if hp_positive %}"
-        "Présence d'éléments ayant la morphologie d'Helicobacter pylori en HES.\n\n"
-        "Etude immunohistochimique :\n- HP : positif"
-        "{% else %}"
-        "Absence d'Helicobacter pylori en HES.\n\n"
-        "Etude immunohistochimique :\n- HP : négatif"
-        "{% endif %}"
-    )
-    # HP status is a case-level fact (see hp_positive.conclusion_addendum_template),
-    # not a per-block one — deliberately not mentioned here, even though the
-    # field is captured per-block for the HES/immunohisto findings above.
-    antrum_conc = (
-        "Gastrite chronique interstitielle {{site_label}} {{inflammation_intensity}}, active, "
-        "sans métaplasie intestinale ni atrophie glandulaire."
-    )
-
-    fundus_micro = (
-        "{{fragment_text}}\n\n"
-        "Il s'agit d'une muqueuse fundique dont les cryptes sont régulières et bien "
-        "différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un "
-        "infiltrat inflammatoire polymorphe d'intensité {{inflammation_intensity}}. "
-        "Les glandes fundiques sont en nombre normal.\n"
-        "{% if hp_positive %}"
-        "Présence d'éléments ayant la morphologie d'Helicobacter pylori en HES."
-        "{% else %}"
-        "Absence d'Helicobacter pylori en HES."
-        "{% endif %}"
-    )
-    fundus_conc = (
-        "Gastrite chronique interstitielle {{site_label}} {{inflammation_intensity}}, active, "
-        "sans métaplasie intestinale ni atrophie glandulaire."
-    )
-
-    blocks = [
-        # key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template
-        ("duodenum", "Duodenum", 0, None, "duodenum", duodenum_micro, duodenum_conc),
-        ("antrum", "Antrum", 0, "antrale", "gastric", antrum_micro, antrum_conc),
-        ("fundus", "Fundus", 0, "fundique", "gastric", fundus_micro, fundus_conc),
-    ]
-    cursor.executemany(
-        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        blocks,
-    )
-
-    def block_id(key):
-        cursor.execute("SELECT id FROM Blocks WHERE key = ?", (key,))
-        return cursor.fetchone()[0]
-
-    print("Wiring Block_Fields...")
-    block_fields = [
-        # block_key, field_key, sort_order, label_override, default_override
-        ("duodenum", "fragments", 0, None, "2"),
-        ("duodenum", "is_normal", 1, None, None),
-        ("antrum", "fragments", 0, None, "3"),
-        ("antrum", "inflammation_intensity", 1, None, None),
-        ("antrum", "hp_positive", 2, None, None),
-        ("fundus", "fragments", 0, None, "1"),
-        ("fundus", "inflammation_intensity", 1, None, None),
-        ("fundus", "hp_positive", 2, None, None),
-    ]
-    cursor.executemany(
-        "INSERT INTO Block_Fields (block_id, field_id, sort_order, label_override, default_override) "
-        "VALUES (?, ?, ?, ?, ?)",
-        [(block_id(b), field_id(f), so, lo, do) for b, f, so, lo, do in block_fields],
-    )
-
-    print("Seeding Preset 'Gastric Trio'...")
-    cursor.execute(
-        "INSERT INTO Presets (short_code, name, category, default_adicap) VALUES (?, ?, ?, ?)",
-        ("gt", "Gastric Trio", "digestif", "ADICAP_GAST1"),
-    )
-    preset_id = cursor.lastrowid
-
-    cursor.executemany(
-        "INSERT INTO Preset_Blocks (preset_id, block_id, sort_order, field_overrides) VALUES (?, ?, ?, ?)",
-        [
-            (preset_id, block_id("duodenum"), 0, None),
-            (preset_id, block_id("antrum"), 1, None),
-            (preset_id, block_id("fundus"), 2, None),
-        ],
-    )
-
-    print("Seeding Conclusion_Group_Labels...")
-    cursor.execute(
-        "INSERT INTO Conclusion_Group_Labels (block_key_set, combined_label) VALUES (?, ?)",
-        ("antrum,fundus", "antro-fundique"),
-    )
-
-    print("Seeding Snippets...")
-    cursor.execute(
-        "INSERT INTO Snippets (shortcut, expansion, category) VALUES (?, ?, ?)",
-        ("hp+", "<b>Présence d'éléments ayant la morphologie d'Helicobacter pylori.</b>", "digestif"),
-    )
+    seed_data.seed_all(cursor)
 
     conn.commit()
     conn.close()

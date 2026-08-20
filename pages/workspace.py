@@ -267,6 +267,11 @@ if selected_label != "-- Select --":
                     if is_fresh:
                         kwargs["value"] = int(field["value"])
                     val = st.number_input(field["label"], **kwargs)
+                elif field["type"] == "decimal":
+                    kwargs = {"min_value": 0.0, "step": 0.1, "format": "%.1f", "key": widget_key, "disabled": master_lock_active}
+                    if is_fresh:
+                        kwargs["value"] = float(field["value"])
+                    val = st.number_input(field["label"], **kwargs)
                 elif field["type"] == "select":
                     options = field["options"] or []
                     kwargs = {"key": widget_key, "disabled": master_lock_active}

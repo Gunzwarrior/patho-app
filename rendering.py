@@ -1,5 +1,6 @@
 import re
 from jinja2 import Template
+import database as db
 
 # Lightweight Markdown-style bold convention for Master Lock manual edits.
 # Plain text areas have no concept of bold, and guessing which lines
@@ -8,6 +9,24 @@ from jinja2 import Template
 # marks bold explicitly with **like this**, same as Markdown — works for
 # any report structure without special-casing any of them.
 BOLD_MARKUP_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+
+def snippet_lookup(shortcut):
+    """
+    Jinja2-callable, used inside Block templates as {{ snippet('shortcut') }}
+    so an exact, reused-verbatim phrase (e.g. "Absence de signe de
+    malignité.") lives in the Snippets table and gets edited once, not
+    copy-pasted into every Block template that needs it.
+
+    Fails loud, not silently: a missing shortcut renders as a visible
+    bracketed marker in the output rather than an empty string, since a
+    silently-vanishing phrase in a real report is far worse than an
+    obviously-wrong one that gets caught immediately.
+    """
+    result = db.get_snippet_by_shortcut(shortcut)
+    if result is None:
+        return f"[SNIPPET NOT FOUND: {shortcut}]"
+    return result["expansion"]
 
 
 def text_to_html(text):
@@ -36,6 +55,11 @@ def coerce_field_value(field_type, raw_value):
     if field_type == "number":
         try:
             return int(raw_value)
+        except (TypeError, ValueError):
+            return raw_value
+    if field_type == "decimal":
+        try:
+            return float(raw_value)
         except (TypeError, ValueError):
             return raw_value
     return raw_value
@@ -68,8 +92,8 @@ def build_context(block, field_values_override=None):
 def render_block(block, field_values_override=None):
     """Renders one block instance's microscopy and conclusion text."""
     context = build_context(block, field_values_override)
-    micro_txt = Template(block["micro_template"]).render(**context)
-    conc_txt = Template(block["conclusion_template"]).render(**context)
+    micro_txt = Template(block["micro_template"]).render(snippet=snippet_lookup, **context)
+    conc_txt = Template(block["conclusion_template"]).render(snippet=snippet_lookup, **context)
     return micro_txt.strip(), conc_txt.strip()
 
 
