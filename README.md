@@ -1,30 +1,43 @@
-# 🔬 PathoPilot
+# PathoPilot
 
-A lightweight, high-speed Laboratory Information System (LIS) and macro-text generator designed specifically for Pathology workflows. Built to bypass browser restrictions and integrate seamlessly with proprietary hospital systems like Diamic.
+A personal pathology report-writing tool, built to replace a fragmented
+workflow of Word + a spreadsheet tracker + aText (a text expander). Built
+for one user (a French private-practice pathologist), runs entirely on a
+local home server — no cloud, no multi-tenant concerns, no auth system.
 
-## 🚀 Current Features (Version 5)
-* **Dynamic Workspaces:** Specialized protocols (e.g., Gastric Trio) with contextual UI inputs.
-* **Smart Text Generation:** Translates clinical variables (inflammation, H. Pylori) into formatted, professional medical French.
-* **The "Master Lock":** A stateful override system allowing the pathologist to disconnect UI sliders and manually edit the final report without losing data.
-* **Rich-Text Clipboard Bypass:** Custom JavaScript injection that forces modern browsers to natively copy raw HTML (preserving bolding, italics, and layout) for direct pasting into MS Word or Diamic.
-* **Settings Manager:** A database viewer for Snippets, Master Templates, and Cases.
+## Stack
 
-## 🛠️ Tech Stack
-* **Frontend/Backend:** Python 3, Streamlit
-* **Database:** SQLite3, Pandas
-* **Environment:** Proxmox LXC Container (Debian/Ubuntu)
+Python 3 / Streamlit / SQLite. No ORM — raw `sqlite3` throughout.
 
-## 💻 How to Run (Development)
-This app is designed to run in an isolated Python virtual environment.
+## Quickstart
 
-1. Navigate to the project directory:
-   ```bash
-   cd /root/patho_app
+```bash
+python3 init_db.py       # destructive: drops and rebuilds the whole DB
+                          # from schema (init_db.py) + content (seed_data.py)
+streamlit run app.py
+```
 
-2. Activate the virtual environment:
-   ```bash
-   source venv/bin/activate
+Runs as a Streamlit multi-page app: Workspace (daily report-writing),
+Worklist (browse/search/reopen saved cases), Editor (add Snippets — Fields/
+Blocks/Presets editing not built yet), Manager (raw table views).
 
-3. Boot the Stramlit server (accessible via local network):
-   ```bash
-   streamlit run app.py --server.address 0.0.0.0
+## Repo map
+
+| File | Job |
+|---|---|
+| `init_db.py` | Schema only (CREATE TABLE). Destructive rebuild. |
+| `seed_data.py` | All content — Fields/Blocks/Presets/Snippets, one function per case type. |
+| `database.py` | All SQL queries. |
+| `rendering.py` | Per-block Jinja2 rendering, text/HTML formatting, the Snippet lookup mechanism. |
+| `grouping.py` | The grouping engine — merges/sections conclusions across blocks. |
+| `app.py` | Slim multi-page entry point. |
+| `pages/workspace.py` | Daily report-building UI — the main screen. |
+| `pages/worklist.py` | Browse/search/reopen all saved cases. |
+| `pages/editor.py` | Add/list Snippets (Fields/Blocks/Presets editing not built yet). |
+| `pages/manager.py` | Read-only raw table views, for debugging. |
+
+## For AI assistants picking this project back up
+
+Read **`CLAUDE.md`** first (architecture, vocabulary, conventions, hard-won
+gotchas), then **`PROGRESS.md`** (current state — but verify it against the
+actual `git log`, it can go stale).
