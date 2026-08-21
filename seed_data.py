@@ -194,19 +194,28 @@ def seed_gallbladder(cursor):
         "{% endif %}"
         "{% if lithiasis %} Présence de calculs à la coupe.{% endif %}"
     )
+    # Descriptive prose (from "La muqueuse..." onward) is one continuous
+    # paragraph, sentences separated by single spaces — matches the real
+    # sample and fixes the cholesterolosis blank-line bug (its trailing
+    # separator now lives *inside* the conditional, so an omitted sentence
+    # leaves no trace instead of an unconditional \n\n). The macro→micro
+    # transition keeps its own \n\n on purpose: that boundary is the one
+    # PROGRESS.md earmarks for a real "Examen macroscopique"/"Examen
+    # microscopique" header split later, and it already matches the
+    # fold pattern used for Gastric Trio's fragment_text line.
     gb_micro = (
         gb_macro + "\n\n"
         "La muqueuse est faite de franges tapissées par un épithélium cylindrique, "
         "régulier et bien différencié."
-        "{% if cholesterolosis %}\n\nLeurs axes comportent des macrophages spumeux.{% endif %}\n\n"
-        "{% if inflammation_type == \"chronique\" %}"
+        "{% if cholesterolosis %} Leurs axes comportent des macrophages spumeux.{% endif %}"
+        " {% if inflammation_type == \"chronique\" %}"
         "Le chorion abrite un infiltrat inflammatoire mononucléé. Cet infiltrat s'étend "
         "jusqu'à la musculeuse et la sous-séreuse."
         "{% else %}"
         "Il existe un infiltrat inflammatoire polymorphe riche en polynucléaires "
         "neutrophiles, atteignant toutes les couches de la paroi vésiculaire."
-        "{% endif %}\n\n"
-        "{{ snippet('absence_malignite') }}"
+        "{% endif %}"
+        "\n{{ snippet('absence_malignite') }}"
     )
     # The diagnosis here is exactly the "derived field" pattern an outside
     # conversation proposed as new architecture — but it's just Jinja2
@@ -307,8 +316,8 @@ def seed_appendix(cursor):
         "{% elif appendicite_type == \"intervalle\" %}"
         "La muqueuse appendiculaire comporte quelques cryptites et distorsions cryptiques. Il existe une "
         "fibrose avec inflammation chronique transmurale et des agrégats lymphoïdes."
-        "{% endif %}\n\n"
-        "{{ snippet('absence_malignite') }}"
+        "{% endif %}"
+        "\n{{ snippet('absence_malignite') }}"
     )
     appendix_conc = (
         "{% if appendicite_type == \"endo\" %}Endo-appendicite aiguë."
