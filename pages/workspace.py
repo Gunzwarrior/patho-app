@@ -407,7 +407,7 @@ if selected_label != "-- Select --":
     # on, it's whatever was typed — including any **bold** the blocks
     # already put there, since raw_compiled_micro/conc carried it over.
     final_html = rendering.assemble_report_html(
-        case_id, clinical_info, preset["name"],
+        clinical_info, preset["name"],
         rendering.text_to_html(final_micro),
         rendering.text_to_html(final_conc),
     )

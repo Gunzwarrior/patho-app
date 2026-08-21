@@ -111,7 +111,7 @@ def format_micro_plain(micro_blocks):
     return "\n\n".join(parts)
 
 
-def assemble_report_html(case_id, clinical_info, preset_title, micro_html, conc_html):
+def assemble_report_html(clinical_info, preset_title, micro_html, conc_html):
     """
     Final report shell. Takes already-converted HTML for microscopy/
     conclusion — call text_to_html() on the plain text first. Bold comes
@@ -121,19 +121,18 @@ def assemble_report_html(case_id, clinical_info, preset_title, micro_html, conc_
     """
     return f"""
     <div style="font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;">
-        N° {case_id}<br>
         <b><i>Renseignements cliniques :</i></b> <i>{clinical_info}</i><br><br><br>
         <div style="text-align: center;"><b>{preset_title.upper()}</b></div><br><br>
-        <u>MICROSCOPY:</u><br>{micro_html}<br><br><br>
+        {micro_html}<br><br><br>
         <b>CONCLUSION</b><br><br>
         {conc_html}
     </div>
     """
 
 
-def compile_final_html(case_id, clinical_info, preset_title, micro_blocks, conclusion_plain_text):
+def compile_final_html(clinical_info, preset_title, micro_blocks, conclusion_plain_text):
     """Convenience wrapper for the auto-render path. conclusion_plain_text
     must already be the output of grouping.render_conclusion_plain()."""
     micro_html = text_to_html(format_micro_plain(micro_blocks))
     conc_html = text_to_html(conclusion_plain_text)
-    return assemble_report_html(case_id, clinical_info, preset_title, micro_html, conc_html)
+    return assemble_report_html(clinical_info, preset_title, micro_html, conc_html)

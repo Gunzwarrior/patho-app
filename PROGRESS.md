@@ -91,11 +91,6 @@ The plan has two tiers:
   one-line liquid volume/color statement was *assumed* to fit the "fold"
   pattern by analogy — still not explicitly confirmed, worth
   double-checking with the person.
-- **Remove "MICROSCOPY:" label** from the report shell entirely — doesn't
-  appear in any real sample, for either convention.
-- **Remove the case number (`N° {case_id}`)** from the rendered report
-  entirely — the person only tracks it in a separate Word doc, never
-  pastes it into Diamic.
 
 ## Content/design requests, not yet implemented
 
@@ -150,6 +145,6 @@ that reconstruction to whichever session happens to sync next.
 2. Raise the field-consistency architectural question explicitly and get
    a real decision before building anything for it.
 3. Work through the macro/micro header split for Gallbladder/Appendix,
-   the case-number/"MICROSCOPY:" removal, the Title field, and single-
-   specimen numbering — independent of each other, no required order.
+   the Title field, and single-specimen numbering — independent of each
+   other, no required order.
 4. Don't start the Editor (Tier 3) until Tier 2's content is stable.
