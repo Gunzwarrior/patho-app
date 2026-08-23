@@ -185,7 +185,6 @@ if selected_label != _previous_label:
         st.session_state["_do_preset_switch_reset"] = True
         st.rerun()
 
-
 # --- Minimal reopen trigger. Temporary — the Worklist page now covers the
 # browsable case, but this stays as a fast direct-entry alternative.
 #
@@ -311,7 +310,7 @@ if selected_label != "-- Select --":
 
             overrides[field["key"]] = val
 
-        micro_txt, conc_txt = rendering.render_block(block, overrides)
+        micro_txt, conc_txt = rendering.render_block(block, overrides, total_specimens=len(blocks))
         micro_blocks.append((block["name"], micro_txt))
         conclusion_entries.append({"block": block, "overrides": overrides, "conc_txt": conc_txt})
         st.divider()
