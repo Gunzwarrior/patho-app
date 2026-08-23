@@ -248,8 +248,8 @@ def seed_gallbladder(cursor):
         ("specimen_size_cm", 0, None, None),
         ("specimen_state", 1, None, None),
         ("inflammation_type", 2, None, None),
-        ("cholesterolosis", 3, None, None),
-        ("lithiasis", 4, None, None),
+        ("lithiasis", 3, None, None),
+        ("cholesterolosis", 4, None, None),
     ]
     cursor.executemany(
         "INSERT INTO Block_Fields (block_id, field_id, sort_order, label_override, default_override) "

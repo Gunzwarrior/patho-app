@@ -150,10 +150,6 @@ The plan has two tiers:
 
 ## Content/design requests, not yet implemented
 
-- **Swap Cholesterolosis/Lithiasis field order** in Gallbladder — likely
-  Lithiasis first (more routinely salient for a cholecystectomy),
-  Cholesterolosis last, but this is an inference — check with him before
-  assuming which way round.
 - **A separate, editable "Title" field**, pre-filled per Preset but not
   identical to the Preset's internal `name`. Examples: Gastric Trio's
   title should default to "Biopsies gastroduodénales"; Thyroid Cytology's
@@ -202,6 +198,5 @@ rather than deferring reconstruction to whichever session syncs next.
    committed vs. what's staged from this round.
 2. Raise the field-consistency architectural question explicitly and get
    a real decision before building anything for it.
-3. Remaining open items: swap Cholesterolosis/Lithiasis field order, the
-   Title field.
+3. Remaining open items: the Title field.
 4. Don't start the Editor (Tier 3) until Tier 2's content is stable.
