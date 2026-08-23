@@ -75,6 +75,16 @@ def setup_database():
                                             -- (blank line between different groups) and share
                                             -- one addendum placement. NULL = default bucket,
                                             -- behaves as if sectioning weren't in use at all.
+            macro_template TEXT,           -- Jinja2 template for the macroscopic exam,
+                                            -- rendered and combined with micro_template by
+                                            -- rendering.render_block based on how many
+                                            -- specimens are in the case: "Examen macroscopique"/
+                                            -- "Examen microscopique" bold headers when this is
+                                            -- the case's only specimen, no headers (just a
+                                            -- blank line between them) when there are 2+.
+                                            -- Intended to be set for every non-table block —
+                                            -- NULL is only for a block with genuinely no macro
+                                            -- content to state, not a per-block-type opt-out.
             micro_template TEXT NOT NULL,
             conclusion_template TEXT NOT NULL
         );

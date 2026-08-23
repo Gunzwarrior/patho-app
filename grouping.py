@@ -123,6 +123,12 @@ def render_conclusion_plain(entries):
     Returns (plain_text, conflicting_field_labels) — conflicts collected
     across all sections, for a single combined warning to the user.
     """
+    # Same "exactly one specimen -> no numbering at all" rule as
+    # rendering.format_micro_plain, confirmed against the same real
+    # sample. Computed once from the whole case, not per-section: a
+    # single-specimen case only ever produces one section with one
+    # entry anyway, so there's nothing to distinguish per-section here.
+    single_specimen = len(entries) == 1
     sections = _partition_into_sections(entries)
 
     section_texts = []
@@ -135,7 +141,7 @@ def render_conclusion_plain(entries):
         lines = []
         for number_label, text in merged:
             for j, line in enumerate(text.split("\n")):
-                prefix = f"{number_label}. " if j == 0 else ""
+                prefix = "" if single_specimen else (f"{number_label}. " if j == 0 else "")
                 lines.append(f"**{prefix}{line}**")
         for line in addenda:
             lines.append(f"**{line}**")

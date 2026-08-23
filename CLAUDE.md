@@ -80,24 +80,33 @@ reconsider, not just re-explain.
 
 ## Architecture decisions worth knowing the reasoning for
 
-- **Macro content is prepended to `micro_template`, not a separate
-  template slot — but only for biopsy-fragment-style specimens.** This
-  was refined once already: initially assumed universal (based only on a
-  gastric sample), then corrected against real Gallbladder/Appendix
-  samples, which showed **whole-organ/resection specimens need genuine
-  "Examen macroscopique" / "Examen microscopique" bold section headers**,
-  not folding. The rule: small biopsy fragments (a one-line macro
-  statement) fold; substantial organ specimens (real macro findings
-  worth their own paragraph) get dedicated headers. Both still avoid a
-  new schema column — the headers are literal bold-markup text baked
-  directly into the relevant Block's own `micro_template`, not a
-  structural change. See PROGRESS.md for which case types have and
-  haven't had this actually implemented yet.
+- **Every non-table Block has a real `macro_template`, separate from
+  `micro_template` — this is universal, not a per-block-type opt-in.**
+  Went through two wrong framings before landing here: first assumed a
+  fold-everything-into-one-string approach was universal, based only on
+  a gastric sample; then, when real Gallbladder/Appendix samples showed
+  whole-organ specimens need genuine "Examen macroscopique"/"Examen
+  microscopique" bold headers, assumed that was *their* special case and
+  biopsy-style Blocks (Gastric Trio) should keep the fold pattern
+  permanently. Wrong again — the person caught it: `fragment_text` is
+  itself a real macro statement, just previously folded in unlabeled.
+  `rendering.render_block` takes a `total_specimens` argument and
+  decides at render time, per block: 1 specimen in the whole case →
+  headers, 2 blank lines around each, header hugs its own content; 2+
+  specimens → no headers, one blank line between macro and micro, under
+  the block's own numbered specimen-name header (itself absent entirely
+  when there's only one specimen — see numbering, below).
+  `macro_template=NULL` stays supported for a block with genuinely no
+  macro content to state, but every current block has one set. The one
+  real exception: `is_table` blocks (future prostate biopsies) — a
+  different, row-based rendering path this mechanism doesn't touch.
 - **Numbering (both micro block headers and conclusion lines) only
   appears when a case has 2+ specimens.** A single-specimen case gets no
-  "1." anywhere — confirmed via a real single-gallbladder sample showing
-  an unnumbered conclusion line. Not yet implemented as of the last
-  session; see PROGRESS.md.
+  header at all — not just unnumbered, entirely absent, since the report
+  title already identifies the specimen. Implemented independently in
+  `rendering.format_micro_plain` and `grouping.render_conclusion_plain`,
+  each computing `len(...) == 1` on its own input — confirmed via a real
+  single-gallbladder sample.
 - **Grouping engine** (`grouping.py`): two adjacent blocks merge into one
   numbered conclusion line if their conclusion text is identical once each
   block's own `site_label` is blanked to a sentinel. This one mechanism
@@ -131,11 +140,24 @@ reconsider, not just re-explain.
   change the field widget's key either, since the key is based on
   `block_id` not `preset_id`. Fixed by tracking the previously-selected
   label and resetting on *any* change, not just specific transitions.
-- **`_do_workspace_reset` / `_do_case_reopen` flag + `st.rerun()` pattern**:
-  Streamlit refuses to clear a widget's `session_state` value in the same
-  run where that widget already rendered. The fix is always: set a flag,
-  call `st.rerun()`, do the actual clearing/restoring at the very top of
-  the *next* run, before any widget instantiates.
+  That first fix routed through `_do_workspace_reset` (the same full
+  reset used for "New Case"), which turned out wrong: `_clear_case_
+  scoped_state()` bumps `_form_generation`, orphaning the generation-
+  scoped Case ID / Renseignements cliniques widget keys even though
+  nothing explicitly deletes them — those two fields silently blanked on
+  every preset switch, since they're entered before the preset in the
+  tab flow and aren't specific to any one preset. Now uses a dedicated
+  `_do_preset_switch_reset` flag that captures both under the old
+  generation before clearing and re-seeds them under the new one.
+- **`_do_workspace_reset` / `_do_case_reopen` / `_do_preset_switch_reset`
+  flag + `st.rerun()` pattern**: Streamlit refuses to clear a widget's
+  `session_state` value in the same run where that widget already
+  rendered. The fix is always: set a flag, call `st.rerun()`, do the
+  actual clearing/restoring at the very top of the *next* run, before
+  any widget instantiates. Give a *new* one-shot reset need its own new
+  flag in this family rather than reusing an existing one for a
+  slightly different purpose — reusing `_do_workspace_reset` for the
+  preset-switch case is exactly what caused the Case ID bug above.
 - **Cross-page reopen uses `st.page_link(..., query_params={...})`, not
   `session_state` + `st.switch_page()`.** Confirmed via Streamlit's own
   GitHub issues that `session_state` is unreliable across `st.switch_page`;
@@ -207,6 +229,44 @@ commit test: "would I want to revert one piece of this without the rest?"
 If no, it's one commit, even across multiple files. Never commit
 speculative/untested work. **The person decides commit timing** — present
 the diff and test results, don't push for a commit.
+
+**Checkpointing vs. committing — different actions, don't conflate them.**
+A checkpoint is: working tree left in a self-consistent, tested state,
+plus a note in PROGRESS.md's mid-task section (start one when a task
+starts, clear it when the task is genuinely done) describing exactly what
+was done and why. Cheap, and should happen at every verified sub-step,
+regardless of session or budget limits — it's what lets the *next*
+session (any tool) pick up a task that died mid-way without reconstructing
+intent from a bare diff. A commit is gated on the verification level the
+change actually needs, independent of whether a checkpoint just happened:
+pure logic/backend changes with solid automated coverage can be committed
+without waiting on the person specifically; anything rendering/UI-facing
+where correctness means matching his judgment or a real sample should
+wait for him to actually look at it — automated tests can be green
+throughout while the real thing is still wrong (the Examen macroscopique/
+microscopique header structure is the concrete example: every test passed
+across two different wrong designs before the person's own sample caught
+it). This is a solo local repo with no shared remote — an early commit
+that turns out wrong costs nothing to amend or fix up, so that risk
+shouldn't discourage checkpointing.
+
+**Mixed-tool workflow.** The person trials multiple AI tools against this
+same repo — a free-tier chat without repo access, Cline against API or
+OpenRouter credits, eventually Claude Code — to compare costs before
+settling on one. Consequences, for any session regardless of which tool:
+- Whichever tool makes a change is in the best position to record it
+  accurately in PROGRESS.md, right when it happens. Reconstructing intent
+  from someone else's diff after the fact is real, avoidable work —
+  confirmed directly reconstructing a pasted-in Cline fix, which took
+  line-by-line comparison against the local file before it could be
+  trusted enough to document.
+- A tool without repo access can't checkpoint via git — compensate by
+  producing files at each verified sub-step, not just at the end of the
+  whole task.
+- Don't assume the person has copied your last output into his repo the
+  moment you produce it — he may be working in parallel elsewhere, or
+  applying changes by hand. Confirm state (`git log`/`git diff`, or ask
+  directly) rather than assuming your last output is what's actually live.
 
 **Testing discipline**: this project has no human-in-the-loop for real
 browser verification in every session (the person has gone on 2-week

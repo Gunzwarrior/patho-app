@@ -89,12 +89,57 @@ def build_context(block, field_values_override=None):
     return context
 
 
-def render_block(block, field_values_override=None):
-    """Renders one block instance's microscopy and conclusion text."""
+def render_block(block, field_values_override=None, total_specimens=1):
+    """
+    Renders one block instance's microscopy and conclusion text.
+
+    total_specimens: how many specimens (Blocks) are in the whole case,
+    not just this one. Only matters when block["macro_template"] is set:
+    whether "Examen macroscopique"/"Examen microscopique" bold headers
+    appear, and with what spacing, depends on this — a template has no
+    way to know it about itself, confirmed by trying to bake the headers
+    into the template text directly and getting it wrong for the
+    multi-specimen case. So it's decided here instead, every time, from
+    data the caller already has (len(blocks) in workspace.py's assembly
+    loop).
+
+    This is meant to be universal, not a per-block-type opt-in: every
+    non-table block gets a real macro_template (even Gastric Trio's is
+    just "{{fragment_text}}" now, split out from what used to be folded
+    unlabeled into micro_template) — so a single-specimen preset of any
+    kind gets the same header treatment, not just Gallbladder/Appendix/
+    Thyroid. macro_template=None stays supported for a block with
+    genuinely no separate macro content to state, but isn't expected to
+    be the normal case. The one real exception is is_table blocks (e.g.
+    future prostate biopsies) — a fundamentally different, row-based
+    rendering path this function doesn't touch.
+    """
     context = build_context(block, field_values_override)
-    micro_txt = Template(block["micro_template"]).render(snippet=snippet_lookup, **context)
-    conc_txt = Template(block["conclusion_template"]).render(snippet=snippet_lookup, **context)
-    return micro_txt.strip(), conc_txt.strip()
+    conc_txt = Template(block["conclusion_template"]).render(snippet=snippet_lookup, **context).strip()
+
+    macro_template = block.get("macro_template")
+    if macro_template:
+        macro_txt = Template(macro_template).render(snippet=snippet_lookup, **context).strip()
+        micro_only_txt = Template(block["micro_template"]).render(snippet=snippet_lookup, **context).strip()
+        if total_specimens == 1:
+            # 2 blank lines around each header, header hugs its own
+            # content with no gap — confirmed paragraph-by-paragraph
+            # against a real single-specimen sample.
+            micro_txt = (
+                f"**Examen macroscopique**\n{macro_txt}"
+                f"\n\n\n**Examen microscopique**\n{micro_only_txt}"
+            )
+        else:
+            # No headers at all when part of a multi-specimen case — just
+            # macro and micro, one blank line apart, under this block's
+            # own "N. Name" specimen header (added later in
+            # format_micro_plain). Confirmed against a real two-specimen
+            # sample: no "Examen..." labels appear anywhere in it.
+            micro_txt = f"{macro_txt}\n\n{micro_only_txt}"
+    else:
+        micro_txt = Template(block["micro_template"]).render(snippet=snippet_lookup, **context).strip()
+
+    return micro_txt, conc_txt
 
 
 def format_micro_plain(micro_blocks):
@@ -104,10 +149,18 @@ def format_micro_plain(micro_blocks):
     body text plain. This is the single source of truth: used for the
     auto-render preview AND as the exact pre-fill when switching into
     Master Lock, so existing bold never needs retyping.
+
+    No specimen-name header at all — not even un-numbered — when there's
+    exactly one specimen in the case. Confirmed against a real sample:
+    the title alone covers it (whether or not that one block also gets
+    its own "Examen macroscopique/microscopique" headers from
+    render_block is irrelevant here — either way, nothing wraps it).
+    Numbered "N. Name" headers return as soon as there are 2+.
     """
-    parts = []
-    for i, (name, text) in enumerate(micro_blocks):
-        parts.append(f"**{i+1}. {name}**\n{text}")
+    single_specimen = len(micro_blocks) == 1
+    if single_specimen:
+        return micro_blocks[0][1]
+    parts = [f"**{i+1}. {name}**\n{text}" for i, (name, text) in enumerate(micro_blocks)]
     return "\n\n".join(parts)
 
 
@@ -118,11 +171,18 @@ def assemble_report_html(clinical_info, preset_title, micro_html, conc_html):
     entirely from **markers** in that plain text now; nothing here forces
     extra bolding, so auto-render and manual edits stay visually identical
     for identical content.
+
+    The "Renseignements cliniques :" line is omitted entirely when empty
+    — not rendered as a label with nothing after it — confirmed against
+    a real sample where the field wasn't filled in for that case.
     """
+    clinical_line = (
+        f"<b><i>Renseignements cliniques :</i></b> <i>{clinical_info}</i><br><br><br>\n        "
+        if clinical_info and clinical_info.strip() else ""
+    )
     return f"""
     <div style="font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;">
-        <b><i>Renseignements cliniques :</i></b> <i>{clinical_info}</i><br><br><br>
-        <div style="text-align: center;"><b>{preset_title.upper()}</b></div><br><br>
+        {clinical_line}<div style="text-align: center;"><b>{preset_title.upper()}</b></div><br><br>
         {micro_html}<br><br><br>
         <b>CONCLUSION</b><br><br>
         {conc_html}

@@ -44,8 +44,20 @@ def seed_gastric_trio(cursor):
 
     print("Seeding Blocks (Duodenum, Antrum, Fundus)...")
 
+    # fragment_text is a genuine macro statement (specimen count received),
+    # just previously folded into micro_template unlabeled. Split out here
+    # so the same universal macro/micro mechanism (headers when this is
+    # the case's only specimen, none when it isn't) applies to these
+    # blocks too — not just Gallbladder/Appendix/Thyroid. For today's
+    # 3-block Gastric Trio preset this changes nothing: render_block's
+    # multi-specimen path recombines macro_txt + "\n\n" + micro_txt,
+    # byte-identical to the old folded template. It only starts mattering
+    # if a single-specimen preset (e.g. antrum biopsy alone) gets built
+    # later — then it correctly gets "Examen macroscopique"/"Examen
+    # microscopique" headers like any other single-specimen case.
+    gastric_macro = "{{fragment_text}}"
+
     duodenum_micro = (
-        "{{fragment_text}}\n\n"
         "{% if is_normal %}"
         "Il s'agit d'une muqueuse duodénale dont les villosités sont de taille normale, "
         "tapissées par un épithélium régulier et bien différencié, sans hyperlymphocytose "
@@ -60,7 +72,6 @@ def seed_gastric_trio(cursor):
     )
 
     antrum_micro = (
-        "{{fragment_text}}\n\n"
         "Il s'agit d'une muqueuse antrale dont les cryptes sont régulières et bien "
         "différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un "
         "infiltrat inflammatoire polymorphe d'intensité {{inflammation_intensity}}. "
@@ -82,7 +93,6 @@ def seed_gastric_trio(cursor):
     )
 
     fundus_micro = (
-        "{{fragment_text}}\n\n"
         "Il s'agit d'une muqueuse fundique dont les cryptes sont régulières et bien "
         "différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un "
         "infiltrat inflammatoire polymorphe d'intensité {{inflammation_intensity}}. "
@@ -99,14 +109,14 @@ def seed_gastric_trio(cursor):
     )
 
     blocks = [
-        # key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template
-        ("duodenum", "Duodenum", 0, None, "duodenum", duodenum_micro, duodenum_conc),
-        ("antrum", "Antrum", 0, "antrale", "gastric", antrum_micro, antrum_conc),
-        ("fundus", "Fundus", 0, "fundique", "gastric", fundus_micro, fundus_conc),
+        # key, name, is_table, site_label, conclusion_group, macro_template, micro_template, conclusion_template
+        ("duodenum", "Duodenum", 0, None, "duodenum", gastric_macro, duodenum_micro, duodenum_conc),
+        ("antrum", "Antrum", 0, "antrale", "gastric", gastric_macro, antrum_micro, antrum_conc),
+        ("fundus", "Fundus", 0, "fundique", "gastric", gastric_macro, fundus_micro, fundus_conc),
     ]
     cursor.executemany(
-        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, macro_template, micro_template, conclusion_template) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         blocks,
     )
 
@@ -178,14 +188,6 @@ def seed_gallbladder(cursor):
     # unrelated block types in an earlier sample document, and now a
     # seventh (gallbladder) — a real, repeated case for the DRY phrase
     # living in one place rather than being retyped into every template.
-    #
-    # Macro content (size/state) is prepended directly to micro_template,
-    # not a separate template slot — same technique fragment_text already
-    # uses for gastric blocks, and matches how the real reports fold this
-    # into the same numbered specimen entry rather than a distinct
-    # "MACROSCOPIE:" section. lithiasis is reused here from the block's own
-    # conclusion-driving field, not duplicated — one atomic Field, two
-    # templates referencing it.
     gb_macro = (
         "{% if specimen_state == \"fragmentée\" %}"
         "Vésicule biliaire reçue fragmentée, le plus grand fragment mesurant {{specimen_size_cm}} cm."
@@ -194,17 +196,23 @@ def seed_gallbladder(cursor):
         "{% endif %}"
         "{% if lithiasis %} Présence de calculs à la coupe.{% endif %}"
     )
-    # Descriptive prose (from "La muqueuse..." onward) is one continuous
-    # paragraph, sentences separated by single spaces — matches the real
-    # sample and fixes the cholesterolosis blank-line bug (its trailing
-    # separator now lives *inside* the conditional, so an omitted sentence
-    # leaves no trace instead of an unconditional \n\n). The macro→micro
-    # transition keeps its own \n\n on purpose: that boundary is the one
-    # PROGRESS.md earmarks for a real "Examen macroscopique"/"Examen
-    # microscopique" header split later, and it already matches the
-    # fold pattern used for Gastric Trio's fragment_text line.
+    # Macro and micro are now genuinely separate templates (Blocks.
+    # macro_template is a new, nullable column — NULL means "fold
+    # pattern, no header treatment ever", which is what Gastric Trio's
+    # blocks use). Whether "Examen macroscopique"/"Examen microscopique"
+    # headers actually appear, and with what spacing, is decided in
+    # rendering.render_block from the case's total specimen count —
+    # never baked into the template text itself. A single-specimen
+    # Gallbladder case gets the headers; a Gallbladder+Sleeve-style case
+    # gets neither, just this same macro/micro pair blank-line-joined
+    # under its own "N. Name" specimen header, confirmed via a real
+    # two-specimen sample.
+    #
+    # Descriptive prose is one continuous paragraph, sentences separated
+    # by single spaces — matches the real sample and fixes the
+    # cholesterolosis blank-line bug (its trailing separator lives
+    # *inside* the conditional, so an omitted sentence leaves no trace).
     gb_micro = (
-        gb_macro + "\n\n"
         "La muqueuse est faite de franges tapissées par un épithélium cylindrique, "
         "régulier et bien différencié."
         "{% if cholesterolosis %} Leurs axes comportent des macrophages spumeux.{% endif %}"
@@ -229,9 +237,9 @@ def seed_gallbladder(cursor):
     )
 
     cursor.execute(
-        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("vesicule_biliaire", "Vésicule biliaire", 0, None, "vesicule_biliaire", gb_micro, gb_conc),
+        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, macro_template, micro_template, conclusion_template) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("vesicule_biliaire", "Vésicule biliaire", 0, None, "vesicule_biliaire", gb_macro, gb_micro, gb_conc),
     )
 
     print("Wiring Block_Fields (Gallbladder)...")
@@ -290,7 +298,6 @@ def seed_appendix(cursor):
         "{% if false_membranes %} Présence de fausses membranes.{% endif %}"
     )
     appendix_micro = (
-        appendix_macro + "\n\n"
         "{% if appendicite_type == \"endo\" %}"
         "La muqueuse appendiculaire est focalement ulcérée et abrite de rares foyers inflammatoires "
         "polymorphes avec des polynucléaires neutrophiles. La musculeuse et la séreuse sont sans particularité."
@@ -330,9 +337,9 @@ def seed_appendix(cursor):
     )
 
     cursor.execute(
-        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("appendice", "Appendice", 0, None, "appendice", appendix_micro, appendix_conc),
+        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, macro_template, micro_template, conclusion_template) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("appendice", "Appendice", 0, None, "appendice", appendix_macro, appendix_micro, appendix_conc),
     )
 
     block_fields = [
@@ -393,14 +400,16 @@ def seed_thyroid_cytology(cursor):
     )
 
     print("Seeding Block (Cytologie thyroïdienne)...")
-    # Macro (volume/color/spread slides) prepended to micro_template using
-    # the shared cytology Fields, same technique as Gallbladder/Appendix.
+    # Macro (volume/color/spread slides) is now its own template column,
+    # same split as Gallbladder/Appendix — whether "Examen macroscopique/
+    # microscopique" headers appear (always true here: Thyroid Cytology
+    # presets are always single-specimen) is decided in rendering.
+    # render_block from specimen count, not baked into this text.
     cytology_macro = (
         "Liquide {{liquid_color}} de {{liquid_volume_ml}} mL."
         "{% if spread_slides_sent %} Lames étalées reçues.{% endif %}"
     )
     thyroid_micro = (
-        cytology_macro + "\n\n"
         "{% if thyroid_cytology_pattern == \"etc0\" %}"
         "Il existe sur un fond modérément hématique, de la colloïde, des macrophages et des éléments "
         "figurés du sang.\n"
@@ -448,9 +457,9 @@ def seed_thyroid_cytology(cursor):
     )
 
     cursor.execute(
-        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, micro_template, conclusion_template) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("thyroid_cytology", "Cytologie thyroïdienne", 0, None, "thyroid_cytology", thyroid_micro, thyroid_conc),
+        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, macro_template, micro_template, conclusion_template) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("thyroid_cytology", "Cytologie thyroïdienne", 0, None, "thyroid_cytology", cytology_macro, thyroid_micro, thyroid_conc),
     )
     block_fields = [
         # field_key, sort_order, label_override, default_override
