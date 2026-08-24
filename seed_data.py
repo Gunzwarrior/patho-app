@@ -140,8 +140,8 @@ def seed_gastric_trio(cursor):
 
     print("Seeding Preset 'Gastric Trio'...")
     cursor.execute(
-        "INSERT INTO Presets (short_code, name, category, default_adicap) VALUES (?, ?, ?, ?)",
-        ("gt", "Gastric Trio", "digestif", "ADICAP_GAST1"),
+        "INSERT INTO Presets (short_code, name, category, default_adicap, default_title) VALUES (?, ?, ?, ?, ?)",
+        ("gt", "Gastric Trio", "digestif", "ADICAP_GAST1", "Biopsies gastroduodénales"),
     )
     preset_id = cursor.lastrowid
 
@@ -260,8 +260,8 @@ def seed_gallbladder(cursor):
 
     print("Seeding Preset 'Vésicule biliaire'...")
     cursor.execute(
-        "INSERT INTO Presets (short_code, name, category, default_adicap) VALUES (?, ?, ?, ?)",
-        ("vb", "Vésicule biliaire", "digestif", None),
+        "INSERT INTO Presets (short_code, name, category, default_adicap, default_title) VALUES (?, ?, ?, ?, ?)",
+        ("vb", "Vésicule biliaire", "digestif", None, "Vésicule biliaire"),
     )
     preset_id = cursor.lastrowid
     cursor.execute(
@@ -356,8 +356,8 @@ def seed_appendix(cursor):
 
     print("Seeding Preset 'Appendice' (dai)...")
     cursor.execute(
-        "INSERT INTO Presets (short_code, name, category, default_adicap) VALUES (?, ?, ?, ?)",
-        ("dai", "Appendice", "digestif", None),
+        "INSERT INTO Presets (short_code, name, category, default_adicap, default_title) VALUES (?, ?, ?, ?, ?)",
+        ("dai", "Appendice", "digestif", None, "Appendice"),
     )
     preset_id = cursor.lastrowid
     cursor.execute(
@@ -388,7 +388,7 @@ def seed_cytology_macro_fields(cursor):
 
 
 def seed_thyroid_cytology(cursor):
-    print("Seeding Field (Thyroid Cytology)...")
+    print("Seeding Fields (Thyroid Cytology)...")
     cursor.execute(
         "INSERT INTO Fields (key, label, type, options, default_value, conclusion_addendum_template) "
         "VALUES (?, ?, ?, ?, ?, ?)",
@@ -397,6 +397,25 @@ def seed_thyroid_cytology(cursor):
             json.dumps(["etc0", "etc1", "etc2", "etc3", "etc5"]),
             "etc2", None,
         ),
+    )
+    # nodule_site is a real site selector, not a strict laterality — the
+    # real-sample evidence (CR_Sample.docx) has a second nodule described
+    # as "isthmique", which isn't a side at all. Feeds context_template/
+    # title_fragment_template below (Checkpoint 2b), and is deliberately
+    # placed first in Block_Fields sort_order so it's the first widget
+    # tabbed to, matching the person's described entry workflow.
+    nodule_fields = [
+        ("nodule_site", "Site", "select",
+         json.dumps(["lobaire droit", "lobaire gauche", "isthmique"]),
+         "lobaire droit", None),
+        ("nodule_size_mm", "Taille (mm)", "decimal", None, "15", None),
+        ("nodule_eutirads", "EU-TIRADS", "select",
+         json.dumps(["2", "3", "4", "5"]), "3", None),
+    ]
+    cursor.executemany(
+        "INSERT INTO Fields (key, label, type, options, default_value, conclusion_addendum_template) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        nodule_fields,
     )
 
     print("Seeding Block (Cytologie thyroïdienne)...")
@@ -456,17 +475,31 @@ def seed_thyroid_cytology(cursor):
         "{% endif %}"
     )
 
+    # Full composed sentence (multi-specimen: becomes this specimen's own
+    # header; single-specimen: auto-composes the top clinical-context box)
+    # vs. a short fragment (single-specimen only: appended to the report
+    # title). Two different granularities of the same underlying fields —
+    # confirmed against CR_Sample.docx, where the title only ever carries
+    # the site ("... LOBAIRE GAUCHE"), never size/EUTIRADS.
+    thyroid_context = "Nodule {{nodule_site}} de {{nodule_size_mm_display}} mm EUTIRADS {{nodule_eutirads}}"
+    thyroid_title_fragment = "{{nodule_site}}"
+
     cursor.execute(
-        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, macro_template, micro_template, conclusion_template) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ("thyroid_cytology", "Cytologie thyroïdienne", 0, None, "thyroid_cytology", cytology_macro, thyroid_micro, thyroid_conc),
+        "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, macro_template, micro_template, "
+        "conclusion_template, context_template, title_fragment_template) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("thyroid_cytology", "Cytologie thyroïdienne", 0, None, "thyroid_cytology", cytology_macro, thyroid_micro,
+         thyroid_conc, thyroid_context, thyroid_title_fragment),
     )
     block_fields = [
         # field_key, sort_order, label_override, default_override
-        ("liquid_volume_ml", 0, None, None),
-        ("liquid_color", 1, None, None),
-        ("spread_slides_sent", 2, None, None),
-        ("thyroid_cytology_pattern", 3, None, None),
+        ("nodule_site", 0, None, None),
+        ("nodule_size_mm", 1, None, None),
+        ("nodule_eutirads", 2, None, None),
+        ("liquid_volume_ml", 3, None, None),
+        ("liquid_color", 4, None, None),
+        ("spread_slides_sent", 5, None, None),
+        ("thyroid_cytology_pattern", 6, None, None),
     ]
     cursor.executemany(
         "INSERT INTO Block_Fields (block_id, field_id, sort_order, label_override, default_override) "
@@ -485,8 +518,8 @@ def seed_thyroid_cytology(cursor):
     ]
     for short_code, name in presets:
         cursor.execute(
-            "INSERT INTO Presets (short_code, name, category, default_adicap) VALUES (?, ?, ?, ?)",
-            (short_code, name, "endocrinien", None),
+            "INSERT INTO Presets (short_code, name, category, default_adicap, default_title) VALUES (?, ?, ?, ?, ?)",
+            (short_code, name, "endocrinien", None, "Cytologie thyroïdienne"),
         )
         preset_id = cursor.lastrowid
         cursor.execute(
