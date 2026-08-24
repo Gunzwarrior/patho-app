@@ -190,9 +190,9 @@ def seed_gallbladder(cursor):
     # living in one place rather than being retyped into every template.
     gb_macro = (
         "{% if specimen_state == \"fragmentée\" %}"
-        "Vésicule biliaire reçue fragmentée, le plus grand fragment mesurant {{specimen_size_cm}} cm."
+        "Vésicule biliaire reçue fragmentée, le plus grand fragment mesurant {{specimen_size_cm_display}} cm."
         "{% else %}"
-        "Vésicule biliaire mesurant {{specimen_size_cm}} cm de grand axe, reçue {{specimen_state}}."
+        "Vésicule biliaire mesurant {{specimen_size_cm_display}} cm de grand axe, reçue {{specimen_state}}."
         "{% endif %}"
         "{% if lithiasis %} Présence de calculs à la coupe.{% endif %}"
     )
@@ -294,7 +294,7 @@ def seed_appendix(cursor):
     # Macro (size/false membranes) prepended to micro_template, same
     # technique as Gallbladder and fragment_text before it.
     appendix_macro = (
-        "Il s'agit d'un appendice mesurant {{appendix_size_cm}} cm de longueur."
+        "Il s'agit d'un appendice mesurant {{appendix_size_cm_display}} cm de longueur."
         "{% if false_membranes %} Présence de fausses membranes.{% endif %}"
     )
     appendix_micro = (
@@ -406,7 +406,7 @@ def seed_thyroid_cytology(cursor):
     # presets are always single-specimen) is decided in rendering.
     # render_block from specimen count, not baked into this text.
     cytology_macro = (
-        "Liquide {{liquid_color}} de {{liquid_volume_ml}} mL."
+        "Liquide {{liquid_color}} de {{liquid_volume_ml_display}} mL."
         "{% if spread_slides_sent %} Lames étalées reçues.{% endif %}"
     )
     thyroid_micro = (
