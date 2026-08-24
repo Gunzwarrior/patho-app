@@ -15,18 +15,150 @@ question that raises.
 
 ## Where we are right now (read this first)
 
-Everything below is confirmed working in the person's real browser — he
-ran the updated `init_db.py` himself, reseeded, and tested. **Nothing in
-this batch has been committed yet**, but unlike earlier in this round,
-none of it is provisional: this is ready to commit.
+Everything in "Fixed and verified this round" below is confirmed committed
+— the person's own `git log --oneline -20` (pasted into a later session,
+reconciled at the time) shows `1601015`, `32f0e3f`, and `5988fe4` matching
+those entries. **One discrepancy to flag, not yet reconciled**: that same
+log's HEAD is `0b498c4 "Switch cholesterolosis and lithiasis fields"` —
+a commit not described anywhere in this file. Likely a small manual
+tweak done outside a documented AI session; confirm what it actually
+contains (`git show 0b498c4`) before assuming this file is complete.
 
 ## Currently mid-task
 
-Nothing in progress right now — this session's work is fully done and
-verified, just waiting on commit (see above). When a task starts that
-might outlast a session, note the plan and checkpoints here as it goes,
-not just at the end — see CLAUDE.md's "Checkpointing vs. committing" for
-why. Clear this section once the task is genuinely done.
+**Task: Title field + clinical-context/title/conclusion consistency
+linking, for Thyroid Cytology first.** Full design discussion happened
+in a Claude.ai chat (not yet reflected anywhere else) — real motivation:
+repeated real-world reporting mistakes where the same fact (laterality,
+receptor status) was typed independently in clinical info / title /
+conclusion and drifted out of sync. Design reasoning, if resuming without
+the original conversation:
+
+- Rejected parsing/extracting structured facts out of free-text clinical
+  info (an NLP-guessing approach) — doesn't fit this engine's existing
+  "never guess a synthesis rule, fail loud not silently" philosophy
+  (see `Fields.conclusion_addendum_template`'s conflict-handling, and
+  `snippet_lookup`'s missing-shortcut behavior). Facts should be entered
+  once, as real Fields, and *rendered* into multiple places — never
+  independently typed twice and reconciled after the fact.
+- Landed on: two new template columns on `Blocks`, parallel to the
+  existing `macro_template`/`micro_template`/`conclusion_template`
+  family — `context_template` (a full composed sentence, e.g. "nodule
+  lobaire gauche de 20 mm EUTIRADS 4") and `title_fragment_template` (a
+  short fragment, e.g. "lobaire gauche"). Both nullable/opt-in, same as
+  `macro_template` — a block that doesn't set them behaves exactly as
+  today. No new Field-level flag, no new "case-level field" concept, no
+  new Block *type* (a "clinical-context block" that renders nothing in
+  the conclusion was considered and rejected — breaks the Block
+  vocabulary in CLAUDE.md, which is explicit that a Block is one
+  complete diagnostic shape, not a bag of unrelated fields).
+- Where the rendered text goes is conditional on `total_specimens` — the
+  same conditional this codebase already has twice (macro/micro headers,
+  conclusion numbering), now a third time:
+  - **1 specimen**: `context_template`'s output auto-composes the top
+    "Renseignements cliniques" box; `title_fragment_template`'s output
+    appends to the preset's new `Presets.default_title`. Both need a
+    Master-Lock-style lock toggle (auto-synced while unlocked, frozen and
+    hand-editable while locked) so genuinely one-off additions ("Bilan
+    pré IRA-thérapie") don't require abandoning the auto-composition.
+  - **2+ specimens**: `context_template`'s output replaces that
+    specimen's own numbered header (`format_micro_plain`'s existing "N.
+    Name" — literally just pass the composed text instead of
+    `block["name"]` from `workspace.py`'s assembly loop; nothing inside
+    `rendering.format_micro_plain` itself needs to change). Title stays
+    at the static default (one laterality can't represent two different
+    nodules) and the top clinical-info box stays 100% free text, exactly
+    like today — confirmed against a real two-nodule sample
+    (`CR_Sample.docx`, case 2: top box just says "goitre," each nodule's
+    header carries its own composed sentence, conclusion carries a short
+    per-nodule prefix via an ordinary `{{field}}` reference already
+    supported today, no new mechanism needed there).
+  - Blocks with neither template set (Gastric Trio, Gallbladder,
+    Appendix) are completely unaffected — this is additive, not a
+    forced pattern on every Block.
+
+**⚠️ Before Checkpoint 1 — real risk, needs the person's confirmation
+first, not something Claude can check from the sandbox:** `init_db.py`
+fully drops and recreates every table, including `Cases`, with no
+migration path (its own docstring already says this is dev-only,
+destructive, "not for a database holding real case history"). If the
+person's live `pathology.db` now holds real validated Cases from actual
+use, running the updated `init_db.py` against it will destroy them.
+Confirm real-case status and back up (export `Cases` first, or write an
+`ALTER TABLE`-based migration instead of the destructive rebuild for this
+round specifically) before Checkpoint 1 touches the real repo — sandbox
+testing itself is safe either way, this only matters at the point the
+person applies the change to his own machine.
+
+**Checkpoints:**
+1. **Schema.** Add `Blocks.context_template` (TEXT, nullable),
+   `Blocks.title_fragment_template` (TEXT, nullable),
+   `Presets.default_title` (TEXT, nullable) to `init_db.py`. Pure
+   structure, no content. Test: rebuild against a throwaway db, confirm
+   the 4 existing case types render byte-identical to before (new columns
+   NULL on every existing row).
+2. **Thyroid Cytology content.** Three new Fields on `thyroid_cytology`:
+   `nodule_site` (select: "lobaire droit" / "lobaire gauche" /
+   "isthmique" — a real site, not a strict laterality; confirmed by the
+   sample's second nodule being "isthmique", not a side), `nodule_size`
+   (decimal), `nodule_eutirads` (select: "2"/"3"/"4"/"5"). Write
+   `context_template` = `"Nodule {{nodule_site}} de {{nodule_size_display}}
+   mm EUTIRADS {{nodule_eutirads}}"`, `title_fragment_template` =
+   `"{{nodule_site}}"`. Set `default_title` on all 4 existing presets'
+   underlying Presets rows (the originally-requested simple defaults:
+   "Vésicule biliaire", "Appendice", "Biopsies gastroduodénales",
+   "Cytologie thyroïdienne" — same column, same pass). **Gotcha caught in
+   planning, not yet hit in practice**: `coerce_field_value` renders
+   decimal fields as Python floats, so a naive `{{nodule_size}}` would
+   print "20.0" not "20", breaking the byte-match against the sample.
+   Fix: `build_context()` should also expose a `{key}_display` companion
+   for decimal fields (int-clean formatting) — same pattern already used
+   for `fragment_text` being derived alongside `fragments`. Test: direct
+   function calls over a spread of field combos, confirm decimal display
+   is clean.
+3. **Rendering support.** New function(s) in `rendering.py` to render
+   `context_template`/`title_fragment_template` through the existing
+   `build_context()`, same idiom as every other template. Test: exact
+   string match against the sample's "nodule lobaire gauche de 20 mm
+   EUTIRADS 4."
+4. **Workspace — single-specimen path.** Title widget (editable,
+   `default_title` + fragment when `total_specimens==1`,
+   generation-suffixed persistence like Case ID). Clinical Context lock
+   toggle, structurally copied from Master Lock. Test: `AppTest` —
+   single Nodule, fill fields, confirm auto-composed context/title match
+   the sample; lock, hand-edit, confirm fields no longer clobber it;
+   unlock, confirm resync. Full regression across the 4 existing case
+   types (this touches shared `workspace.py` code even though it
+   shouldn't change their behavior).
+5. **New 2-block Thyroid Cytology preset (test fixture).** New Preset —
+   two `Preset_Blocks` rows both pointing at `thyroid_cytology`, different
+   `sort_order`, `field_overrides` matching the sample's two nodules
+   (lobaire gauche/20mm/EUTIRADS4 vs isthmique/15mm/EUTIRADS3). Purely
+   additive seed data.
+6. **Workspace — multi-specimen path.** One-line change where
+   `micro_blocks` gets built: header becomes the rendered `context_txt`
+   when present, `block["name"]` otherwise — no change needed inside
+   `rendering.format_micro_plain` itself. Title/top-context auto-compose
+   stay inactive when `total_specimens > 1`. Test: run the new bi-nodular
+   preset through the full pipeline, confirm structural match against
+   `CR_Sample.docx` case 2. Also confirm (not just assume) that
+   `grouping.py` needs no change: `thyroid_cytology.site_label` is
+   already `NULL`, so the two nodules' genuinely-different conclusion
+   text won't spuriously merge — this is existing behavior, not new.
+7. **Regression + wrap-up.** Full boot check, regression across all 5
+   presets, clean up throwaway db/test scripts, update this file, present
+   diff for commit (likely 2 atomic commits: schema+Title generically,
+   then Thyroid content+bi-nodular preset+specimen-header logic — apply
+   the usual "would I revert one without the other" test).
+
+**Explicitly deferred, not part of this round**: a lightweight
+warn-only cross-check between free-text clinical info and a structured
+field's value (e.g. laterality word mismatch) — useful, but only once
+the above exists, and never as text-extraction/autofill. Also still
+separate and unaddressed: the `fausses_membranes`/`appendicite_type`
+field-*combination* validation question raised earlier in this file —
+a related but distinct problem (invalid combinations of independently-
+plausible values, not the same fact typed in multiple places).
 
 ## Fixed and verified this round
 
@@ -150,16 +282,11 @@ The plan has two tiers:
 
 ## Content/design requests, not yet implemented
 
-- **A separate, editable "Title" field**, pre-filled per Preset but not
-  identical to the Preset's internal `name`. Examples: Gastric Trio's
-  title should default to "Biopsies gastroduodénales"; Thyroid Cytology's
-  defaults to "Cytologie thyroïdienne" but is routinely hand-extended per
-  case (e.g. "Cytologie thyroïdienne lobaire gauche") — must stay freely
-  editable, not locked to the preset default. Appendix and Gallbladder's
-  current titles are already fine as-is. Implementation sketch: add
-  `Presets.default_title` (nullable TEXT), a new Title widget in
-  Workspace pre-filled from it, wired into `assemble_report_html` in
-  place of `preset["name"]`.
+- **Title field**: superseded by the fuller design now underway — see
+  "Currently mid-task" above. `Presets.default_title` is still the right
+  starting point, but it's now bundled with `context_template`/
+  `title_fragment_template` rather than built standalone, since the
+  simple version turned out to be a subset of the same schema change.
 
 ## Genuinely new architectural question — needs a real decision, not just a fix
 
@@ -173,7 +300,12 @@ The plan has two tiers:
   pattern already built for the duplicate-case guard is the likely
   reusable template for the "warning" option, but this is a real design
   decision, not a quick patch — likely to recur for other organs' field
-  combinations. **Discuss before building.**
+  combinations. **Discuss before building.** Note: this is a *different*
+  problem from the context/title/conclusion linking work now underway
+  (see "Currently mid-task") — that one is "the same single fact
+  shouldn't be typed twice," this one is "two different, individually
+  valid field values shouldn't be combinable." Solving one doesn't solve
+  the other. Still open.
 
 ## Open question: keeping this file honest across tools
 
@@ -195,8 +327,14 @@ rather than deferring reconstruction to whichever session syncs next.
 ## Immediate next steps, if resuming without other instructions
 
 1. Ask for `git log` to establish real state, and confirm what's actually
-   committed vs. what's staged from this round.
-2. Raise the field-consistency architectural question explicitly and get
-   a real decision before building anything for it.
-3. Remaining open items: the Title field.
-4. Don't start the Editor (Tier 3) until Tier 2's content is stable.
+   committed vs. what's staged — including reconciling the undocumented
+   `0b498c4` commit flagged above.
+2. If the checkpoint plan under "Currently mid-task" hasn't started yet:
+   get the real-Cases-backup question answered first, then start at
+   Checkpoint 1.
+3. If it's mid-way: pick up at the next unchecked checkpoint — each one
+   should have left the working tree self-consistent and tested, per
+   CLAUDE.md's checkpointing convention.
+4. The `fausses_membranes`/field-combination validation question is still
+   open and unrelated to the above — raise separately when it comes up.
+5. Don't start the Editor (Tier 3) until Tier 2's content is stable.
