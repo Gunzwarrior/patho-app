@@ -401,9 +401,9 @@ def seed_thyroid_cytology(cursor):
     # nodule_site is a real site selector, not a strict laterality — the
     # real-sample evidence (CR_Sample.docx) has a second nodule described
     # as "isthmique", which isn't a side at all. Feeds context_template/
-    # title_fragment_template below (Checkpoint 2b), and is deliberately
-    # placed first in Block_Fields sort_order so it's the first widget
-    # tabbed to, matching the person's described entry workflow.
+    # title_fragment_template below, and is deliberately placed first in
+    # Block_Fields sort_order so it's the first widget tabbed to, matching
+    # the person's described entry workflow.
     nodule_fields = [
         ("nodule_site", "Site", "select",
          json.dumps(["lobaire droit", "lobaire gauche", "isthmique"]),

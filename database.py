@@ -86,6 +86,7 @@ def get_preset_blocks(preset_id):
                 "options": json.loads(fr["field_options"]) if fr["field_options"] else None,
                 "value": value,
                 "conclusion_addendum_template": fr["field_addendum_template"],
+                "context_section": bool(fr["context_section"]),
             })
 
         block["fields"] = resolved_fields
