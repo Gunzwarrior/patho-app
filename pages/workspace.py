@@ -128,10 +128,14 @@ if st.session_state.pop("_do_case_reopen", False):
 
             saved_blocks = case["structured_input"].get("blocks", {})
             for block in db.get_preset_blocks(preset["id"]):
-                saved_values = saved_blocks.get(block["key"], {})
+                # Keyed by (Block key, sort_order), not just Block key — a
+                # Preset can reuse the same Block twice (e.g. two Thyroid
+                # Cytology nodules), and bare block["key"] would collide,
+                # silently restoring the same values to both instances.
+                saved_values = saved_blocks.get(f"{block['key']}#{block['sort_order']}", {})
                 for field in block["fields"]:
                     if field["key"] in saved_values:
-                        st.session_state[f"field_{block['block_id']}_{field['key']}_{gen}"] = saved_values[field["key"]]
+                        st.session_state[f"field_{block['block_id']}_{block['sort_order']}_{field['key']}_{gen}"] = saved_values[field["key"]]
 
             st.session_state["wildcard_notes"] = case["structured_input"].get("wildcard_notes", [])
             st.session_state["_wildcard_preset_id"] = preset["id"]
@@ -295,10 +299,15 @@ if selected_label != "-- Select --":
         ctx_cols = st.columns(len(context_fields))
         overrides = {}
         for col, field in zip(ctx_cols, context_fields):
-            widget_key = f"field_{block['block_id']}_{field['key']}_{form_gen}"
+            # block_id alone isn't a unique instance identifier — a Preset
+            # can reuse the same Block twice (e.g. two Thyroid Cytology
+            # nodules in one case), so sort_order (already part of
+            # Preset_Blocks' own primary key for exactly this reason) is
+            # folded in too.
+            widget_key = f"field_{block['block_id']}_{block['sort_order']}_{field['key']}_{form_gen}"
             with col:
                 overrides[field["key"]] = render_field_widget(field, widget_key, master_lock_active)
-        block_ctx_overrides[block["block_id"]] = overrides
+        block_ctx_overrides[(block["block_id"], block["sort_order"])] = overrides
 
     context_title_lock = st.toggle(
         "🔒 Modifier le contexte et le titre manuellement", key=f"context_title_lock_{form_gen}"
@@ -319,7 +328,7 @@ if selected_label != "-- Select --":
         auto_title = preset.get("default_title") or preset["name"]
         if total_specimens == 1:
             _, only_title_txt = rendering.render_context_fragments(
-                blocks[0], block_ctx_overrides.get(blocks[0]["block_id"], {})
+                blocks[0], block_ctx_overrides.get((blocks[0]["block_id"], blocks[0]["sort_order"]), {})
             )
             if only_title_txt:
                 auto_title = f"{auto_title} {only_title_txt}"
@@ -327,7 +336,7 @@ if selected_label != "-- Select --":
 
     if disabled_context:
         auto_context, _ = rendering.render_context_fragments(
-            blocks[0], block_ctx_overrides.get(blocks[0]["block_id"], {})
+            blocks[0], block_ctx_overrides.get((blocks[0]["block_id"], blocks[0]["sort_order"]), {})
         )
         st.session_state[f"clin_info_{form_gen}"] = auto_context
 
@@ -396,7 +405,7 @@ if selected_label != "-- Select --":
         # {{nodule_site}} renders the value actually entered — not that
         # field's resolved default — even though this loop never displays
         # that widget itself.
-        overrides = dict(block_ctx_overrides.get(block["block_id"], {}))
+        overrides = dict(block_ctx_overrides.get((block["block_id"], block["sort_order"]), {}))
 
         for col, field in zip(cols, medical_fields):
             # Generation-suffixed, same reasoning as case_id/clin_info: these
@@ -404,7 +413,7 @@ if selected_label != "-- Select --":
             # (Save button) and never structurally disappear/remount the way
             # they do when leaving "-- Select --" — so a fixed key relies on
             # the frontend re-syncing a cleared value, which isn't reliable.
-            widget_key = f"field_{block['block_id']}_{field['key']}_{form_gen}"
+            widget_key = f"field_{block['block_id']}_{block['sort_order']}_{field['key']}_{form_gen}"
             with col:
                 overrides[field["key"]] = render_field_widget(field, widget_key, master_lock_active)
 
@@ -530,8 +539,12 @@ if selected_label != "-- Select --":
 
     structured_input = {
         "blocks": {
-            block["key"]: {
-                field["key"]: st.session_state[f"field_{block['block_id']}_{field['key']}_{form_gen}"]
+            # Keyed by (Block key, sort_order) — see the matching comment
+            # in the reopen-restoration loop above for why bare
+            # block["key"] silently loses data when a Preset reuses the
+            # same Block twice.
+            f"{block['key']}#{block['sort_order']}": {
+                field["key"]: st.session_state[f"field_{block['block_id']}_{block['sort_order']}_{field['key']}_{form_gen}"]
                 for field in block["fields"]
             }
             for block in blocks
