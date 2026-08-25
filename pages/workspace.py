@@ -418,7 +418,18 @@ if selected_label != "-- Select --":
                 overrides[field["key"]] = render_field_widget(field, widget_key, master_lock_active)
 
         micro_txt, conc_txt = rendering.render_block(block, overrides, total_specimens=len(blocks))
-        micro_blocks.append((block["name"], micro_txt))
+        # With 2+ specimens, a block's own composed context (if it set
+        # context_template) becomes its numbered specimen header instead
+        # of the plain Block name — e.g. "1. Nodule lobaire gauche de
+        # 20 mm EUTIRADS 4" instead of "1. Cytologie thyroïdienne".
+        # Falls back to block["name"] when there's nothing composed,
+        # exactly today's behavior. With exactly 1 specimen,
+        # format_micro_plain suppresses the header entirely regardless of
+        # what's passed here, so no extra branch on total_specimens is
+        # needed — confirmed against CR_Sample.docx's single-nodule case,
+        # which has no header at all despite context_template being set.
+        header_context_txt, _ = rendering.render_context_fragments(block, overrides)
+        micro_blocks.append((header_context_txt or block["name"], micro_txt))
         conclusion_entries.append({"block": block, "overrides": overrides, "conc_txt": conc_txt})
         st.divider()
 

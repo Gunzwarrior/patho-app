@@ -1,6 +1,6 @@
 from jinja2 import Template
 import database as db
-from rendering import build_context, coerce_field_value, snippet_lookup
+from rendering import build_context, coerce_field_value, snippet_lookup, render_context_fragments
 
 # ---------------------------------------------------------------------------
 # Grouping engine
@@ -73,11 +73,26 @@ def _merge_section(section_entries, index_offset):
         numbers = "-".join(str(index_offset + k + 1) for k in range(i, j))
 
         if len(run) == 1:
-            results.append((numbers, section_entries[i]["conc_txt"]))
+            entry = section_entries[i]
+            # A distinct, unmerged entry can optionally identify itself by
+            # site — e.g. "Nodule lobaire gauche : Matériel satisfaisant...",
+            # confirmed against CR_Sample.docx's two-nodule case. Reuses
+            # title_fragment_template (the same short fragment that feeds
+            # the report Title in the single-specimen case) rather than
+            # inventing a second, parallel "site name" concept — one
+            # block-level field serves both roles, depending on where it's
+            # consumed. None for a block that doesn't set one (e.g. Gastric
+            # Trio, Gallbladder, Appendix) — callers must treat that as "no
+            # prefix," not a blank label.
+            _, site_fragment = render_context_fragments(entry["block"], entry["overrides"])
+            results.append((numbers, entry["conc_txt"], site_fragment or None))
         else:
             combined_label = get_combined_label(run)
             merged_text = signature.replace(GROUP_SENTINEL, combined_label)
-            results.append((numbers, merged_text))
+            # A merged run already has its combined label folded into the
+            # text itself (via the GROUP_SENTINEL replacement above) — a
+            # separate prefix here would be redundant.
+            results.append((numbers, merged_text, None))
 
         i = j
 
@@ -139,9 +154,16 @@ def render_conclusion_plain(entries):
         all_conflicts.extend(conflicts)
 
         lines = []
-        for number_label, text in merged:
+        for number_label, text, site_fragment in merged:
             for j, line in enumerate(text.split("\n")):
-                prefix = "" if single_specimen else (f"{number_label}. " if j == 0 else "")
+                if j != 0:
+                    prefix = ""
+                elif single_specimen:
+                    prefix = ""
+                else:
+                    prefix = f"{number_label}. "
+                    if site_fragment:
+                        prefix += f"{site_fragment} : "
                 lines.append(f"**{prefix}{line}**")
         for line in addenda:
             lines.append(f"**{line}**")
