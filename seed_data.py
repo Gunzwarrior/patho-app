@@ -492,19 +492,20 @@ def seed_thyroid_cytology(cursor):
          thyroid_conc, thyroid_context, thyroid_title_fragment),
     )
     block_fields = [
-        # field_key, sort_order, label_override, default_override
-        ("nodule_site", 0, None, None),
-        ("nodule_size_mm", 1, None, None),
-        ("nodule_eutirads", 2, None, None),
-        ("liquid_volume_ml", 3, None, None),
-        ("liquid_color", 4, None, None),
-        ("spread_slides_sent", 5, None, None),
-        ("thyroid_cytology_pattern", 6, None, None),
+        # field_key, sort_order, label_override, default_override, context_section
+        ("nodule_site", 0, None, None, 1),
+        ("nodule_size_mm", 1, None, None, 1),
+        ("nodule_eutirads", 2, None, None, 1),
+        ("liquid_volume_ml", 3, None, None, 0),
+        ("liquid_color", 4, None, None, 0),
+        ("spread_slides_sent", 5, None, None, 0),
+        ("thyroid_cytology_pattern", 6, None, None, 0),
     ]
     cursor.executemany(
-        "INSERT INTO Block_Fields (block_id, field_id, sort_order, label_override, default_override) "
-        "VALUES (?, ?, ?, ?, ?)",
-        [(block_id(cursor, "thyroid_cytology"), field_id(cursor, f), so, lo, do) for f, so, lo, do in block_fields],
+        "INSERT INTO Block_Fields (block_id, field_id, sort_order, label_override, default_override, context_section) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [(block_id(cursor, "thyroid_cytology"), field_id(cursor, f), so, lo, do, cs)
+         for f, so, lo, do, cs in block_fields],
     )
 
     print("Seeding Presets 'etc0'-'etc5' (fast-access, pre-filled Bethesda category)...")
@@ -525,6 +526,31 @@ def seed_thyroid_cytology(cursor):
         cursor.execute(
             "INSERT INTO Preset_Blocks (preset_id, block_id, sort_order, field_overrides) VALUES (?, ?, ?, ?)",
             (preset_id, thy_block_id, 0, json.dumps({"thyroid_cytology_pattern": short_code})),
+        )
+
+    # Two-nodule preset: same thyroid_cytology Block used twice with
+    # different field_overrides per Preset_Blocks row (already
+    # schema-supported — sort_order is part of that table's own primary
+    # key precisely for this). Doubles as a real fast-access preset for
+    # genuine 2-nodule cases (same "pre-filled, adjust as needed"
+    # philosophy as etc0-etc5) and as the multi-specimen test fixture for
+    # the context/title composition work — default values deliberately
+    # set to CR_Sample.docx's real two nodules, so its rendered output can
+    # be byte-matched directly against that sample.
+    print("Seeding Preset 'etc_bi' (2-nodule fast-access)...")
+    cursor.execute(
+        "INSERT INTO Presets (short_code, name, category, default_adicap, default_title) VALUES (?, ?, ?, ?, ?)",
+        ("etc_bi", "Cytologie thyroïdienne — 2 nodules", "endocrinien", None, "Cytologie thyroïdienne"),
+    )
+    bi_preset_id = cursor.lastrowid
+    bi_nodules = [
+        {"nodule_site": "lobaire gauche", "nodule_size_mm": "20", "nodule_eutirads": "4", "thyroid_cytology_pattern": "etc2"},
+        {"nodule_site": "isthmique", "nodule_size_mm": "15", "nodule_eutirads": "3", "thyroid_cytology_pattern": "etc1"},
+    ]
+    for sort_order, overrides in enumerate(bi_nodules):
+        cursor.execute(
+            "INSERT INTO Preset_Blocks (preset_id, block_id, sort_order, field_overrides) VALUES (?, ?, ?, ?)",
+            (bi_preset_id, thy_block_id, sort_order, json.dumps(overrides)),
         )
 
 
