@@ -76,16 +76,16 @@ def _merge_section(section_entries, index_offset):
             entry = section_entries[i]
             # A distinct, unmerged entry can optionally identify itself by
             # site — e.g. "Nodule lobaire gauche : Matériel satisfaisant...",
-            # confirmed against CR_Sample.docx's two-nodule case. Reuses
-            # title_fragment_template (the same short fragment that feeds
-            # the report Title in the single-specimen case) rather than
-            # inventing a second, parallel "site name" concept — one
-            # block-level field serves both roles, depending on where it's
-            # consumed. None for a block that doesn't set one (e.g. Gastric
-            # Trio, Gallbladder, Appendix) — callers must treat that as "no
-            # prefix," not a blank label.
-            _, site_fragment = render_context_fragments(entry["block"], entry["overrides"])
-            results.append((numbers, entry["conc_txt"], site_fragment or None))
+            # confirmed against CR_Sample.docx's two-nodule case. Uses
+            # conclusion_label_template specifically — a separate column
+            # from title_fragment_template, not a reuse of it, since the
+            # two need different wording ("lobaire gauche" for the title,
+            # "Nodule lobaire gauche" here) and a bare site name alone
+            # read as sloppy. None for a block that doesn't set one (e.g.
+            # Gastric Trio, Gallbladder, Appendix) — callers must treat
+            # that as "no prefix," not a blank label.
+            _, _, conclusion_label = render_context_fragments(entry["block"], entry["overrides"])
+            results.append((numbers, entry["conc_txt"], conclusion_label or None))
         else:
             combined_label = get_combined_label(run)
             merged_text = signature.replace(GROUP_SENTINEL, combined_label)

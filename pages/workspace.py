@@ -30,7 +30,14 @@ def render_field_widget(field, widget_key, disabled):
     elif field["type"] == "decimal":
         kwargs = {"min_value": 0.0, "step": 0.1, "format": "%.1f", "key": widget_key, "disabled": disabled}
         if is_fresh:
-            kwargs["value"] = float(field["value"])
+            # A decimal field's resolved default can genuinely be blank
+            # (Fields.default_value = NULL) — e.g. Thyroid's nodule size,
+            # which the requesting clinician doesn't always give. value=None
+            # renders an empty input rather than a guessed number; float()
+            # would crash on None, and a guessed default (e.g. 0) would be
+            # exactly the kind of silently-wrong value this feature exists
+            # to prevent.
+            kwargs["value"] = None if field["value"] is None else float(field["value"])
         return st.number_input(field["label"], **kwargs)
     elif field["type"] == "select":
         options = field["options"] or []
@@ -327,7 +334,7 @@ if selected_label != "-- Select --":
     if disabled_title:
         auto_title = preset.get("default_title") or preset["name"]
         if total_specimens == 1:
-            _, only_title_txt = rendering.render_context_fragments(
+            _, only_title_txt, _ = rendering.render_context_fragments(
                 blocks[0], block_ctx_overrides.get((blocks[0]["block_id"], blocks[0]["sort_order"]), {})
             )
             if only_title_txt:
@@ -335,7 +342,7 @@ if selected_label != "-- Select --":
         st.session_state[f"final_title_edit_{form_gen}"] = auto_title
 
     if disabled_context:
-        auto_context, _ = rendering.render_context_fragments(
+        auto_context, _, _ = rendering.render_context_fragments(
             blocks[0], block_ctx_overrides.get((blocks[0]["block_id"], blocks[0]["sort_order"]), {})
         )
         st.session_state[f"clin_info_{form_gen}"] = auto_context
@@ -428,7 +435,7 @@ if selected_label != "-- Select --":
         # what's passed here, so no extra branch on total_specimens is
         # needed — confirmed against CR_Sample.docx's single-nodule case,
         # which has no header at all despite context_template being set.
-        header_context_txt, _ = rendering.render_context_fragments(block, overrides)
+        header_context_txt, _, _ = rendering.render_context_fragments(block, overrides)
         micro_blocks.append((header_context_txt or block["name"], micro_txt))
         conclusion_entries.append({"block": block, "overrides": overrides, "conc_txt": conc_txt})
         st.divider()

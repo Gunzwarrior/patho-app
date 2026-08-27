@@ -404,13 +404,22 @@ def seed_thyroid_cytology(cursor):
     # title_fragment_template below, and is deliberately placed first in
     # Block_Fields sort_order so it's the first widget tabbed to, matching
     # the person's described entry workflow.
+    #
+    # All three default to blank/unset ("" for selects, NULL for the
+    # decimal) rather than a guessed real value — the requesting clinician
+    # doesn't always specify all three, and a silently-guessed default
+    # (the previous version defaulted to "lobaire droit") is exactly the
+    # kind of unnoticed wrong-value risk this whole feature exists to
+    # eliminate. context_template/conclusion_label_template below are
+    # written to degrade gracefully around whichever pieces are actually
+    # present, rather than assuming all three always are.
     nodule_fields = [
         ("nodule_site", "Site", "select",
-         json.dumps(["lobaire droit", "lobaire gauche", "isthmique"]),
-         "lobaire droit", None),
-        ("nodule_size_mm", "Taille (mm)", "decimal", None, "15", None),
+         json.dumps(["", "lobaire droit", "lobaire gauche", "isthmique"]),
+         "", None),
+        ("nodule_size_mm", "Taille (mm)", "decimal", None, None, None),
         ("nodule_eutirads", "EU-TIRADS", "select",
-         json.dumps(["2", "3", "4", "5"]), "3", None),
+         json.dumps(["", "2", "3", "4", "5"]), "", None),
     ]
     cursor.executemany(
         "INSERT INTO Fields (key, label, type, options, default_value, conclusion_addendum_template) "
@@ -478,18 +487,38 @@ def seed_thyroid_cytology(cursor):
     # Full composed sentence (multi-specimen: becomes this specimen's own
     # header; single-specimen: auto-composes the top clinical-context box)
     # vs. a short fragment (single-specimen only: appended to the report
-    # title). Two different granularities of the same underlying fields —
-    # confirmed against CR_Sample.docx, where the title only ever carries
-    # the site ("... LOBAIRE GAUCHE"), never size/EUTIRADS.
-    thyroid_context = "Nodule {{nodule_site}} de {{nodule_size_mm_display}} mm EUTIRADS {{nodule_eutirads}}"
+    # title) vs. a conclusion-only label (multi-specimen: prefixes that
+    # entry's own unmerged conclusion line). Three different granularities
+    # of the same underlying fields, each wrapped in {% if %} so any
+    # subset of nodule_site/nodule_size_mm/nodule_eutirads can be left
+    # blank (the requesting clinician doesn't always give all three) —
+    # confirmed against CR_Sample.docx for the fully-filled case, and
+    # against the person's own preference for the partially/fully-blank
+    # cases: no half-composed sentence, no bare site name standing alone
+    # in the conclusion ("lobaire gauche :" read as "sloppy") — either the
+    # full phrase or nothing.
+    thyroid_context = (
+        "{% if nodule_site or nodule_size_mm_display or nodule_eutirads %}"
+        "Nodule"
+        "{% if nodule_site %} {{nodule_site}}{% endif %}"
+        "{% if nodule_size_mm_display %} de {{nodule_size_mm_display}} mm{% endif %}"
+        "{% if nodule_eutirads %} EUTIRADS {{nodule_eutirads}}{% endif %}"
+        "{% endif %}"
+    )
     thyroid_title_fragment = "{{nodule_site}}"
+    # Deliberately NOT the same string as thyroid_title_fragment above —
+    # the title wants the bare site ("Cytologie thyroïdienne lobaire
+    # gauche"), the conclusion prefix wants "Nodule" prepended ("Nodule
+    # lobaire gauche : Matériel..."). Two genuinely different phrasings of
+    # the same fact, each right for where it's used.
+    thyroid_conclusion_label = "{% if nodule_site %}Nodule {{nodule_site}}{% endif %}"
 
     cursor.execute(
         "INSERT INTO Blocks (key, name, is_table, site_label, conclusion_group, macro_template, micro_template, "
-        "conclusion_template, context_template, title_fragment_template) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "conclusion_template, context_template, title_fragment_template, conclusion_label_template) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("thyroid_cytology", "Cytologie thyroïdienne", 0, None, "thyroid_cytology", cytology_macro, thyroid_micro,
-         thyroid_conc, thyroid_context, thyroid_title_fragment),
+         thyroid_conc, thyroid_context, thyroid_title_fragment, thyroid_conclusion_label),
     )
     block_fields = [
         # field_key, sort_order, label_override, default_override, context_section

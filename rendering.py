@@ -117,12 +117,14 @@ def build_context(block, field_values_override=None):
 
 
 def render_context_fragments(block, field_values_override=None):
-    """Renders this block's context_template and title_fragment_template
-    (both optional) through the same build_context() as every other
-    template. Returns (context_txt, title_txt), each "" when the block
-    doesn't set the corresponding column — callers can treat an empty
-    string as "this block doesn't participate," no special-casing
-    needed at the call site."""
+    """Renders this block's context_template, title_fragment_template, and
+    conclusion_label_template (all optional) through the same
+    build_context() as every other template. Returns (context_txt,
+    title_txt, conclusion_label_txt), each "" when the block doesn't set
+    the corresponding column, or when the template renders empty because
+    the fields it depends on were left blank — callers can treat an empty
+    string as "nothing to show here" either way, no special-casing needed
+    at the call site."""
     context = build_context(block, field_values_override)
     context_txt = ""
     if block.get("context_template"):
@@ -130,7 +132,10 @@ def render_context_fragments(block, field_values_override=None):
     title_txt = ""
     if block.get("title_fragment_template"):
         title_txt = Template(block["title_fragment_template"]).render(snippet=snippet_lookup, **context).strip()
-    return context_txt, title_txt
+    conclusion_label_txt = ""
+    if block.get("conclusion_label_template"):
+        conclusion_label_txt = Template(block["conclusion_label_template"]).render(snippet=snippet_lookup, **context).strip()
+    return context_txt, title_txt, conclusion_label_txt
 
 
 def render_block(block, field_values_override=None, total_specimens=1):

@@ -97,13 +97,25 @@ def setup_database():
                                             -- 1 specimen -> auto-composed clinical-info
                                             -- box; 2+ specimens -> replaces this block's
                                             -- own numbered specimen header.
-            title_fragment_template TEXT   -- optional: short fragment appended to
+            title_fragment_template TEXT,  -- optional: short fragment appended to
                                             -- Presets.default_title (e.g. "lobaire
                                             -- gauche"). Only used when total_specimens
                                             -- == 1 -- with 2+ specimens no single
                                             -- fragment can represent every specimen, so
                                             -- title stays at the static default. NULL =
                                             -- block doesn't participate.
+            conclusion_label_template TEXT -- optional: how an *unmerged* conclusion
+                                            -- entry identifies itself when there are
+                                            -- 2+ specimens (e.g. "Nodule lobaire
+                                            -- gauche" prefixing that entry's own
+                                            -- conclusion text). Deliberately separate
+                                            -- from title_fragment_template rather than
+                                            -- reusing it: the two need different
+                                            -- wording ("lobaire gauche" for the title,
+                                            -- "Nodule lobaire gauche" here), confirmed
+                                            -- against CR_Sample.docx and the person's
+                                            -- own read of the bare-fragment version as
+                                            -- "sloppy." NULL = no prefix.
         );
 
         -- BLOCK_FIELDS: which fields a block uses, with optional overrides
