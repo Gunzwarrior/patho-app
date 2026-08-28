@@ -24,6 +24,7 @@ def setup_database():
     print("Dropping old tables (if they exist)...")
     cursor.executescript("""
         DROP TABLE IF EXISTS Cases;
+        DROP TABLE IF EXISTS Quick_Type_Tokens;
         DROP TABLE IF EXISTS Conclusion_Group_Labels;
         DROP TABLE IF EXISTS Preset_Block_Rows;
         DROP TABLE IF EXISTS Preset_Blocks;
@@ -169,6 +170,63 @@ def setup_database():
             block_id INTEGER NOT NULL REFERENCES Blocks(id),
             sort_order INTEGER,
             field_overrides JSON
+        );
+
+        -- QUICK_TYPE_TOKENS: ordered modifier tokens for a preset's
+        -- fast-typed shortcut (e.g. "dai37" -> Preset 'dai' + two field
+        -- overrides), parsed left-to-right after the preset's own
+        -- short_code is matched via longest-prefix. See quicktype.py for
+        -- the parsing/validation logic and full design reasoning.
+        CREATE TABLE Quick_Type_Tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            preset_id INTEGER NOT NULL REFERENCES Presets(id),
+            sort_order INTEGER NOT NULL,          -- position in this
+                                                    -- preset's flattened
+                                                    -- token sequence
+            block_sort_order INTEGER NOT NULL DEFAULT 0,
+                                                    -- which block instance
+                                                    -- (matches
+                                                    -- Preset_Blocks.
+                                                    -- sort_order) this
+                                                    -- token's field
+                                                    -- belongs to. Always 0
+                                                    -- for every current
+                                                    -- (single-block)
+                                                    -- preset -- exists so
+                                                    -- multi-block Quick
+                                                    -- Type is additive
+                                                    -- later (more rows,
+                                                    -- different value)
+                                                    -- rather than a schema
+                                                    -- change.
+            field_key TEXT NOT NULL,               -- Fields.key this
+                                                    -- token resolves to
+            token_kind TEXT NOT NULL,              -- 'lookup' |
+                                                    -- 'measurement'
+            lookup_table JSON,                     -- {"1": "endo", ...} --
+                                                    -- required for
+                                                    -- 'lookup', NULL for
+                                                    -- 'measurement'
+            digit_width INTEGER                    -- optional cap on how
+                                                    -- many digits a
+                                                    -- 'measurement' token
+                                                    -- consumes -- a sanity
+                                                    -- guard against a
+                                                    -- typo silently
+                                                    -- producing a
+                                                    -- wrong-but-plausible
+                                                    -- value, NOT the
+                                                    -- disambiguation
+                                                    -- mechanism (that's
+                                                    -- the config-time
+                                                    -- adjacency check in
+                                                    -- quicktype.
+                                                    -- validate_quick_type
+                                                    -- _config). NULL =
+                                                    -- no cap beyond
+                                                    -- "stop at the next
+                                                    -- non-digit or end of
+                                                    -- string."
         );
 
         -- SNIPPETS: reusable text fragments, referenced by key from templates

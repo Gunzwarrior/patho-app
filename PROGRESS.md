@@ -15,6 +15,13 @@ question that raises.
 
 ## Where we are right now (read this first)
 
+**Active work is "Quick Type"** — see "Currently mid-task" below.
+Checkpoint 1 (schema + `quicktype.py` validator) is done and
+sandbox-verified, piloted on `dai` only; not yet applied to the person's
+real repo. Everything from here through "Fixed and verified this round"
+is the record of the *previous* round's work (Clinical
+Context/Title/Conclusion composition), kept for reference.
+
 The Clinical Context/Title/Conclusion composition feature at the top of
 "Fixed and verified this round" is confirmed **working** in the
 person's real browser as of this update, but **not yet committed** — he
@@ -34,13 +41,80 @@ this file is complete.
 
 ## Currently mid-task
 
-Nothing in progress right now — the Clinical Context/Title/Conclusion
-composition feature below is fully done and confirmed by the person in
-his real browser, not just sandbox-verified. When a task starts that
-might outlast a session, note the plan and checkpoints here as it goes,
-not just at the end. Clear this section once the task is genuinely done
-— which is what just happened; see "Fixed and verified this round" for
-the full record.
+**"Quick Type" — building now, Checkpoint 1 of 4 done (Claude.ai chat).**
+Full design settled this session; see "Quick Type — settled design" below
+for the complete grammar/token/parsing reasoning, not repeated here.
+
+- **Checkpoint 1 — schema + validator (done, sandbox-verified only, not
+  yet in the person's real repo).** New `Quick_Type_Tokens` table
+  (`init_db.py`): `preset_id`, `sort_order` (flattened, block-agnostic
+  position), `block_sort_order` (inert, always 0 today — see design
+  section for why it exists anyway), `field_key`, `token_kind` ('lookup'
+  | 'measurement'), `lookup_table` (JSON), `digit_width` (sanity cap, not
+  the disambiguation mechanism). New module `quicktype.py`:
+  `validate_quick_type_config(tokens)` — flattens a preset's tokens and
+  checks (1) every lookup key is exactly 1 char and not a reserved
+  character, (2) every measurement token is either last or followed by a
+  token whose possible first-characters don't overlap digits. Piloted on
+  `dai` only (`seed_quick_type_tokens()` in `seed_data.py`, called from
+  `seed_all()`): token 1 = `appendicite_type` lookup (`"1"`-`"6"` →
+  endo/suppuree/periappendicite/phlegmoneuse/gangreneuse/intervalle,
+  confirmed against the real Field's option order), token 2 =
+  `appendix_size_cm` measurement (safe because it's last).
+  **Verified**: `py_compile` on all touched/dependent files; a real
+  `init_db.py` → `seed_data.seed_all()` run seeds `dai`'s tokens and
+  passes validation with no error; the seeded rows read back correctly
+  from `pathology.db`; the validator was also exercised directly against
+  6 adversarial synthetic configs (not just the real one) — two
+  genuinely-ambiguous adjacency cases both correctly raise (measurement→
+  measurement, measurement→digit-keyed lookup), the real-world-motivated
+  safe case correctly passes (measurement→letter-keyed lookup, the
+  `8fvicl`-style shape), a reserved-character collision and an
+  unsupported multi-char lookup key both correctly raise with specific
+  messages, and an empty token list is correctly treated as "not an
+  error, just not quick-typeable yet" rather than a failure.
+  `database.get_all_presets()`/`get_preset_blocks()` reconfirmed working
+  unmodified against the new schema (9 presets, `dai` still resolves its
+  3 fields correctly) — the schema addition is purely additive as
+  intended, no regression. This is backend-only, pure logic, with solid
+  automated coverage — per the commit-gating convention below, **committable
+  without waiting on a real-browser check**, whenever the person is ready.
+- **Checkpoint 2 — parser, not started.** `parse_quick_type(raw_string) ->
+  (preset, field_overrides_by_block, error_or_none)` in `quicktype.py`.
+  Longest-registered-short_code-prefix match to find where the preset
+  code ends; walks the flattened token list consuming lookup/measurement
+  tokens plus `!` (skip to next block; a parse error if used in a
+  single-block preset — see design section). Test plan: direct function
+  calls against the real `dai` config — `dai`, `dai3`, `dai37` all
+  succeed with the right resolved values; `dai9` (key out of range),
+  `dai37x` (trailing unparseable chars), and `dai!` (nothing to skip to)
+  all fail with specific messages, nothing silently guessed.
+- **Checkpoint 3 — UI wiring, not started.** New `st.form` + `text_input`
+  next to the Preset dropdown in `workspace.py`. On successful parse:
+  needs its **own** new reset flag (`_do_quick_type_apply` or similar) —
+  per the established convention below, reusing `_do_preset_switch_reset`
+  for a different one-shot purpose is exactly the bug pattern already
+  hit three times with `_form_generation`-scoped widgets. Capture
+  (preset, field overrides) in `session_state`, `_clear_case_scoped_state()`,
+  re-seed field widget keys under the new generation — same skeleton as
+  case-reopen restoration, not a new mechanism. One-shot success message
+  via the existing `_save_confirmation`-style pattern (`st.success`,
+  popped at top of next run), formatted with resolved field *labels*, not
+  raw keys. On failure: inline error, state left completely untouched —
+  atomic apply-or-reject. Test plan: `AppTest` — valid code applies
+  correctly and shows the right message; invalid code leaves prior state
+  untouched and shows the right error.
+- **Checkpoint 4 — regression + real browser, not started.** Full
+  regression across all 9 existing presets (Quick Type must not affect
+  any non-Quick-Type flow), full app boot check, then hand off — this
+  checkpoint is UI-facing, so per the same commit-gating convention it
+  waits for the person's own browser confirmation before being
+  considered done, unlike Checkpoint 1.
+
+`dai` is deliberately the only preset with a Quick Type config right now
+— extending to Gallbladder/Thyroid is explicitly follow-up work, once
+`dai` has been exercised end-to-end through the real parser and UI, not
+before.
 
 ## Fixed and verified this round
 
@@ -313,44 +387,100 @@ The plan has two tiers:
   building the Editor against templates that are still actively changing
   would mean re-doing Editor work too.
 
-## Content/design requests, not yet implemented
+## Quick Type — settled design (Claude.ai chat)
 
-- **"Quick Type" — shortcut codes for fast report generation.** Idea: a
-  text field (alongside, not replacing, the Preset dropdown — dropdown
-  stays for discoverability) where typing a short code like `7DAI3` or
-  `8fvicl` selects a preset *and* pre-fills specific field overrides in
-  one move, mirroring what the person currently scribbles on his "bon de
-  demande" before writing a full report (e.g. `7DAI3` = Appendix preset,
-  size 7cm, inflammation type `dai3`; `8fvicl` = Gallbladder, size 8cm,
-  lithiasis present). Discussed at a planning level only — no code
-  written, explicitly paused to test the recent Thyroid Cytology fixes
-  instead.
+Grammar, tokens, and parsing rules below are **settled** — build status
+against this design is tracked in "Currently mid-task" above, not here.
+This section is reference material for the reasoning, kept separate so
+"what was decided" and "what's actually built so far" don't get
+conflated as checkpoints land.
 
-  Key points from that discussion, worth reading before resuming it:
-  - Not a new paradigm — a generalization of the existing `etc0`-`etc5`
-    pattern (preset + one pre-set modifier), extended to handle several
-    *independent* modifier axes via string parsing instead of
-    enumerating every combination as its own preset.
-  - The grammar isn't uniform across the person's own examples — at
-    least three token kinds needed: a raw measurement, a single-
-    character lookup (small char→value table), a presence flag, and (for
-    a future breast preset, `CCI 3+2+2`) a delimited positional group.
-    Per-preset config would be an ordered list of (field key, token
-    kind, lookup table if applicable) — a new small table, not a change
-    to the existing Fields/Blocks/Presets schema.
-  - Fields already have a stable identifier this can hook into — the
-    existing `key` string. No new field-identification concept needed.
-  - Two open decisions: whether malformed/ambiguous codes need a visible
-    preview before committing (leaning yes — a terse fast-typed code is
-    exactly the shape of input where one mistyped character produces a
-    wrong-but-plausible report, and this app's whole pattern elsewhere is
-    "never guess, fail loud"); and the exact token grammar/delimiters,
-    not yet settled.
-  - Batch processing (a case-ID + code table, generating many reports at
-    once) and a voice-input front end both fall out for free *if* the
-    core parser ends up a clean `string -> (preset, field values)`
-    function — worth treating as later extensions once the core parser
-    exists, not part of the initial design.
+- **Not a new paradigm** — a generalization of the existing `etc0`-`etc5`
+  pattern (preset + one pre-set modifier), extended to several
+  *independent* modifier axes via string parsing instead of enumerating
+  every combination as its own preset.
+- **A dedicated field, not shared with the Preset dropdown.**
+  `st.selectbox` is closed-vocabulary by design (that's what makes it
+  discoverable); making it also accept freeform text means one widget
+  doing two contradictory jobs — the same shape of mistake as an
+  over-broad Block. A separate `st.text_input` in its own `st.form` (same
+  blur-timing reasoning as the existing reopen box) sits next to the
+  dropdown instead.
+- **Preset-code-first, not measurement-first** (reverses the earlier
+  `7DAI3`/`8fvicl` framing above, which put a raw size before the preset
+  code — superseded). Preset-first makes Quick Type a strict superset of
+  the dropdown: typing just `dai` is a faster way to do exactly what
+  selecting "Appendice (dai)" does, no separate mental model needed.
+- **Finding where the preset code ends**: longest-registered-short_code
+  prefix match against `Presets.short_code` — not a delimiter. A
+  short_code that's a prefix of another (`etc` existing alongside `etc2`,
+  say) would resolve deterministically but not obviously — deliberately
+  **not** guarded against yet (see below), since Quick Type config
+  authoring only happens by hand in `seed_data.py` right now; belongs
+  with the future Editor UI's own validation, not bolted onto Quick Type
+  first.
+- **Two token kinds only, v1** — `lookup` (single character, keyed
+  against a small per-token table; covers both real select-field values
+  and presence flags like `l` for lithiasis — no separate "flag" kind
+  needed) and `measurement` (a run of digit characters). A third kind
+  (multi-character lookup, for something like a fixed 2-letter code) was
+  considered and deliberately deferred: it has no natural
+  self-terminating rule the way the other two do, and nothing in the
+  real shorthand needs it yet.
+- **The actual ambiguity rule, precisely**: a `measurement` token
+  consumes digits greedily until a non-digit or end-of-string. This is
+  only safe if it's the *last* token, or the token right after it can't
+  itself start with a digit. **Bounding a measurement's digit-width does
+  NOT resolve this** — it was tried as a first pass and correctly
+  rejected: capping at 2 digits doesn't tell the parser whether "37"
+  after a 2-cm-capped size token is one 2-digit size followed by a new
+  token, or a 1-digit size followed by another digit-keyed token. The
+  real fix is checking, per pair of adjacent tokens, whether their
+  possible first-characters actually overlap with digits — a
+  config-time check (`quicktype.validate_quick_type_config`), not
+  something the parser guesses about per input. `digit_width` still
+  exists as an optional field on each token, but only as a sanity guard
+  against a typo producing a wrong-but-plausible large number, not as the
+  mechanism that makes adjacency safe.
+- **`!` is reserved**: advances to the next block's tokens without
+  consuming any of the current block's remaining ones — "I'm done
+  modifying this block, move to the next." **Not required between
+  blocks** — fully consuming a block's configured tokens rolls into the
+  next block automatically; `!` only matters for stopping *early*. In a
+  single-block preset (everything today), `!` has nothing to advance to
+  and must be a parse error, not a silent no-op. Reserved everywhere — no
+  lookup table may use `!` as a key (checked by the validator).
+- **A future "skip a middle token" reserved character (`*`) was raised
+  and deliberately deferred** — cheap to add later (a single reserved
+  char, same validator treatment as `!`), but nothing in real usage has
+  needed it yet. Not built, not designed further than "the mechanism
+  doesn't foreclose it."
+- **Multi-block scaling, without building multi-block now**: every
+  `Quick_Type_Tokens` row carries `block_sort_order` (mirrors the
+  `(block_id, sort_order)` idiom `workspace.py` already uses for
+  reused-block presets), always `0` today. The parser treats a preset's
+  whole token sequence as one flat, block-agnostic list — the same
+  adjacency rule has to hold across a block boundary as within one block,
+  since auto-rollover crosses a boundary without needing `!`. When
+  multi-block Quick Type is eventually wanted, it's more
+  `Quick_Type_Tokens` rows targeting a different `block_sort_order`, not
+  a parser redesign or a grammar change.
+- **Fail-loud, atomic apply-or-reject — no separate preview step.**
+  Considered a "preview before commit" screen and rejected it in favor of
+  something stronger: the whole typed string either parses cleanly
+  against that preset's config, in which case it applies immediately and
+  shows a specific confirmation (resolved field *labels* and values, not
+  raw keys — e.g. `dai → Appendice : type=périappendicite, taille=7 cm`),
+  or nothing gets touched and a specific error names exactly what failed
+  to parse. A preview can still be misread at typing speed; atomic
+  apply-or-reject with a precise error is the stronger guarantee, and
+  matches the "never guess, fail loud" posture already used elsewhere in
+  this app (`snippet_lookup`'s missing-shortcut marker,
+  `conclusion_addendum`'s conflict-skip).
+- Batch processing (a case-ID + code table, generating many reports at
+  once) and a voice-input front end both still fall out for free once the
+  core parser is a clean `string -> (preset, field_overrides)` function —
+  later extensions, not part of the initial build.
 
 ## Genuinely new architectural question — needs a real decision, not just a fix
 
@@ -397,10 +527,12 @@ rather than deferring reconstruction to whichever session syncs next.
    unfamiliar. The `0b498c4` commit flagged earlier in this file was
    never actually reconciled — still worth a `git show 0b498c4` if it
    comes up.
-2. Nothing is mid-task right now. Natural next things, none started:
-   the "Quick Type" shortcut-code feature (discussed and planned in
-   chat, not written down here yet — ask the person if he wants that
-   captured before building), extending the context/title/conclusion
-   pattern to a future breast preset, or the `fausses_membranes`
-   field-combination validation question below.
+2. **Quick Type is mid-task** — Checkpoint 1 (schema + validator) is done
+   and sandbox-verified; Checkpoint 2 (the actual parser) is next. See
+   "Currently mid-task" and "Quick Type — settled design" above before
+   resuming — don't re-derive the grammar/token/ambiguity reasoning from
+   scratch, it's already settled. Other natural next things, none
+   started: extending the context/title/conclusion pattern to a future
+   breast preset, or the `fausses_membranes` field-combination validation
+   question below.
 3. Don't start the Editor (Tier 3) until Tier 2's content is stable.

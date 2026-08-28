@@ -10,6 +10,7 @@ from seed_all() — no schema changes needed for ordinary content.
 """
 
 import json
+import quicktype
 
 
 def field_id(cursor, key):
@@ -19,6 +20,11 @@ def field_id(cursor, key):
 
 def block_id(cursor, key):
     cursor.execute("SELECT id FROM Blocks WHERE key = ?", (key,))
+    return cursor.fetchone()[0]
+
+
+def preset_id_by_code(cursor, short_code):
+    cursor.execute("SELECT id FROM Presets WHERE short_code = ?", (short_code,))
     return cursor.fetchone()[0]
 
 
@@ -366,6 +372,46 @@ def seed_appendix(cursor):
     )
 
 
+def seed_quick_type_tokens(cursor):
+    """
+    Quick Type configs — one preset at a time, deliberately pilot-only
+    for now (just 'dai'). Extend this function (or split it out) once
+    'dai' has been verified end-to-end through the real parser and UI,
+    rather than seeding every preset's config before any of them have
+    been exercised for real. Each config is validated immediately after
+    its own INSERTs via quicktype.validate_quick_type_config() — a bad
+    config raises here, at seed time, and never reaches init_db.py's
+    output.
+
+    'dai' (Appendice): "dai" alone -> defaults. "dai3" -> appendicite_type
+    resolved from token 1. "dai37" -> + appendix_size_cm=7 from token 2 (a
+    trailing 'measurement' token, safe because it's last in the sequence
+    — see quicktype.py's module docstring for the adjacency rule this
+    satisfies). block_sort_order=0 for both tokens since 'dai' is a
+    single-block preset.
+    """
+    print("Seeding Quick_Type_Tokens ('dai')...")
+    dai_id = preset_id_by_code(cursor, "dai")
+    dai_tokens = [
+        # sort_order, block_sort_order, field_key, token_kind, lookup_table, digit_width
+        (0, 0, "appendicite_type", "lookup", {
+            "1": "endo", "2": "suppuree", "3": "periappendicite",
+            "4": "phlegmoneuse", "5": "gangreneuse", "6": "intervalle",
+        }, None),
+        (1, 0, "appendix_size_cm", "measurement", None, 2),
+    ]
+    quicktype.validate_quick_type_config([
+        {"field_key": fk, "token_kind": tk, "lookup_table": lt}
+        for _, _, fk, tk, lt, _ in dai_tokens
+    ])
+    cursor.executemany(
+        "INSERT INTO Quick_Type_Tokens (preset_id, sort_order, block_sort_order, field_key, token_kind, lookup_table, digit_width) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(dai_id, so, bso, fk, tk, json.dumps(lt) if lt is not None else None, dw)
+         for so, bso, fk, tk, lt, dw in dai_tokens],
+    )
+
+
 def seed_cytology_macro_fields(cursor):
     """
     Fields for the generic cytology macro pattern (volume, color, spread
@@ -598,6 +644,7 @@ def seed_all(cursor):
     seed_gastric_trio(cursor)
     seed_gallbladder(cursor)
     seed_appendix(cursor)
+    seed_quick_type_tokens(cursor)
     seed_cytology_macro_fields(cursor)
     seed_thyroid_cytology(cursor)
     seed_shared_snippets(cursor)
