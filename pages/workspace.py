@@ -28,17 +28,38 @@ def render_field_widget(field, widget_key, disabled):
             kwargs["value"] = int(field["value"])
         return st.number_input(field["label"], **kwargs)
     elif field["type"] == "decimal":
-        kwargs = {"min_value": 0.0, "step": 0.1, "format": "%.1f", "key": widget_key, "disabled": disabled}
+        # Plain text_input, manually parsed — not st.number_input.
+        # number_input has no reliable way to represent "cleared back to
+        # blank" once a field has held a real value: confirmed against an
+        # actual widget interaction (type a value, clear it, submit), not
+        # just from documentation, that it reverts to a floor value
+        # instead of staying None — and this held true whether or not
+        # min_value was set. A text box has no such ambiguity: "" is
+        # unambiguously blank, nothing widget-level to fight. Trade-off,
+        # accepted by the person: loses the +/- stepper buttons.
+        kwargs = {"key": widget_key, "disabled": disabled, "placeholder": "ex: 20"}
         if is_fresh:
-            # A decimal field's resolved default can genuinely be blank
-            # (Fields.default_value = NULL) — e.g. Thyroid's nodule size,
-            # which the requesting clinician doesn't always give. value=None
-            # renders an empty input rather than a guessed number; float()
-            # would crash on None, and a guessed default (e.g. 0) would be
-            # exactly the kind of silently-wrong value this feature exists
-            # to prevent.
-            kwargs["value"] = None if field["value"] is None else float(field["value"])
-        return st.number_input(field["label"], **kwargs)
+            kwargs["value"] = field["value"] or ""
+        raw = st.text_input(field["label"], **kwargs)
+        stripped = raw.strip().replace(",", ".")  # tolerate "20,5" as well as "20.5"
+        if not stripped:
+            return None
+        try:
+            parsed = float(stripped)
+        except ValueError:
+            parsed = None
+        if parsed is not None and parsed >= 0:
+            return parsed
+        # Invalid text, or a negative number (obviously wrong for a
+        # physical size/volume — this is the guard min_value used to
+        # provide, restored here since it's otherwise gone along with
+        # number_input). Visible, not silent: shown right under the
+        # field, and treated as blank rather than passed through as a
+        # garbled string that could otherwise leak into the composed
+        # report text unnoticed.
+        if raw.strip():
+            st.caption(f"⚠️ « {raw} » non reconnu pour « {field['label']} » — traité comme vide.")
+        return None
     elif field["type"] == "select":
         options = field["options"] or []
         kwargs = {"key": widget_key, "disabled": disabled}
