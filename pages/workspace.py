@@ -93,6 +93,49 @@ def _clear_case_scoped_state():
             del st.session_state[key]
 
 
+def _handle_quick_type_submit():
+    """
+    on_change callback for the Quick Type text_input further down —
+    fires the instant its value commits (Enter or blur), which happens
+    BEFORE the script's main body reruns top-to-bottom. So
+    _do_quick_type_apply is already set by the time the top-of-script
+    processing block (mirroring case-reopen's own two-phase shape) picks
+    it up in that SAME rerun — no st.rerun() call needed here, unlike the
+    reopen form's submit handler: Streamlit already reruns the script for
+    a widget value change on its own, a callback doesn't need to
+    additionally request one.
+
+    Deliberately NOT wrapped in st.form(), unlike the reopen box below —
+    st.form there exists specifically to fix a timing race between a
+    text_input's OWN blur-commit and a SEPARATE submit button's click
+    landing before that commit is visible. There's no separate button
+    here to race against: this callback IS the field's own commit event.
+
+    Reads its own generation number fresh from session_state rather than
+    closing over a form_gen local — this callback runs as its own
+    invocation, before this rerun's normal top-to-bottom script execution
+    (and its local variables) exist at all. Safe to do: nothing bumps
+    _form_generation between the widget being drawn and this callback
+    firing, so the value read here is guaranteed to match the key the
+    widget was actually rendered with.
+    """
+    gen = st.session_state.get("_form_generation", 0)
+    raw = st.session_state.get(f"qt_input_{gen}", "").strip()
+    if not raw:
+        return
+    qt_preset, qt_overrides, qt_error = quicktype.parse_quick_type(raw)
+    if qt_error:
+        # Left as-is in the input box on failure — unlike a successful
+        # apply, which naturally clears it via the generation bump below
+        # — so a typo can be fixed in place instead of retyped from
+        # scratch.
+        st.session_state["_quicktype_error"] = f"⚠️ {qt_error}"
+    else:
+        st.session_state["_pending_quicktype_preset_id"] = qt_preset["id"]
+        st.session_state["_pending_quicktype_overrides"] = qt_overrides
+        st.session_state["_do_quick_type_apply"] = True
+
+
 # --- Cross-page reopen trigger: the Worklist page links here with
 # ?reopen=CASE_NUMBER via st.page_link's query_params kwarg — the only
 # reliable way to carry data across a Streamlit page navigation (plain
@@ -282,28 +325,12 @@ with c2:
     preset_labels = ["-- Select --"] + [f"{p['name']} ({p['short_code']})" for p in presets]
     selected_label = st.selectbox("📋 Select Preset", preset_labels, key="preset_select")
 with c3:
-    # clear_on_submit=True, same reasoning as the reopen form below: a
-    # fast-typed one-shot code, not something to leave sitting in the box
-    # after it's been applied (or rejected).
-    with st.form(f"quicktype_form_{form_gen}", clear_on_submit=True):
-        qt_input = st.text_input("⚡ Quick Type", placeholder="ex: dai37")
-        qt_submitted = st.form_submit_button("Load")
-        if qt_submitted:
-            if qt_input.strip():
-                qt_preset, qt_overrides, qt_error = quicktype.parse_quick_type(qt_input.strip())
-                if qt_error:
-                    # Shown inline, not via the one-shot session_state queue --
-                    # no rerun happens on failure, so there's nothing that
-                    # needs to survive one. Nothing is applied: state is
-                    # exactly as it was before this submission.
-                    st.error(f"⚠️ {qt_error}")
-                else:
-                    st.session_state["_pending_quicktype_preset_id"] = qt_preset["id"]
-                    st.session_state["_pending_quicktype_overrides"] = qt_overrides
-                    st.session_state["_do_quick_type_apply"] = True
-                    st.rerun()
-            else:
-                st.warning("⚠️ Enter a code first.")
+    st.text_input(
+        "⚡ Quick Type",
+        placeholder="ex: dai37",
+        key=f"qt_input_{form_gen}",
+        on_change=_handle_quick_type_submit,
+    )
 # Renseignements cliniques and Title moved below, into the Clinical
 # Context section — both now depend on which preset (and which fields)
 # are selected, so they can no longer render before that choice is made.

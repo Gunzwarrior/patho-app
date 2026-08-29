@@ -16,12 +16,14 @@ question that raises.
 ## Where we are right now (read this first)
 
 **Active work is "Quick Type"** — see "Currently mid-task" below.
-Checkpoints 1-3 (schema, validator, parser, UI wiring) are done and
-verified — sandbox + `AppTest` for Checkpoint 3 — piloted on `dai` only;
-not yet applied to the person's real repo. The only remaining step is
-his own real-browser confirmation (Checkpoint 4). Everything from here
-through "Fixed and verified this round" is the record of the *previous*
-round's work (Clinical Context/Title/Conclusion composition), kept for
+Checkpoints 1-3 are done and verified (sandbox + `AppTest`), piloted on
+`dai` only. Checkpoint 4 (real-browser confirmation) is in progress: one
+round of feedback already came back and was addressed (removed a
+vestigial "Load" button in favor of a bare Enter-driven text_input — see
+Checkpoint 3 for why that's more than a cosmetic change). Waiting on
+confirmation of this latest revision. Everything from here through
+"Fixed and verified this round" is the record of the *previous* round's
+work (Clinical Context/Title/Conclusion composition), kept for
 reference.
 
 The Clinical Context/Title/Conclusion composition feature at the top of
@@ -118,46 +120,69 @@ for the complete grammar/token/parsing reasoning, not repeated here.
   per-token, not "first N characters of the string."
 - **Checkpoint 3 — UI wiring (done, sandbox + AppTest verified, not yet
   committed).** New third column (`c1, c2, c3 = st.columns([1, 2, 1])`)
-  next to the Preset dropdown: `st.form` (`clear_on_submit=True`, same
-  reasoning as the reopen form) with a `text_input` + "Load" submit
-  button, calling `quicktype.parse_quick_type()` on submit. On success:
-  its **own** new flag (`_do_quick_type_apply`, distinct from
+  next to the Preset dropdown: a bare `text_input` (no `st.form`) with
+  `on_change=_handle_quick_type_submit`, calling
+  `quicktype.parse_quick_type()` the instant its value commits (Enter or
+  blur). **Revised after first landing on an `st.form` + "Load" button**
+  (person's real-browser feedback: the button served no purpose since
+  Enter alone was always how it got used) — worth recording why the
+  redesign is a bare `on_change` callback rather than just hiding the
+  button: `st.form` structurally requires a visible submit button to
+  exist at all (confirmed directly from Streamlit's own source), so
+  hiding it wasn't an option, and it turned out not to be needed anyway
+  — `st.form` exists specifically to fix a timing race between a
+  text_input's own blur-commit and a *separate* button's click landing
+  first. With no separate button, that race can't happen: the callback
+  IS the field's own commit event. Net effect is also simpler, not just
+  smaller — one rerun instead of two (form-submit sets a flag then calls
+  `st.rerun()`; the callback runs at the start of the rerun Streamlit
+  already triggers for the value change, no explicit rerun needed), and
+  a parse failure now leaves the mistyped code in the box instead of
+  wiping it, since a bare `text_input` only clears when its key changes
+  generation — which only happens on a *successful* apply — where the
+  form's `clear_on_submit=True` used to wipe it unconditionally, success
+  or failure alike.
+  On success: its **own** flag (`_do_quick_type_apply`, distinct from
   `_do_preset_switch_reset` — reusing an existing one-shot flag for a
   second purpose is exactly the `_form_generation`-scoped-key bug
   pattern already hit before) carries the resolved `(preset_id,
-  overrides)` through a `st.rerun()`; a new top-of-script block
-  (mirroring case-reopen's own two-phase shape exactly) preserves
-  `case_id` and skips `clinical_info` — same as a manual preset switch,
-  since a Quick Type code IS a preset selection — sets `preset_select`
-  and `_last_selected_label` together (prevents the preset-switch-change
-  watcher from firing a second, unwanted reset), seeds each resolved
-  field's real widget key under the new generation, and queues a summary
-  message (`_quicktype_success`/`_quicktype_error`, added to the
-  existing one-shot message queue) built from resolved field *labels*,
-  not raw keys. On failure: inline `st.error` right in the form, no
-  rerun, nothing touched. **Verified via `streamlit.testing.v1.AppTest`**
-  (installed in-sandbox for this): `dai37` → preset dropdown shows
-  "Appendice (dai)", the real `appendicite_type` selectbox reads
-  `periappendicite`, the real `appendix_size_cm` text_input reads `7`,
-  success banner reads `dai ; Taille (cm)=7 ; Type d'appendicite=
-  periappendicite`; `dai9` → specific error shown, preset dropdown still
-  at "-- Select --", nothing applied; bare `dai` → preset applied with
-  zero field overrides, minimal success banner; empty input → inline
-  warning, no crash. Full regression: cycling the dropdown through all 9
-  presets normally (not via Quick Type) — zero exceptions, confirming
-  the new column/state doesn't disturb the existing flow.
-  **One correction made during this pass**: the button label and two
-  message strings were first written in French out of habit — fixed to
+  overrides)`; a top-of-script block (mirroring case-reopen's own
+  two-phase shape) preserves `case_id` and skips `clinical_info` — same
+  as a manual preset switch, since a Quick Type code IS a preset
+  selection — sets `preset_select` and `_last_selected_label` together
+  (prevents the preset-switch-change watcher from firing a second,
+  unwanted reset), seeds each resolved field's real widget key under the
+  new generation, and queues a summary message
+  (`_quicktype_success`/`_quicktype_error`, in the existing one-shot
+  message queue) built from resolved field *labels*, not raw keys. On
+  failure: same queue, `_quicktype_error`, box left untouched.
+  **Verified via `streamlit.testing.v1.AppTest`** (installed in-sandbox
+  for this — note a couple of runs needed `timeout=15` over the default
+  3s under repeated invocations in this sandbox, a harness flake, not an
+  app issue): confirmed zero "Load"-labeled buttons exist anywhere;
+  `dai37` via `set_value()` alone (no click, simulating Enter) → preset
+  dropdown "Appendice (dai)", real `appendicite_type` selectbox reads
+  `periappendicite`, real `appendix_size_cm` text_input reads `7`,
+  success banner `dai ; Taille (cm)=7 ; Type d'appendicite=
+  periappendicite`; `dai9` → specific error, preset dropdown still at
+  "-- Select --", **and the box still shows the typed `dai9`** (the new,
+  better failure behavior); bare `dai` → applied with zero overrides,
+  minimal banner; empty value → clean no-op, no message, no crash. Full
+  regression: cycling the dropdown through all 9 presets normally — zero
+  exceptions.
+  **One correction made during the earlier pass**: the button label and
+  two message strings were first written in French out of habit — fixed to
   English before verifying, to match this app's actual convention
   (English UI chrome — buttons, warnings, section headers — vs. French
   clinical field labels, e.g. the existing "Reopen"/"Enter a case number
   first" strings right above this same form).
-- **Checkpoint 4 — real browser confirmation, the only thing left.**
-  Nothing further to build — AppTest already covers the regression pass
-  that was this checkpoint's other half. This is the one gate in the
-  whole feature that has to be the person's own look, per the UI-facing
-  convention below: AppTest confirms the mechanics, not that it feels
-  right at typing speed in a real browser.
+- **Checkpoint 4 — real browser confirmation, in progress.** Person's
+  first real-browser pass confirmed the core mechanics work flawlessly
+  and surfaced the one piece sandbox testing couldn't have caught — a
+  UX judgment call (the button was vestigial) rather than a correctness
+  bug. Addressed above (bare `on_change` callback, no button). Still
+  waiting on his confirmation that this revision feels right at typing
+  speed in the real browser before considering the whole feature done.
   right in a real browser at typing speed — AppTest confirms mechanics,
   not feel.
 
