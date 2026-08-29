@@ -16,11 +16,13 @@ question that raises.
 ## Where we are right now (read this first)
 
 **Active work is "Quick Type"** — see "Currently mid-task" below.
-Checkpoint 1 (schema + `quicktype.py` validator) is done and
-sandbox-verified, piloted on `dai` only; not yet applied to the person's
-real repo. Everything from here through "Fixed and verified this round"
-is the record of the *previous* round's work (Clinical
-Context/Title/Conclusion composition), kept for reference.
+Checkpoints 1-3 (schema, validator, parser, UI wiring) are done and
+verified — sandbox + `AppTest` for Checkpoint 3 — piloted on `dai` only;
+not yet applied to the person's real repo. The only remaining step is
+his own real-browser confirmation (Checkpoint 4). Everything from here
+through "Fixed and verified this round" is the record of the *previous*
+round's work (Clinical Context/Title/Conclusion composition), kept for
+reference.
 
 The Clinical Context/Title/Conclusion composition feature at the top of
 "Fixed and verified this round" is confirmed **working** in the
@@ -114,27 +116,50 @@ for the complete grammar/token/parsing reasoning, not repeated here.
   still does catch a genuine overrun (`"dai3999"` correctly errors,
   "9" left over once the 2-digit cap is hit) — the guarantee is just
   per-token, not "first N characters of the string."
-- **Checkpoint 3 — UI wiring, not started.** New `st.form` + `text_input`
-  next to the Preset dropdown in `workspace.py`. On successful parse:
-  needs its **own** new reset flag (`_do_quick_type_apply` or similar) —
-  per the established convention below, reusing `_do_preset_switch_reset`
-  for a different one-shot purpose is exactly the bug pattern already
-  hit three times with `_form_generation`-scoped widgets. Capture
-  (preset, field overrides) in `session_state`, `_clear_case_scoped_state()`,
-  re-seed field widget keys under the new generation — same skeleton as
-  case-reopen restoration, not a new mechanism. One-shot success message
-  via the existing `_save_confirmation`-style pattern (`st.success`,
-  popped at top of next run), formatted with resolved field *labels*, not
-  raw keys. On failure: inline error, state left completely untouched —
-  atomic apply-or-reject. Test plan: `AppTest` — valid code applies
-  correctly and shows the right message; invalid code leaves prior state
-  untouched and shows the right error.
-- **Checkpoint 4 — regression + real browser, not started.** Full
-  regression across all 9 existing presets (Quick Type must not affect
-  any non-Quick-Type flow), full app boot check, then hand off — this
-  checkpoint is UI-facing, so per the same commit-gating convention it
-  waits for the person's own browser confirmation before being
-  considered done, unlike Checkpoint 1.
+- **Checkpoint 3 — UI wiring (done, sandbox + AppTest verified, not yet
+  committed).** New third column (`c1, c2, c3 = st.columns([1, 2, 1])`)
+  next to the Preset dropdown: `st.form` (`clear_on_submit=True`, same
+  reasoning as the reopen form) with a `text_input` + "Load" submit
+  button, calling `quicktype.parse_quick_type()` on submit. On success:
+  its **own** new flag (`_do_quick_type_apply`, distinct from
+  `_do_preset_switch_reset` — reusing an existing one-shot flag for a
+  second purpose is exactly the `_form_generation`-scoped-key bug
+  pattern already hit before) carries the resolved `(preset_id,
+  overrides)` through a `st.rerun()`; a new top-of-script block
+  (mirroring case-reopen's own two-phase shape exactly) preserves
+  `case_id` and skips `clinical_info` — same as a manual preset switch,
+  since a Quick Type code IS a preset selection — sets `preset_select`
+  and `_last_selected_label` together (prevents the preset-switch-change
+  watcher from firing a second, unwanted reset), seeds each resolved
+  field's real widget key under the new generation, and queues a summary
+  message (`_quicktype_success`/`_quicktype_error`, added to the
+  existing one-shot message queue) built from resolved field *labels*,
+  not raw keys. On failure: inline `st.error` right in the form, no
+  rerun, nothing touched. **Verified via `streamlit.testing.v1.AppTest`**
+  (installed in-sandbox for this): `dai37` → preset dropdown shows
+  "Appendice (dai)", the real `appendicite_type` selectbox reads
+  `periappendicite`, the real `appendix_size_cm` text_input reads `7`,
+  success banner reads `dai ; Taille (cm)=7 ; Type d'appendicite=
+  periappendicite`; `dai9` → specific error shown, preset dropdown still
+  at "-- Select --", nothing applied; bare `dai` → preset applied with
+  zero field overrides, minimal success banner; empty input → inline
+  warning, no crash. Full regression: cycling the dropdown through all 9
+  presets normally (not via Quick Type) — zero exceptions, confirming
+  the new column/state doesn't disturb the existing flow.
+  **One correction made during this pass**: the button label and two
+  message strings were first written in French out of habit — fixed to
+  English before verifying, to match this app's actual convention
+  (English UI chrome — buttons, warnings, section headers — vs. French
+  clinical field labels, e.g. the existing "Reopen"/"Enter a case number
+  first" strings right above this same form).
+- **Checkpoint 4 — real browser confirmation, the only thing left.**
+  Nothing further to build — AppTest already covers the regression pass
+  that was this checkpoint's other half. This is the one gate in the
+  whole feature that has to be the person's own look, per the UI-facing
+  convention below: AppTest confirms the mechanics, not that it feels
+  right at typing speed in a real browser.
+  right in a real browser at typing speed — AppTest confirms mechanics,
+  not feel.
 
 `dai` is deliberately the only preset with a Quick Type config right now
 — extending to Gallbladder/Thyroid is explicitly follow-up work, once
@@ -552,12 +577,13 @@ rather than deferring reconstruction to whichever session syncs next.
    unfamiliar. The `0b498c4` commit flagged earlier in this file was
    never actually reconciled — still worth a `git show 0b498c4` if it
    comes up.
-2. **Quick Type is mid-task** — Checkpoint 1 (schema + validator) is done
-   and sandbox-verified; Checkpoint 2 (the actual parser) is next. See
+2. **Quick Type just needs the person's own real-browser check
+   (Checkpoint 4)** — everything else is built and verified. See
    "Currently mid-task" and "Quick Type — settled design" above before
-   resuming — don't re-derive the grammar/token/ambiguity reasoning from
-   scratch, it's already settled. Other natural next things, none
-   started: extending the context/title/conclusion pattern to a future
-   breast preset, or the `fausses_membranes` field-combination validation
+   touching it further. Once confirmed, natural next things: extending
+   Quick Type configs to Gallbladder/Thyroid (deliberately not done yet
+   — `dai` was the whole point of piloting on one preset first),
+   extending the context/title/conclusion pattern to a future breast
+   preset, or the `fausses_membranes` field-combination validation
    question below.
 3. Don't start the Editor (Tier 3) until Tier 2's content is stable.

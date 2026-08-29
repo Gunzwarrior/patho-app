@@ -2,6 +2,7 @@ import streamlit as st
 import database as db
 import rendering
 import grouping
+import quicktype
 
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
 CASE_SCOPED_EXACT_KEYS = ("_wildcard_preset_id", "_loaded_case_number")
@@ -192,6 +193,49 @@ if st.session_state.pop("_do_case_reopen", False):
                 f"📂 Case '{case['case_number']}' reopened ({status_label}{reason_note})."
             )
 
+# --- Quick Type apply: same two-phase pattern as case reopen just above
+# (a flag + payload set by the Quick Type form's submit handler further
+# down, actually applied here on the NEXT rerun, before any widget below
+# reads the state it seeds). Preserves case_id and skips clinical_info
+# exactly like a manual preset switch, since a Quick Type code IS a
+# preset selection (plus field pre-fills) -- same reasoning
+# _do_preset_switch_reset already uses, not a new mechanism. Deliberately
+# its own flag rather than reusing _do_preset_switch_reset -- a different
+# one-shot purpose, and reusing an existing reset flag for a second
+# purpose is exactly the _form_generation-scoped-key bug pattern already
+# hit before.
+if st.session_state.pop("_do_quick_type_apply", False):
+    _qt_preset_id = st.session_state.pop("_pending_quicktype_preset_id", None)
+    _qt_overrides = st.session_state.pop("_pending_quicktype_overrides", {})
+    _qt_old_gen = st.session_state.get("_form_generation", 0)
+    _qt_preserved_case_id = st.session_state.get(f"case_id_{_qt_old_gen}", "")
+    _clear_case_scoped_state()
+    _qt_new_gen = st.session_state["_form_generation"]
+    st.session_state[f"case_id_{_qt_new_gen}"] = _qt_preserved_case_id
+
+    _qt_preset = db.get_preset_by_id(_qt_preset_id) if _qt_preset_id else None
+    if not _qt_preset:
+        st.session_state["_quicktype_error"] = "⚠️ Quick Type code resolved to a preset that no longer exists."
+    else:
+        _qt_preset_label = f"{_qt_preset['name']} ({_qt_preset['short_code']})"
+        st.session_state["preset_select"] = _qt_preset_label
+        # Set alongside preset_select, same as the case-reopen block above --
+        # prevents the preset-switch-change watcher further down from seeing
+        # this as a fresh change and scheduling a second, unwanted reset.
+        st.session_state["_last_selected_label"] = _qt_preset_label
+
+        _qt_summary_parts = [_qt_preset["short_code"]]
+        for _qt_block in db.get_preset_blocks(_qt_preset["id"]):
+            _qt_block_overrides = _qt_overrides.get(_qt_block["sort_order"], {})
+            for _qt_field in _qt_block["fields"]:
+                if _qt_field["key"] in _qt_block_overrides:
+                    _qt_raw_value = _qt_block_overrides[_qt_field["key"]]
+                    st.session_state[
+                        f"field_{_qt_block['block_id']}_{_qt_block['sort_order']}_{_qt_field['key']}_{_qt_new_gen}"
+                    ] = _qt_raw_value
+                    _qt_summary_parts.append(f"{_qt_field['label']}={_qt_raw_value}")
+        st.session_state["_quicktype_success"] = "✅ " + " ; ".join(_qt_summary_parts)
+
 form_gen = st.session_state.get("_form_generation", 0)
 
 # Compact pending-cases panel — lives in the sidebar so it's visible
@@ -223,18 +267,43 @@ for _msg_key, _renderer in (
     ("_save_confirmation", st.success),
     ("_reopen_success", st.success),
     ("_reopen_error", st.error),
+    ("_quicktype_success", st.success),
+    ("_quicktype_error", st.error),
 ):
     if _msg_key in st.session_state:
         _renderer(st.session_state.pop(_msg_key))
 
 st.title("🔬 Workspace")
 
-c1, c2 = st.columns([1, 2])
+c1, c2, c3 = st.columns([1, 2, 1])
 with c1: case_id = st.text_input("📁 Case ID", key=f"case_id_{form_gen}")
 with c2:
     presets = db.get_all_presets()
     preset_labels = ["-- Select --"] + [f"{p['name']} ({p['short_code']})" for p in presets]
     selected_label = st.selectbox("📋 Select Preset", preset_labels, key="preset_select")
+with c3:
+    # clear_on_submit=True, same reasoning as the reopen form below: a
+    # fast-typed one-shot code, not something to leave sitting in the box
+    # after it's been applied (or rejected).
+    with st.form(f"quicktype_form_{form_gen}", clear_on_submit=True):
+        qt_input = st.text_input("⚡ Quick Type", placeholder="ex: dai37")
+        qt_submitted = st.form_submit_button("Load")
+        if qt_submitted:
+            if qt_input.strip():
+                qt_preset, qt_overrides, qt_error = quicktype.parse_quick_type(qt_input.strip())
+                if qt_error:
+                    # Shown inline, not via the one-shot session_state queue --
+                    # no rerun happens on failure, so there's nothing that
+                    # needs to survive one. Nothing is applied: state is
+                    # exactly as it was before this submission.
+                    st.error(f"⚠️ {qt_error}")
+                else:
+                    st.session_state["_pending_quicktype_preset_id"] = qt_preset["id"]
+                    st.session_state["_pending_quicktype_overrides"] = qt_overrides
+                    st.session_state["_do_quick_type_apply"] = True
+                    st.rerun()
+            else:
+                st.warning("⚠️ Enter a code first.")
 # Renseignements cliniques and Title moved below, into the Clinical
 # Context section — both now depend on which preset (and which fields)
 # are selected, so they can no longer render before that choice is made.
