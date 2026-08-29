@@ -130,3 +130,183 @@ def validate_quick_type_config(tokens):
                     )
         else:
             raise ValueError(f"Unknown token_kind '{token['token_kind']}' for field '{field_key}' (expected 'lookup' or 'measurement').")
+
+    # block_sort_order must be contiguous -- never interleaved -- across
+    # the sequence. The parser's block-cursor logic (parse_tokens, below)
+    # assumes all of one block's tokens appear together before the next
+    # block's start; this wasn't checked when the column was first added
+    # (Checkpoint 1) because nothing consumed it yet. Surfaced while
+    # designing the parser (Checkpoint 2) -- folded in here since it's a
+    # property of the same config this function already validates, not a
+    # new concern.
+    seen_blocks = []
+    for token in tokens:
+        bso = token.get("block_sort_order", 0)
+        if not seen_blocks or seen_blocks[-1] != bso:
+            if bso in seen_blocks:
+                raise ValueError(
+                    f"block_sort_order {bso} reappears non-contiguously in the token "
+                    f"sequence (at field '{token['field_key']}') -- a block's tokens must "
+                    f"all be contiguous, never interleaved with another block's."
+                )
+            seen_blocks.append(bso)
+
+
+def _block_sequence(tokens):
+    """Ordered list of distinct block_sort_order values, in first-appearance
+    order -- e.g. [0] for every current single-block preset, [0, 1] for a
+    future two-block one. Relies on validate_quick_type_config's
+    contiguity check having already passed for this token list."""
+    seen = []
+    for t in tokens:
+        bso = t.get("block_sort_order", 0)
+        if not seen or seen[-1] != bso:
+            seen.append(bso)
+    return seen
+
+
+def find_preset_by_prefix(raw_code, presets):
+    """
+    Longest-registered-short_code-prefix match: finds the longest
+    Presets.short_code that is a prefix of raw_code. presets: list of
+    preset dicts with at least 'id'/'short_code' (e.g. what
+    database.get_all_presets() returns).
+
+    Returns (preset, remainder) -- remainder is whatever's left of
+    raw_code after the matched short_code (possibly "" for a bare code
+    like "dai"). Returns (None, None) if no registered short_code
+    prefixes raw_code at all.
+
+    Deliberately takes the LONGEST match when more than one short_code
+    prefixes the input, with no ambiguity error -- a short_code that's a
+    prefix of another (e.g. hypothetical "etc" alongside "etc2") is a
+    config-authoring problem to avoid at the source (flagged for the
+    future Editor UI, not solved here), not something this function
+    tries to detect or warn about at parse time.
+    """
+    matches = [p for p in presets if raw_code.startswith(p["short_code"])]
+    if not matches:
+        return None, None
+    best = max(matches, key=lambda p: len(p["short_code"]))
+    return best, raw_code[len(best["short_code"]):]
+
+
+def parse_tokens(remainder, tokens):
+    """
+    remainder: the modifier string after the preset code (e.g. "37" from
+    "dai37", or "" for a bare preset code with no modifiers typed).
+    tokens: this preset's Quick_Type_Tokens, already ordered by
+    sort_order (e.g. database.get_quick_type_tokens(preset_id)) --
+    assumed already valid (validate_quick_type_config passed at seed
+    time); this function doesn't re-validate the config itself, only the
+    input string against it.
+
+    Returns (field_overrides_by_block, None) on success --
+    field_overrides_by_block is {block_sort_order: {field_key: raw_value}},
+    containing only fields actually touched by the typed string (same
+    "override" meaning as Preset_Blocks.field_overrides elsewhere --
+    untouched fields keep their existing default, nothing here decides
+    that). raw_value is left as a plain string (e.g. "37" for a
+    measurement) -- coercion to the field's real type happens downstream
+    via rendering.coerce_field_value, exactly like every other override
+    channel already does; no new coercion logic needed here.
+
+    Returns (None, error_message) on ANY failure -- unrecognized
+    character, out-of-table lookup key, leftover unparsed characters, or
+    '!' with nothing to skip to. Nothing is ever partially applied: a
+    None first element means "apply nothing," full stop.
+
+    '!' advances to the next block's tokens without consuming any of the
+    current block's remaining ones. Not required between blocks --
+    exhausting a block's tokens naturally moves to the next one on the
+    following character. In a single-block preset (every current preset),
+    '!' has nothing to advance to and is a parse error.
+    """
+    if not tokens:
+        if remainder:
+            return None, f"'{remainder}' left over -- this preset has no Quick Type modifiers configured."
+        return {}, None
+
+    blocks_seq = _block_sequence(tokens)
+    tok_idx = 0
+    block_pos = 0
+    overrides = {}
+    i = 0
+
+    while i < len(remainder):
+        char = remainder[i]
+
+        if char == "!":
+            if block_pos >= len(blocks_seq) - 1:
+                return None, "'!' has no next block to skip to in this preset."
+            block_pos += 1
+            next_block = blocks_seq[block_pos]
+            while tok_idx < len(tokens) and tokens[tok_idx]["block_sort_order"] != next_block:
+                tok_idx += 1
+            i += 1
+            continue
+
+        if tok_idx >= len(tokens):
+            return None, f"'{remainder[i:]}' left over -- no more modifiers configured for this preset."
+
+        token = tokens[tok_idx]
+
+        if token["token_kind"] == "lookup":
+            table = token["lookup_table"] or {}
+            if char not in table:
+                return None, (
+                    f"'{char}' is not a valid value for '{token['field_key']}' "
+                    f"(expected one of {sorted(table.keys())})."
+                )
+            overrides.setdefault(token["block_sort_order"], {})[token["field_key"]] = table[char]
+            i += 1
+            tok_idx += 1
+
+        elif token["token_kind"] == "measurement":
+            j = i
+            cap = len(remainder) if not token.get("digit_width") else min(len(remainder), i + token["digit_width"])
+            while j < cap and remainder[j].isdigit():
+                j += 1
+            if j == i:
+                return None, f"expected digits for '{token['field_key']}' at position {i}, got '{char}'."
+            overrides.setdefault(token["block_sort_order"], {})[token["field_key"]] = remainder[i:j]
+            i = j
+            tok_idx += 1
+
+        else:
+            # Unreachable if validate_quick_type_config already passed on
+            # this config -- guarded anyway rather than assumed.
+            return None, f"unknown token_kind '{token['token_kind']}' for '{token['field_key']}'."
+
+    return overrides, None
+
+
+def parse_quick_type(raw_code):
+    """
+    Convenience wrapper: the actual entry point workspace.py will call.
+    Fetches presets and the matched preset's tokens from the database
+    itself (same pattern grouping.py already uses for
+    get_conclusion_group_label) rather than requiring the caller to fetch
+    and inject them -- find_preset_by_prefix/parse_tokens above stay pure
+    and independently testable for anyone who wants to test parsing logic
+    without a database.
+
+    Returns (preset, field_overrides_by_block, error) -- error is None on
+    success. On failure, preset and field_overrides_by_block are both
+    None and error is a specific, user-displayable message.
+    """
+    import database as db
+
+    raw_code = raw_code.strip()
+    if not raw_code:
+        return None, None, "empty Quick Type code."
+
+    preset, remainder = find_preset_by_prefix(raw_code, db.get_all_presets())
+    if preset is None:
+        return None, None, f"no preset short_code matches '{raw_code}'."
+
+    tokens = db.get_quick_type_tokens(preset["id"])
+    overrides, error = parse_tokens(remainder, tokens)
+    if error:
+        return None, None, f"{preset['short_code']}: {error}"
+    return preset, overrides, None

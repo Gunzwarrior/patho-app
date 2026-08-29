@@ -112,6 +112,26 @@ def get_preset_block_rows(preset_id, block_id):
     ]
 
 
+def get_quick_type_tokens(preset_id):
+    """Ordered Quick_Type_Tokens for a preset, flattened across whatever
+    blocks it spans (see quicktype.py). Empty list for a preset with no
+    Quick Type config -- meaning nothing beyond its bare short_code
+    parses, which quicktype.parse_tokens treats as valid, not an error."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        """SELECT sort_order, block_sort_order, field_key, token_kind, lookup_table, digit_width
+           FROM Quick_Type_Tokens
+           WHERE preset_id = ?
+           ORDER BY sort_order""",
+        (preset_id,),
+    ).fetchall()
+    conn.close()
+    return [
+        {**dict(r), "lookup_table": json.loads(r["lookup_table"]) if r["lookup_table"] else None}
+        for r in rows
+    ]
+
+
 def get_conclusion_group_label(block_keys):
     """
     block_keys: list of block key strings sharing an identical conclusion

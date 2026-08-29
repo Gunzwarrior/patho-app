@@ -41,54 +41,79 @@ this file is complete.
 
 ## Currently mid-task
 
-**"Quick Type" — building now, Checkpoint 1 of 4 done (Claude.ai chat).**
+**"Quick Type" — building now, Checkpoint 2 of 4 done (Claude.ai chat).**
 Full design settled this session; see "Quick Type — settled design" below
 for the complete grammar/token/parsing reasoning, not repeated here.
 
-- **Checkpoint 1 — schema + validator (done, sandbox-verified only, not
-  yet in the person's real repo).** New `Quick_Type_Tokens` table
-  (`init_db.py`): `preset_id`, `sort_order` (flattened, block-agnostic
-  position), `block_sort_order` (inert, always 0 today — see design
-  section for why it exists anyway), `field_key`, `token_kind` ('lookup'
-  | 'measurement'), `lookup_table` (JSON), `digit_width` (sanity cap, not
-  the disambiguation mechanism). New module `quicktype.py`:
-  `validate_quick_type_config(tokens)` — flattens a preset's tokens and
-  checks (1) every lookup key is exactly 1 char and not a reserved
-  character, (2) every measurement token is either last or followed by a
-  token whose possible first-characters don't overlap digits. Piloted on
-  `dai` only (`seed_quick_type_tokens()` in `seed_data.py`, called from
-  `seed_all()`): token 1 = `appendicite_type` lookup (`"1"`-`"6"` →
-  endo/suppuree/periappendicite/phlegmoneuse/gangreneuse/intervalle,
-  confirmed against the real Field's option order), token 2 =
-  `appendix_size_cm` measurement (safe because it's last).
-  **Verified**: `py_compile` on all touched/dependent files; a real
-  `init_db.py` → `seed_data.seed_all()` run seeds `dai`'s tokens and
-  passes validation with no error; the seeded rows read back correctly
-  from `pathology.db`; the validator was also exercised directly against
-  6 adversarial synthetic configs (not just the real one) — two
-  genuinely-ambiguous adjacency cases both correctly raise (measurement→
+- **Checkpoint 1 — schema + validator (done, sandbox-verified, not yet
+  committed to the person's real repo — commit message given, timing is
+  his call).** New `Quick_Type_Tokens` table (`init_db.py`): `preset_id`,
+  `sort_order` (flattened, block-agnostic position), `block_sort_order`
+  (inert, always 0 today — see design section for why it exists anyway),
+  `field_key`, `token_kind` ('lookup' | 'measurement'), `lookup_table`
+  (JSON), `digit_width` (sanity cap — see the corrected note under
+  Checkpoint 2 for exactly what it does and doesn't guarantee). New
+  module `quicktype.py`: `validate_quick_type_config(tokens)` — checks
+  (1) every lookup key is exactly 1 char and not a reserved character,
+  (2) every measurement token is either last or followed by a token
+  whose possible first-characters don't overlap digits, (3) added while
+  building Checkpoint 2 — every token's `block_sort_order` is contiguous
+  across the sequence, never interleaved (the parser's block-cursor logic
+  assumes this; wasn't checked until something actually depended on it).
+  Piloted on `dai` only (`seed_quick_type_tokens()` in `seed_data.py`,
+  called from `seed_all()`): token 1 = `appendicite_type` lookup
+  (`"1"`-`"6"` → endo/suppuree/periappendicite/phlegmoneuse/gangreneuse/
+  intervalle, confirmed against the real Field's option order), token 2 =
+  `appendix_size_cm` measurement (safe because it's last). **Verified**:
+  `py_compile` clean; a real `init_db.py` → `seed_data.seed_all()` run
+  seeds and validates `dai`'s tokens with no error; rows read back
+  correctly from `pathology.db`; the validator exercised directly against
+  7 adversarial synthetic configs, not just the real one — both
+  genuinely-ambiguous adjacency cases correctly raise (measurement→
   measurement, measurement→digit-keyed lookup), the real-world-motivated
   safe case correctly passes (measurement→letter-keyed lookup, the
-  `8fvicl`-style shape), a reserved-character collision and an
-  unsupported multi-char lookup key both correctly raise with specific
-  messages, and an empty token list is correctly treated as "not an
-  error, just not quick-typeable yet" rather than a failure.
-  `database.get_all_presets()`/`get_preset_blocks()` reconfirmed working
-  unmodified against the new schema (9 presets, `dai` still resolves its
-  3 fields correctly) — the schema addition is purely additive as
-  intended, no regression. This is backend-only, pure logic, with solid
-  automated coverage — per the commit-gating convention below, **committable
-  without waiting on a real-browser check**, whenever the person is ready.
-- **Checkpoint 2 — parser, not started.** `parse_quick_type(raw_string) ->
-  (preset, field_overrides_by_block, error_or_none)` in `quicktype.py`.
-  Longest-registered-short_code-prefix match to find where the preset
-  code ends; walks the flattened token list consuming lookup/measurement
-  tokens plus `!` (skip to next block; a parse error if used in a
-  single-block preset — see design section). Test plan: direct function
-  calls against the real `dai` config — `dai`, `dai3`, `dai37` all
-  succeed with the right resolved values; `dai9` (key out of range),
-  `dai37x` (trailing unparseable chars), and `dai!` (nothing to skip to)
-  all fail with specific messages, nothing silently guessed.
+  `8fvicl` shape), a reserved-character collision, an unsupported
+  multi-char lookup key, and a non-contiguous `block_sort_order` all
+  correctly raise with specific messages, and an empty token list is
+  correctly treated as "not an error, just not quick-typeable yet."
+  Backend-only, pure logic, solid automated coverage — committable
+  without waiting on a real-browser check, per the convention below.
+- **Checkpoint 2 — parser (done, sandbox-verified, not yet committed).**
+  `quicktype.py` gained: `find_preset_by_prefix(raw_code, presets)` (pure,
+  longest-registered-short_code-prefix match — deliberately no ambiguity
+  error when more than one short_code prefixes the input, see design
+  section on why that's a config-authoring concern, not a parse-time
+  one), `parse_tokens(remainder, tokens)` (pure, the actual token-walking
+  logic — lookup/measurement consumption, `!` block-skip with auto-
+  rollover as the no-`!`-needed default), and `parse_quick_type(raw_code)`
+  (convenience wrapper fetching from the DB itself, mirroring how
+  `grouping.py` already calls `database.get_conclusion_group_label`
+  directly rather than requiring the caller to inject data). New
+  `database.get_quick_type_tokens(preset_id)`. **Verified**: real `dai`
+  end-to-end — `dai`/`dai3`/`dai37` all resolve the right preset and
+  field overrides; `dai9` (key out of table), `dai37x` (trailing
+  unparseable chars), `dai!` (nothing to skip to in a single-block
+  preset), and `zzz` (no matching preset) all fail with specific,
+  non-generic error messages, nothing silently guessed. A synthetic
+  2-block fixture (hand-built, since no real preset spans 2 blocks yet)
+  confirmed auto-rollover into the next block with no `!` needed, `!`
+  correctly skipping a block's remaining tokens early, and a second `!`
+  past the last block correctly erroring. Every preset *without* any
+  Quick Type config (8 of 9) degrades sensibly — bare code still resolves
+  the preset with zero overrides, any trailing character is a clean
+  "no modifiers configured" error, no crash.
+  **One correction made mid-verification, worth recording**: an early
+  test assumed `digit_width` bounds a measurement token's digits counting
+  from the start of the *whole typed remainder*. It doesn't — the cap
+  applies starting from wherever that specific token begins consuming
+  (i.e., after whatever earlier tokens already ate their own characters).
+  `"dai375"` was expected to error as a mistyped "37" but actually parses
+  validly as `appendicite_type=periappendicite` (from `"3"`) +
+  `appendix_size_cm="75"` (2 digits, right at the cap, starting from
+  position 1) — a different, legitimate parse, not a bug. `digit_width`
+  still does catch a genuine overrun (`"dai3999"` correctly errors,
+  "9" left over once the 2-digit cap is hit) — the guarantee is just
+  per-token, not "first N characters of the string."
 - **Checkpoint 3 — UI wiring, not started.** New `st.form` + `text_input`
   next to the Preset dropdown in `workspace.py`. On successful parse:
   needs its **own** new reset flag (`_do_quick_type_apply` or similar) —

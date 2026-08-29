@@ -401,8 +401,8 @@ def seed_quick_type_tokens(cursor):
         (1, 0, "appendix_size_cm", "measurement", None, 2),
     ]
     quicktype.validate_quick_type_config([
-        {"field_key": fk, "token_kind": tk, "lookup_table": lt}
-        for _, _, fk, tk, lt, _ in dai_tokens
+        {"field_key": fk, "token_kind": tk, "lookup_table": lt, "block_sort_order": bso}
+        for _, bso, fk, tk, lt, _ in dai_tokens
     ])
     cursor.executemany(
         "INSERT INTO Quick_Type_Tokens (preset_id, sort_order, block_sort_order, field_key, token_kind, lookup_table, digit_width) "
