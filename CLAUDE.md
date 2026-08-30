@@ -216,8 +216,8 @@ reconsider, not just re-explain.
   changing would mean redoing Editor work too. Wait until Tier 2 settles.
   **A persistent automated test suite is a decided prerequisite/companion —
   see TESTING.md** for the full plan, philosophy, and checkpoint-by-
-  checkpoint status (scaffolding done, most content checkpoints still
-  open). Every round's testing before this suite existed was ad-hoc and
+  checkpoint status (all current checkpoints complete). Every round's
+  testing before this suite existed was ad-hoc and
   thrown away afterward, which worked only because a Claude-tested round
   always sat between a template edit and a real case seeing it. Editor UI
   is specifically about removing that round-trip, so it can't quietly
@@ -282,12 +282,11 @@ settling on one. Consequences, for any session regardless of which tool:
 browser verification in every session (the person has gone on 2-week
 stretches without testing). Compensate by testing thoroughly *before*
 presenting anything:
-- **`pytest` first** — see TESTING.md. Covers a growing (not yet
-  complete — see its checkpoint list) set of pure-function, DB-backed,
-  and golden-output-regression tests, and runs identically regardless of
-  which tool or model is making the change. If a change touches
-  something the suite already covers, running it is the first step, not
-  an optional extra.
+- **`pytest` first** — see TESTING.md. Covers pure-function, DB-backed,
+  golden-output-regression, and Workspace session-state tests, and runs
+  identically regardless of which tool or model is making the change. If
+  a change touches something the suite already covers, running it is the
+  first step, not an optional extra.
 - `python3 -m py_compile` every changed file.
 - Direct function calls exercising realistic value combinations (not just
   "happy path") — e.g. all 8 combinations of Gallbladder's 3 boolean/select

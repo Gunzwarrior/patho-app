@@ -107,7 +107,8 @@ actual clinical wording lives, and it's far more readable to diff than
 HTML would be. HTML wrapping itself (the clinical-info line appearing
 only when non-empty, the title, the header structure) is simple enough
 to cover with a few direct assertions rather than a full snapshot —
-that's Checkpoint 5's job, not done yet.
+that remains a focused-assertion need when a change touches the wrapper,
+rather than a reason to expand the golden fixtures into HTML snapshots.
 
 **Why golden files instead of just calling the render functions and
 eyeballing it**: because "does this still say what it said before" is

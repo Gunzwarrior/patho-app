@@ -13,10 +13,10 @@ some the person did by hand. Noted per item, since it's new territory for
 how this file gets kept honest — see near the bottom for the open
 question that raises.
 
-## Where we are right now (read this first)
+## History reconciliation (historical snapshot)
 
 **Reconciled against a real `git log --oneline -20`, pasted by Thomas
-this session:**
+in an earlier session:**
 ```
 d4a1a96 (HEAD -> main) Add field-consistency validation, pilot on Appendix
 460034b (origin/main) Replace Quick Type's form+button with a bare Enter-driven text_input
@@ -30,7 +30,10 @@ ada771e Add 2-nodule Thyroid Cytology preset (etc_bi)
 86d603b Fix widget/save key collision when a Preset reuses one Block twice
 51fb9d1 Add Clinical Context section with Title/Context composition
 ```
-That's the whole history (11 commits) — `git log -20` returned no more.
+That was the whole history at that point (11 commits). It is now a
+historical explanation of the pre-test-suite work, not current state:
+the test-suite commits through `a3a6d2f` supersede it. Always check the
+live `git log` at the start of a session.
 
 - **Clinical Context/Title/Conclusion composition IS committed** —
   `51fb9d1`, `86d603b`, `9405865`, `06d5605` account for it. The
@@ -56,13 +59,10 @@ verified this round" for both build records, "Quick Type — settled
 design" for the grammar/reasoning, and "Field-consistency validation —
 design question (RESOLVED)" for that design's reasoning.
 
-**A persistent automated test suite is now mid-task** — full plan and
-per-checkpoint status live in the new **TESTING.md**, tracked briefly in
-"Currently mid-task" below. Scaffolding is built and verified (39 tests
-passing, real `pathology.db` confirmed untouched); most content
-checkpoints are still open and are meant to be picked up piecemeal,
-possibly by different sessions or different models — see TESTING.md's
-"How this fits the mixed-model workflow."
+**The persistent automated test suite is complete** — all seven defined
+checkpoints are done; 88 tests pass and the real `pathology.db` remains
+untouched by the suite. Full structure and update ritual live in
+**TESTING.md**.
 
 ## Currently mid-task
 
@@ -466,12 +466,10 @@ The plan has two tiers:
 - **Tier 3 (informal) — self-service**: the Editor UI. **Not started** —
   deliberately deferred until Tier 2's content settles further, since
   building the Editor against templates that are still actively changing
-  would mean re-doing Editor work too. **A persistent automated test
-  suite was decided on this session as a prerequisite/companion, not yet
-  designed** — see "Immediate next steps": Editor UI's whole point is
-  self-service template editing without a Claude-tested round-trip
-  first, which is exactly the safety net today's ad-hoc, thrown-away
-  testing depends on.
+  would mean re-doing Editor work too. Its persistent automated-test
+  prerequisite/companion is now complete (88 tests; see TESTING.md).
+  Before Editor UI planning, settle flexible per-case Block composition
+  for unusual specimen combinations and orders.
 
 ## Quick Type — settled design (Claude.ai chat)
 
@@ -620,25 +618,21 @@ rather than deferring reconstruction to whichever session syncs next.
 
 ## Immediate next steps, if resuming without other instructions
 
-1. **Persistent test suite: pick up the next open checkpoint in
-   TESTING.md.** Scaffolding (checkpoint 0) is done and verified;
-   checkpoints 1 and 4 are mostly/fully done as worked examples;
-   checkpoints 2, 3, 5, 6 are open, separable, and — per TESTING.md's
-   own "How this fits the mixed-model workflow" — deliberately suited to
-   being picked up by different sessions or different models rather
-   than needing to be done in one sitting by one of them. Checkpoint 6
-   (`AppTest`-based UI flows) is the one place real historical fragility
-   lives — save it for last, or for the model with the most track record
-   on this codebase.
-2. Ask for a fresh `git log` at the start of any new session regardless
-   — this session's reconciliation (see "Where we are right now") is
-   only current as of `d4a1a96`. The `0b498c4` question from earlier
-   rounds is fully resolved, not something to re-raise.
-3. Once the test suite's core checkpoints exist (or alongside finishing
-   them): Editor UI (Tier 3) is the next real feature — don't start it
-   until Tier 2's content is stable, per "Overall shape." Extending
-   field-consistency validation beyond the Appendix pilot, extending
-   Quick Type configs to Gallbladder/Thyroid, and extending the
-   context/title/conclusion pattern to a future breast preset are all
-   candidate *later* work on top of that, no forced order between them,
-   none currently active.
+1. **Plan flexible per-case Block composition before Editor UI.** The
+   current Preset model is a fixed ordered list of Block instances; rare
+   cases need an operator to add an existing Block, remove one, or
+   reorder them for that individual case (e.g. extra erosive-zone or
+   polyp blocks, or antrum/fundus/duodenum reordered by specimen
+   receipt). This is not template editing: it must preserve the existing
+   Block vocabulary, render/group correctly, save/reopen the chosen
+   ordered instances, and gain explicit regression coverage before
+   Editor UI is designed around it.
+2. Ask for a fresh `git log` at the start of any new session regardless;
+   the history above is a historical reconciliation snapshot, not a
+   substitute for the live repository state. The `0b498c4` question from
+   earlier rounds is fully resolved, not something to re-raise.
+3. After per-case composition is settled and Tier 2 content is stable,
+   start the Editor UI design discussion. Extending field-consistency
+   validation beyond the Appendix pilot, extending Quick Type configs to
+   Gallbladder/Thyroid, and future breast content remain candidate later
+   work, with no forced order between them.
