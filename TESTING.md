@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-57 tests currently exist, running in well under a second.
+64 tests currently exist, running in well under a second.
 
 ## Structure
 
@@ -158,13 +158,13 @@ tests pass in <0.1s, real `pathology.db` checksum unchanged before and
 after a full run, the regeneration script runs cleanly and correctly
 reports "unchanged" when nothing changed.
 
-**Checkpoint 1 — `test_rendering.py`: mostly done.** Covers
+**Checkpoint 1 — `test_rendering.py`: DONE.** Covers
 `format_decimal_display` (the exact historical "8.0 cm" bug, frozen as
 an explicit regression case), `format_fragment_text`, `text_to_html`,
-`coerce_field_value`. No DB needed — pure functions. `build_context()`
-and `render_block()` themselves aren't covered yet (they need a real
-Block, so they'd use the `db` fixture) — a reasonable next addition to
-this same file.
+and `coerce_field_value`, plus DB-backed `build_context()` defaults and
+live overrides (including decimal display, fragment grammar, and site
+label) and `render_block()`'s single-specimen, multi-specimen, and
+no-macro paths.
 
 **Checkpoint 2 — `test_quicktype.py`: DONE.** Covers every
 `validate_quick_type_config()` rejection path, lookup and measurement

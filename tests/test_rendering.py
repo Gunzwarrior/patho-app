@@ -1,11 +1,27 @@
 """
-Unit tests for rendering.py's pure functions -- no DB needed, these
-don't touch a Block/Preset at all. Fastest tests in the suite; a good
-first file to point a new/unfamiliar model at, since nothing here can
-touch real data even by mistake.
+Unit tests for rendering.py. Pure-function tests need no database;
+build_context() and render_block() use a real Block from the isolated
+seeded test database.
 """
 
-from rendering import format_decimal_display, format_fragment_text, text_to_html, coerce_field_value
+import pytest
+import database as db_module
+from rendering import (
+    build_context,
+    coerce_field_value,
+    format_decimal_display,
+    format_fragment_text,
+    render_block,
+    text_to_html,
+)
+
+
+def _block_for_preset(short_code, db, block_key=None):
+    preset = next(p for p in db_module.get_all_presets() if p["short_code"] == short_code)
+    blocks = db_module.get_preset_blocks(preset["id"])
+    if block_key is None:
+        return blocks[0]
+    return next(block for block in blocks if block["key"] == block_key)
 
 
 class TestFormatDecimalDisplay:
@@ -72,3 +88,82 @@ class TestCoerceFieldValue:
 
     def test_none_passes_through_regardless_of_type(self):
         assert coerce_field_value("number", None) is None
+
+
+class TestBuildContext:
+    def test_resolves_seeded_values_and_decimal_display(self, db):
+        appendice = _block_for_preset("dai", db)
+
+        context = build_context(appendice)
+
+        assert context["appendicite_type"] == "endo"
+        assert context["appendix_size_cm"] == 8.0
+        assert context["appendix_size_cm_display"] == "8"
+        assert context["false_membranes"] is False
+
+    def test_live_overrides_take_priority_and_are_coerced(self, db):
+        appendice = _block_for_preset("dai", db)
+
+        context = build_context(appendice, {
+            "appendicite_type": "phlegmoneuse",
+            "appendix_size_cm": "7.5",
+            "false_membranes": "1",
+        })
+
+        assert context["appendicite_type"] == "phlegmoneuse"
+        assert context["appendix_size_cm"] == 7.5
+        assert context["appendix_size_cm_display"] == "7.5"
+        assert context["false_membranes"] is True
+
+    def test_adds_fragment_text_and_site_label(self, db):
+        antrum = _block_for_preset("gt", db, "antrum")
+
+        context = build_context(antrum)
+
+        assert context["fragments"] == 3
+        assert context["fragment_text"] == "3 fragments biopsiques inclus en totalité."
+        assert context["site_label"] == "antrale"
+
+
+class TestRenderBlock:
+    def test_single_specimen_uses_macro_and_micro_headers(self, db):
+        appendice = _block_for_preset("dai", db)
+
+        micro, conclusion = render_block(appendice, total_specimens=1)
+
+        assert micro.startswith(
+            "**Examen macroscopique**\nIl s'agit d'un appendice mesurant 8 cm de longueur."
+        )
+        assert micro.count("**Examen macroscopique**") == 1
+        assert micro.count("**Examen microscopique**") == 1
+        assert "\n\n\n**Examen microscopique**\n" in micro
+        assert conclusion == "Endo-appendicite aiguë."
+
+    def test_multi_specimen_omits_exam_headers_and_applies_overrides(self, db):
+        appendice = _block_for_preset("dai", db)
+
+        micro, conclusion = render_block(appendice, {
+            "appendicite_type": "phlegmoneuse",
+            "appendix_size_cm": "7.5",
+            "false_membranes": "1",
+        }, total_specimens=2)
+
+        assert micro.startswith(
+            "Il s'agit d'un appendice mesurant 7.5 cm de longueur. Présence de fausses membranes.\n\n"
+        )
+        assert "Examen macroscopique" not in micro
+        assert "Examen microscopique" not in micro
+        assert conclusion == "Appendicite aiguë phlegmoneuse avec péri-appendicite."
+
+    @pytest.mark.parametrize("total_specimens", [1, 2])
+    def test_block_without_macro_template_renders_micro_only(self, total_specimens):
+        block = {
+            "fields": [],
+            "macro_template": None,
+            "micro_template": "Microscopie seule.",
+            "conclusion_template": "Conclusion seule.",
+        }
+
+        assert render_block(block, total_specimens=total_specimens) == (
+            "Microscopie seule.", "Conclusion seule."
+        )

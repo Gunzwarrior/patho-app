@@ -85,8 +85,10 @@ which checkpoints are safe to hand an unfamiliar model first.
       parameter (additive, `python3 init_db.py` unaffected). Verified:
       39 tests pass in <0.1s; real `pathology.db`'s checksum confirmed
       unchanged before/after a full run, not just assumed.
-- [x] 1. `test_rendering.py` — mostly done (pure functions covered;
-      `build_context`/`render_block` themselves not yet).
+- [x] 1. `test_rendering.py` — complete: pure functions, DB-backed
+      resolved contexts/defaults/live overrides, and `render_block`'s
+      single-specimen, multi-specimen, and no-macro paths are covered.
+      Verified: 64 tests pass; real `pathology.db` checksum unchanged.
 - [x] 2. `test_quicktype.py` — lookup/measurement consumption,
       `digit_width`, multi-block rollover/skip semantics, every config
       validator rejection path, and DB-backed `parse_quick_type` are
