@@ -46,6 +46,26 @@ class TestMergeSection:
         merged = grouping._merge_section(entries, index_offset=0)
         assert [item[:2] for item in merged] == [("1", "Même A"), ("2", "Différent"), ("3", "Même C")]
 
+    def test_reordering_can_break_a_merge(self, monkeypatch):
+        monkeypatch.setattr(grouping, "get_combined_label", lambda run: "combined")
+        a = _entry(_block("a", "A", "Même {{ site_label }}", site_label="A"), conc_txt="Même A")
+        b = _entry(_block("b", "B", "Même {{ site_label }}", site_label="B"), conc_txt="Même B")
+        other = _entry(_block("other", "Other", "Autre"), conc_txt="Autre")
+
+        assert [item[:2] for item in grouping._merge_section([a, other, b], 0)] == [
+            ("1", "Même A"), ("2", "Autre"), ("3", "Même B")
+        ]
+
+    def test_reordering_can_create_a_merge(self, monkeypatch):
+        monkeypatch.setattr(grouping, "get_combined_label", lambda run: "combined")
+        a = _entry(_block("a", "A", "Même {{ site_label }}", site_label="A"), conc_txt="Même A")
+        b = _entry(_block("b", "B", "Même {{ site_label }}", site_label="B"), conc_txt="Même B")
+        other = _entry(_block("other", "Other", "Autre"), conc_txt="Autre")
+
+        assert [item[:2] for item in grouping._merge_section([a, b, other], 0)] == [
+            ("1-2", "Même combined"), ("3", "Autre")
+        ]
+
 
 class TestPartitionIntoSections:
     def test_no_conclusion_groups_keeps_one_section(self):

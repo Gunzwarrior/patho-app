@@ -442,10 +442,49 @@ st.markdown("---")
 if selected_label != "-- Select --":
     preset = presets[preset_labels.index(selected_label) - 1]
     preset_blocks = db.get_preset_blocks(preset["id"])
-    block_instances = st.session_state.get(
-        "_case_block_instances", composition.derive_block_instances(preset_blocks)
-    )
+    if "_case_block_instances" not in st.session_state:
+        st.session_state["_case_block_instances"] = composition.derive_block_instances(preset_blocks)
+    block_instances = st.session_state["_case_block_instances"]
     blocks = resolve_case_blocks(preset_blocks, block_instances)
+
+    with st.expander("🧩 Compose specimens"):
+        st.caption("Réordonnez les spécimens ou retirez ceux qui ne font pas partie de ce cas.")
+        for index, block in enumerate(blocks):
+            name_col, up_col, down_col, remove_col = st.columns([6, 1, 1, 2])
+            with name_col:
+                st.markdown(f"{index + 1}. {block['name']}")
+            with up_col:
+                move_up = st.button("▲", key=f"compose_up_{index}", disabled=index == 0)
+            with down_col:
+                move_down = st.button("▼", key=f"compose_down_{index}", disabled=index == len(blocks) - 1)
+            with remove_col:
+                remove = st.button("Retirer", key=f"compose_remove_{index}", disabled=len(blocks) == 1)
+
+            if move_up or move_down:
+                neighbor = index - 1 if move_up else index + 1
+                for note in st.session_state.get("wildcard_notes", []):
+                    if note.get("target_idx") == index:
+                        note["target_idx"] = neighbor
+                    elif note.get("target_idx") == neighbor:
+                        note["target_idx"] = index
+                st.session_state["_case_block_instances"] = composition.move_instance(
+                    block_instances, index, -1 if move_up else 1
+                )
+                st.rerun()
+
+            if remove:
+                removed = block_instances[index]
+                prefix = f"field_{removed['block_id']}_{removed['instance_no']}_"
+                for key in list(st.session_state):
+                    if key.startswith(prefix):
+                        del st.session_state[key]
+                st.session_state["wildcard_notes"] = [
+                    {**note, "target_idx": note["target_idx"] - (note["target_idx"] > index)}
+                    for note in st.session_state.get("wildcard_notes", [])
+                    if note.get("target_idx") != index
+                ]
+                st.session_state["_case_block_instances"] = composition.remove_instance(block_instances, index)
+                st.rerun()
 
     # Peeked early: the actual master_lock toggle widget is declared later
     # (in "2. Final Report"), but field edits made while it's on have no

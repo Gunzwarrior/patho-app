@@ -147,6 +147,28 @@ class TestSaveAndSafetyGates:
         assert not mutable_workspace.exception
         assert mutable_workspace.session_state["_case_block_instances"] == expected_instances
 
+    def test_reorder_and_remove_composition_round_trip(self, mutable_workspace):
+        _select_preset(mutable_workspace, _preset_label(mutable_workspace, "gt"))
+        generation = mutable_workspace.session_state["_form_generation"]
+        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("GT-REORDER-1").run()
+
+        initial = list(mutable_workspace.session_state["_case_block_instances"])
+        mutable_workspace.button(key="compose_down_0").click().run()
+        assert mutable_workspace.session_state["_case_block_instances"] == [initial[1], initial[0], initial[2]]
+
+        mutable_workspace.button(key="compose_remove_1").click().run()
+        expected = [initial[1], initial[2]]
+        assert mutable_workspace.session_state["_case_block_instances"] == expected
+        _button_by_label(mutable_workspace, "💾 Save as Pending").click().run()
+
+        reopened = AppTest.from_file("pages/workspace.py")
+        reopened.run()
+        reopened.session_state["_reopen_case_number"] = "GT-REORDER-1"
+        reopened.session_state["_do_case_reopen"] = True
+        reopened.run()
+        assert not reopened.exception
+        assert reopened.session_state["_case_block_instances"] == expected
+
     def test_existing_case_disables_save_until_overwrite_is_confirmed(self, mutable_workspace):
         dai = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
         assert db_module.save_case("DUP-1", dai["id"], "", {}, "", status="pending", pending_reason="IHC")

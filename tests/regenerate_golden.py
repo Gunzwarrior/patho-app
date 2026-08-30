@@ -40,6 +40,8 @@ VARIATIONS = {
 # them synthetic avoids a testing-only item in the clinical dropdown.
 SCENARIOS = {
     "synthetic_gallbladder_appendix": (("vb", "vesicule_biliaire"), ("dai", "appendice")),
+    "reordered_gt_break_merge": (("gt", "antrum"), ("gt", "duodenum"), ("gt", "fundus")),
+    "reordered_gt_create_merge": (("gt", "duodenum"), ("gt", "fundus"), ("gt", "antrum")),
 }
 
 

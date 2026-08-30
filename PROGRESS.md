@@ -66,8 +66,33 @@ untouched by the suite. Full structure and update ritual live in
 
 ## Currently mid-task
 
-**No task currently mid-flight. Per-case Block composition — Stage 0
-COMPLETE (uncommitted).** Live history was verified at session start
+**No task currently mid-flight. Per-case Block composition — Stage 1
+COMPLETE (uncommitted).** Stage 0 is committed as `384f43c`. Stage 1 adds
+only remove and ▲▼ reorder controls, preserving immutable `instance_no`
+while changing the ordered case list. Wildcard-note targets move with their
+specimen (and are dropped when that specimen is removed), since their saved
+target is index-based. No add-existing-Block work is included until Stage 2.
+
+`composition.py` now has pure remove/swap operations; Workspace has a
+collapsed composition panel; and field session state is hard-cleared when
+an instance is removed. Reorder and remove survive isolated
+save→fresh-reopen testing. Grouping tests cover both a reorder that breaks
+a merge and one that creates it; corresponding reordered Gastric Trio golden
+fixtures were generated from the isolated seeded DB. Verified: 97 tests
+pass; all existing fixtures plus the two new fixtures regenerate unchanged;
+the real DB checksum remains `d49901af6a4fc82bac0e0dcb1f9fc33e0cfc26010dfbdb107cd272c8a04da7a8`;
+`py_compile`, `git diff --check`, and an `app.py` Streamlit boot fetched
+with `wget` pass.
+
+**Process correction during Stage 1:** a one-off ad-hoc inspection command
+accidentally read (but did not write) real `pathology.db`, violating the
+test-isolation rule. The checksum immediately confirmed no mutation; all
+subsequent inspection/golden work used the isolated seeded DB. Do not repeat
+this — use `db`/`mutable_db` fixtures or `regenerate_golden.py` for every
+test/exploratory render.
+
+**Per-case Block composition — Stage 0 COMPLETE.** Live history was verified
+at its start
 (`b56c38c` HEAD). `composition.derive_block_instances()` establishes a
 Preset's ordered default list; Workspace now saves it as
 `structured_input.block_instances` and restores it on reopen, with the

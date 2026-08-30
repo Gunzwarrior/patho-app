@@ -24,6 +24,7 @@ import pathlib
 import pytest
 
 from golden_helpers import get_preset_blocks, render_blocks, render_preset, render_preset_defaults
+from regenerate_golden import SCENARIOS
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "golden_fixtures"
 
@@ -69,4 +70,16 @@ class TestGoldenOutputVariations:
 
         assert micro == _read_fixture("synthetic_gallbladder_appendix_micro.txt")
         assert conclusion == _read_fixture("synthetic_gallbladder_appendix_conclusion.txt")
+        assert conflicts == []
+
+    @pytest.mark.parametrize("scenario", ["reordered_gt_break_merge", "reordered_gt_create_merge"])
+    def test_reordered_gastric_trio_cases(self, scenario):
+        blocks = []
+        for short_code, block_key in SCENARIOS[scenario]:
+            block = next(block for block in get_preset_blocks(short_code) if block["key"] == block_key)
+            blocks.append((block, {}))
+
+        micro, conclusion, conflicts = render_blocks(blocks)
+        assert micro == _read_fixture(f"{scenario}_micro.txt")
+        assert conclusion == _read_fixture(f"{scenario}_conclusion.txt")
         assert conflicts == []

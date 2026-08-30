@@ -16,3 +16,18 @@ def derive_block_instances(preset_blocks):
         {"block_id": block["block_id"], "instance_no": block["sort_order"]}
         for block in preset_blocks
     ]
+
+
+def remove_instance(block_instances, index):
+    """Return the composition without one instance (hard removal)."""
+    return block_instances[:index] + block_instances[index + 1:]
+
+
+def move_instance(block_instances, index, offset):
+    """Return a copy with one instance swapped with its neighbor."""
+    target = index + offset
+    if not 0 <= target < len(block_instances):
+        return list(block_instances)
+    moved = list(block_instances)
+    moved[index], moved[target] = moved[target], moved[index]
+    return moved
