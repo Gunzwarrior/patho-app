@@ -5,13 +5,11 @@ values -- catches any silent change to a template, to build_context's
 resolution logic, or to the grouping/numbering engine, for a case type
 nobody happens to be actively working on right now.
 
-This file currently covers ONE preset (dai / Appendice) as the worked
-example. Extending it to the other 8 real presets, plus a handful of
-deliberately-chosen non-default variations (Appendix with
-false_membranes=True + phlegmoneuse; a synthetic 2-specimen case to
-lock in the multi-specimen numbering/header logic) is Checkpoint 5 in
-TESTING.md -- left as a real, separable piece of work rather than
-filled in here.
+This file covers the stable current presets (`dai`, `gt`, `vb`), one
+deliberately chosen Appendix variation, and a synthetic two-specimen
+case that locks the historically fragile numbering/header behavior.
+Thyroid fixtures are deliberately deferred until `etc0`–`etc5` have
+been consolidated into Quick Type; TESTING.md tracks that boundary.
 
 If a fixture legitimately needs to change (a real, intentional content
 edit, not a regression): run
@@ -25,7 +23,7 @@ confirming the NEW output is actually correct.
 import pathlib
 import pytest
 
-from golden_helpers import render_preset, render_preset_defaults
+from golden_helpers import get_preset_blocks, render_blocks, render_preset, render_preset_defaults
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "golden_fixtures"
 
@@ -62,4 +60,13 @@ class TestGoldenOutputVariations:
         })
         assert micro == _read_fixture("dai_phlegmoneuse_false_membranes_micro.txt")
         assert conclusion == _read_fixture("dai_phlegmoneuse_false_membranes_conclusion.txt")
+        assert conflicts == []
+
+    def test_synthetic_gallbladder_appendix_multi_specimen_case(self):
+        gallbladder = get_preset_blocks("vb")[0]
+        appendix = get_preset_blocks("dai")[0]
+        micro, conclusion, conflicts = render_blocks([(gallbladder, {}), (appendix, {})])
+
+        assert micro == _read_fixture("synthetic_gallbladder_appendix_micro.txt")
+        assert conclusion == _read_fixture("synthetic_gallbladder_appendix_conclusion.txt")
         assert conflicts == []

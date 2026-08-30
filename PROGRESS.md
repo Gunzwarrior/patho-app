@@ -104,9 +104,10 @@ which checkpoints are safe to hand an unfamiliar model first.
 - [ ] 5. `test_golden_output.py` — in progress: default fixtures for
       `dai`, `gt`, and `vb`, plus the consistent Appendix
       phlegmoneuse/false-membranes variation, are frozen from the real
-      rendering pipeline and covered (69 tests pass). Thyroid fixtures
-      are deliberately deferred until `etc0`–`etc5` are consolidated
-      into Quick Type; the synthetic 2-specimen regression remains open.
+      rendering pipeline and covered, as is a synthetic
+      Gallbladder+Appendix two-specimen regression (70 tests pass).
+      Thyroid fixtures are deliberately deferred until `etc0`–`etc5`
+      are consolidated into Quick Type.
 - [ ] 6. `test_workspace_ui.py` — not started. Save for last / most-
       trusted model: this is where the real historical fragility lives
       (the widget-key bug alone took three occurrences to become a

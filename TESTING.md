@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-69 tests currently exist, running in well under a second.
+70 tests currently exist, running in well under a second.
 
 ## Structure
 
@@ -193,13 +193,13 @@ validation feature was actually verified with. Good reference for the
 are frozen for `dai`, `gt`, and `vb`, plus the deliberately chosen
 field-consistency-compatible Appendix variation
 (`false_membranes=True` + `appendicite_type=phlegmoneuse`). The
-regeneration tool now supports named variations as well as defaults.
-Thyroid fixtures (`etc0`–`etc5`, `etc_bi`) are deliberately deferred
-until the planned Quick Type/preset consolidation settles; then freeze
-the resulting real preset shapes rather than short-lived intermediary
-ones. Still open: a synthetic 2-specimen case to lock in the
-multi-specimen numbering/header logic specifically — historically the
-most error-prone area in this codebase.
+regeneration tool now supports named variations and synthetic scenarios
+as well as defaults. The synthetic Gallbladder+Appendix case freezes
+the multi-specimen numbering/header structure, including the absence of
+single-specimen “Examen…” labels. Thyroid fixtures (`etc0`–`etc5`,
+`etc_bi`) are deliberately deferred until the planned Quick
+Type/preset consolidation settles; then freeze the resulting real
+preset shapes rather than short-lived intermediary ones.
 
 **Checkpoint 6 — `test_workspace_ui.py`: not started, save for last.**
 `AppTest`-based coverage of the historically fragile session-state

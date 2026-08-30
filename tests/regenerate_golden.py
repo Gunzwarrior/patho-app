@@ -11,6 +11,7 @@ Usage (from the project root, with the venv active):
     python3 tests/regenerate_golden.py dai
     python3 tests/regenerate_golden.py dai vb gt
     python3 tests/regenerate_golden.py dai_phlegmoneuse_false_membranes
+    python3 tests/regenerate_golden.py synthetic_gallbladder_appendix
 """
 
 import sys
@@ -22,7 +23,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import init_db
 import database as db
-from golden_helpers import render_preset, render_preset_defaults
+from golden_helpers import get_preset_blocks, render_blocks, render_preset, render_preset_defaults
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "golden_fixtures"
 
@@ -33,6 +34,12 @@ VARIATIONS = {
         "dai",
         {0: {"appendicite_type": "phlegmoneuse", "false_membranes": "1"}},
     ),
+}
+
+# Deliberate multi-specimen regression cases. These are not Presets: keeping
+# them synthetic avoids a testing-only item in the clinical dropdown.
+SCENARIOS = {
+    "synthetic_gallbladder_appendix": (("vb", "vesicule_biliaire"), ("dai", "appendice")),
 }
 
 
@@ -55,10 +62,18 @@ def regenerate(fixture_key):
         micro, conclusion, conflicts = render_preset(short_code, overrides_by_block)
         if conflicts:
             raise ValueError(f"{fixture_key} has unexpected addendum conflicts: {conflicts}")
+    elif fixture_key in SCENARIOS:
+        blocks = []
+        for short_code, block_key in SCENARIOS[fixture_key]:
+            block = next(block for block in get_preset_blocks(short_code) if block["key"] == block_key)
+            blocks.append((block, {}))
+        micro, conclusion, conflicts = render_blocks(blocks)
+        if conflicts:
+            raise ValueError(f"{fixture_key} has unexpected addendum conflicts: {conflicts}")
     else:
         micro, conclusion = render_preset_defaults(fixture_key)
 
-    suffix = f"{fixture_key}_default" if fixture_key not in VARIATIONS else fixture_key
+    suffix = f"{fixture_key}_default" if fixture_key not in VARIATIONS | SCENARIOS else fixture_key
     micro_path = FIXTURES_DIR / f"{suffix}_micro.txt"
     conclusion_path = FIXTURES_DIR / f"{suffix}_conclusion.txt"
 
