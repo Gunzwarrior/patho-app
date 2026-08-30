@@ -108,11 +108,11 @@ which checkpoints are safe to hand an unfamiliar model first.
       Gallbladder+Appendix two-specimen regression (70 tests pass).
       Thyroid fixtures are deliberately deferred until `etc0`–`etc5`
       are consolidated into Quick Type.
-- [ ] 6. `test_workspace_ui.py` — in progress: AppTest covers the
-      `etc0`→`etc5` generation/reset path and Quick Type's atomic
-      success/failure behavior (73 tests pass). Still open: save-reset,
-      duplicate-case, and consistency-validation flows using
-      `mutable_db`.
+- [x] 6. `test_workspace_ui.py` — complete: AppTest covers the
+      `etc0`→`etc5` generation/reset path, Quick Type's atomic
+      success/failure behavior, same-preset save reset, duplicate-case
+      gating, and consistency validation/confirmation using `mutable_db`.
+      Verified: 76 tests pass; real `pathology.db` checksum unchanged.
 - [ ] 7. Wire into the documented workflow — **partially done**:
       CLAUDE.md's "Testing discipline" and its Editor UI note both now
       point at TESTING.md and list `pytest` as the first step. Not yet

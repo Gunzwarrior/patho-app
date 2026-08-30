@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-73 tests currently exist, running in well under a second.
+76 tests currently exist, running in well under a second.
 
 ## Structure
 
@@ -201,15 +201,13 @@ single-specimen “Examen…” labels. Thyroid fixtures (`etc0`–`etc5`,
 Type/preset consolidation settles; then freeze the resulting real
 preset shapes rather than short-lived intermediary ones.
 
-**Checkpoint 6 — `test_workspace_ui.py`: in progress.** Initial
-`AppTest` coverage locks the historically fragile direct
-`etc0`→`etc5` preset switch (generation bump, preserved Case ID, and
-reset field default) and Quick Type’s atomic success/failure behavior.
-Still open: same-preset Save-triggered reset, duplicate-case guard, and
-consistency-validation banner/gate. Those save paths need `mutable_db`.
-This is where the real fragility in this codebase has lived — the
-widget-key bug alone took three separate real occurrences to become a
-named convention — so it deserves the most care.
+**Checkpoint 6 — `test_workspace_ui.py`: DONE.** `AppTest` coverage
+locks the historically fragile direct `etc0`→`etc5` preset switch
+(generation bump, preserved Case ID, and reset field default), Quick
+Type’s atomic success/failure behavior, a real isolated pending save
+plus same-preset generation reset, duplicate-case Save gating, and the
+consistency-warning confirmation gate. Write paths use `mutable_db`; a
+full run confirms the real `pathology.db` remains untouched.
 
 **Checkpoint 7 — wire it into the documented workflow: not started.**
 Update CLAUDE.md's "Testing discipline" so `pytest` is the first,
