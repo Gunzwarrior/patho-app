@@ -10,6 +10,7 @@ record of exactly what changed and why it's safe.
 Usage (from the project root, with the venv active):
     python3 tests/regenerate_golden.py dai
     python3 tests/regenerate_golden.py dai vb gt
+    python3 tests/regenerate_golden.py dai_phlegmoneuse_false_membranes
 """
 
 import sys
@@ -21,9 +22,18 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import init_db
 import database as db
-from golden_helpers import render_preset_defaults
+from golden_helpers import render_preset, render_preset_defaults
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "golden_fixtures"
+
+# Deliberately chosen non-default baselines. The key is also the fixture
+# filename prefix; values mirror live widget overrides by block sort_order.
+VARIATIONS = {
+    "dai_phlegmoneuse_false_membranes": (
+        "dai",
+        {0: {"appendicite_type": "phlegmoneuse", "false_membranes": "1"}},
+    ),
+}
 
 
 def _show_diff(label, old_text, new_text):
@@ -39,16 +49,23 @@ def _show_diff(label, old_text, new_text):
     print("".join(diff))
 
 
-def regenerate(short_code):
-    micro, conclusion = render_preset_defaults(short_code)
+def regenerate(fixture_key):
+    if fixture_key in VARIATIONS:
+        short_code, overrides_by_block = VARIATIONS[fixture_key]
+        micro, conclusion, conflicts = render_preset(short_code, overrides_by_block)
+        if conflicts:
+            raise ValueError(f"{fixture_key} has unexpected addendum conflicts: {conflicts}")
+    else:
+        micro, conclusion = render_preset_defaults(fixture_key)
 
-    micro_path = FIXTURES_DIR / f"{short_code}_default_micro.txt"
-    conclusion_path = FIXTURES_DIR / f"{short_code}_default_conclusion.txt"
+    suffix = f"{fixture_key}_default" if fixture_key not in VARIATIONS else fixture_key
+    micro_path = FIXTURES_DIR / f"{suffix}_micro.txt"
+    conclusion_path = FIXTURES_DIR / f"{suffix}_conclusion.txt"
 
     old_micro = micro_path.read_text(encoding="utf-8") if micro_path.exists() else ""
     old_conclusion = conclusion_path.read_text(encoding="utf-8") if conclusion_path.exists() else ""
 
-    print(f"{short_code}:")
+    print(f"{fixture_key}:")
     _show_diff("micro", old_micro, micro)
     _show_diff("conclusion", old_conclusion, conclusion)
 

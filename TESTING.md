@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-64 tests currently exist, running in well under a second.
+69 tests currently exist, running in well under a second.
 
 ## Structure
 
@@ -131,10 +131,13 @@ often won't, because nothing about it looks wrong on its own.
    record of exactly how a real report's output changed — arguably
    more informative than the code diff that caused it.
 
-One fixture pair exists today: `dai` (Appendice) at its stored default
-values — confirmed byte-exact against the app's actual rendering
-pipeline, not typed by hand. Extending to the other 8 real presets plus
-a few deliberately-chosen non-default cases is Checkpoint 5.
+Four fixture pairs exist today: `dai`, `gt`, and `vb` at their stored
+default values, plus Appendix with `false_membranes=True` and
+`appendicite_type=phlegmoneuse`. All are generated from the app's actual
+rendering pipeline, not typed by hand. Thyroid fixtures are deliberately
+deferred until the planned `etc0`–`etc5` Quick Type consolidation has
+settled; freezing those soon-to-change presets now would create churn,
+not protection.
 
 ## What's deliberately not automated
 
@@ -186,21 +189,17 @@ formalizes the ad-hoc script this session's field-consistency
 validation feature was actually verified with. Good reference for the
 *shape* other checkpoints should take.
 
-**Checkpoint 5 — `test_golden_output.py`: one fixture pair done, eight
-to go.** Extend to the remaining 8 real presets (`gt`, `vb`, `etc0`-
-`etc5`, `etc_bi`) at their defaults, plus a small number of
-deliberately-chosen variations: Appendix with `false_membranes=True` +
-`appendicite_type=phlegmoneuse` (the field-consistency-compatible edge
-case), and a synthetic 2-specimen case to lock in the multi-specimen
-numbering/header logic specifically — historically the most
-error-prone area in this codebase (wrong twice before it was right).
-Open question worth Thomas's input, not decided here: does he still
-have the original docx samples other case types were verified against?
-If yes, cross-check new fixtures against those before freezing. If not,
-current app output — already confirmed correct in his own browser
-repeatedly — is a reasonable starting baseline, with the same "confirm
-before freezing" discipline applying to whichever check is actually
-available.
+**Checkpoint 5 — `test_golden_output.py`: in progress.** Default pairs
+are frozen for `dai`, `gt`, and `vb`, plus the deliberately chosen
+field-consistency-compatible Appendix variation
+(`false_membranes=True` + `appendicite_type=phlegmoneuse`). The
+regeneration tool now supports named variations as well as defaults.
+Thyroid fixtures (`etc0`–`etc5`, `etc_bi`) are deliberately deferred
+until the planned Quick Type/preset consolidation settles; then freeze
+the resulting real preset shapes rather than short-lived intermediary
+ones. Still open: a synthetic 2-specimen case to lock in the
+multi-specimen numbering/header logic specifically — historically the
+most error-prone area in this codebase.
 
 **Checkpoint 6 — `test_workspace_ui.py`: not started, save for last.**
 `AppTest`-based coverage of the historically fragile session-state

@@ -25,7 +25,7 @@ confirming the NEW output is actually correct.
 import pathlib
 import pytest
 
-from golden_helpers import render_preset_defaults
+from golden_helpers import render_preset, render_preset_defaults
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "golden_fixtures"
 
@@ -43,3 +43,23 @@ class TestGoldenOutputDefaults:
     def test_appendice_default_conclusion(self):
         _, conclusion = render_preset_defaults("dai")
         assert conclusion == _read_fixture("dai_default_conclusion.txt")
+
+    @pytest.mark.parametrize("short_code", ["gt", "vb"])
+    def test_other_stable_default_micro(self, short_code):
+        micro, _ = render_preset_defaults(short_code)
+        assert micro == _read_fixture(f"{short_code}_default_micro.txt")
+
+    @pytest.mark.parametrize("short_code", ["gt", "vb"])
+    def test_other_stable_default_conclusion(self, short_code):
+        _, conclusion = render_preset_defaults(short_code)
+        assert conclusion == _read_fixture(f"{short_code}_default_conclusion.txt")
+
+
+class TestGoldenOutputVariations:
+    def test_appendice_phlegmoneuse_with_false_membranes(self):
+        micro, conclusion, conflicts = render_preset("dai", {
+            0: {"appendicite_type": "phlegmoneuse", "false_membranes": "1"}
+        })
+        assert micro == _read_fixture("dai_phlegmoneuse_false_membranes_micro.txt")
+        assert conclusion == _read_fixture("dai_phlegmoneuse_false_membranes_conclusion.txt")
+        assert conflicts == []

@@ -101,12 +101,12 @@ which checkpoints are safe to hand an unfamiliar model first.
       57 tests pass.
 - [x] 4. `test_consistency.py` — done, formalizes this session's
       ad-hoc verification script.
-- [ ] 5. `test_golden_output.py` — one fixture pair done (`dai` at
-      defaults, confirmed byte-exact against the real rendering
-      pipeline), eight presets plus a few deliberate variations still
-      open. Open question for Thomas: does he still have the original
-      docx samples other case types were verified against, to cross-
-      check new fixtures before freezing them?
+- [ ] 5. `test_golden_output.py` — in progress: default fixtures for
+      `dai`, `gt`, and `vb`, plus the consistent Appendix
+      phlegmoneuse/false-membranes variation, are frozen from the real
+      rendering pipeline and covered (69 tests pass). Thyroid fixtures
+      are deliberately deferred until `etc0`–`etc5` are consolidated
+      into Quick Type; the synthetic 2-specimen regression remains open.
 - [ ] 6. `test_workspace_ui.py` — not started. Save for last / most-
       trusted model: this is where the real historical fragility lives
       (the widget-key bug alone took three occurrences to become a
