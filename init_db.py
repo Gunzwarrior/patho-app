@@ -16,8 +16,16 @@ import seed_data
 DB_NAME = "pathology.db"
 
 
-def setup_database():
-    conn = sqlite3.connect(DB_NAME)
+def setup_database(db_name=None):
+    """
+    db_name: optional override, defaults to the module-level DB_NAME
+    (the real pathology.db) -- added so the test suite can build an
+    isolated, throwaway DB at a temp path instead of ever touching the
+    real one. `python3 init_db.py` is unaffected: it calls this with no
+    argument, same as before this parameter existed.
+    """
+    db_name = db_name or DB_NAME
+    conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute("PRAGMA foreign_keys = ON")
 
@@ -298,7 +306,7 @@ def setup_database():
 
     conn.commit()
     conn.close()
-    print("✅ Database rebuilt on v2 schema. 'pathology.db' is ready.")
+    print(f"✅ Database rebuilt on v2 schema. '{db_name}' is ready.")
 
 
 if __name__ == "__main__":

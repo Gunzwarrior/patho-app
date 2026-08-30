@@ -1,0 +1,72 @@
+"""
+Deliberately regenerate one or more golden fixtures against a preset's
+CURRENT default-value output. Never run this because a test is failing
+and you want it to pass -- run it only after confirming by other means
+(a real docx sample, or your own explicit judgment reading the new
+output) that the new rendered text is actually correct. Then read the
+`git diff` on the fixture file before committing: that diff is the
+record of exactly what changed and why it's safe.
+
+Usage (from the project root, with the venv active):
+    python3 tests/regenerate_golden.py dai
+    python3 tests/regenerate_golden.py dai vb gt
+"""
+
+import sys
+import pathlib
+import difflib
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+
+import init_db
+import database as db
+from golden_helpers import render_preset_defaults
+
+FIXTURES_DIR = pathlib.Path(__file__).parent / "golden_fixtures"
+
+
+def _show_diff(label, old_text, new_text):
+    if old_text == new_text:
+        print(f"  {label}: unchanged")
+        return
+    print(f"  {label}: CHANGED —")
+    diff = difflib.unified_diff(
+        old_text.splitlines(keepends=True),
+        new_text.splitlines(keepends=True),
+        fromfile="before", tofile="after",
+    )
+    print("".join(diff))
+
+
+def regenerate(short_code):
+    micro, conclusion = render_preset_defaults(short_code)
+
+    micro_path = FIXTURES_DIR / f"{short_code}_default_micro.txt"
+    conclusion_path = FIXTURES_DIR / f"{short_code}_default_conclusion.txt"
+
+    old_micro = micro_path.read_text(encoding="utf-8") if micro_path.exists() else ""
+    old_conclusion = conclusion_path.read_text(encoding="utf-8") if conclusion_path.exists() else ""
+
+    print(f"{short_code}:")
+    _show_diff("micro", old_micro, micro)
+    _show_diff("conclusion", old_conclusion, conclusion)
+
+    micro_path.write_text(micro, encoding="utf-8")
+    conclusion_path.write_text(conclusion, encoding="utf-8")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python3 tests/regenerate_golden.py <short_code> [<short_code> ...]")
+        sys.exit(1)
+
+    tmp_db = "pathology_golden_regen.db"
+    init_db.setup_database(db_name=tmp_db)
+    db.DB_NAME = tmp_db
+
+    for short_code in sys.argv[1:]:
+        regenerate(short_code)
+
+    pathlib.Path(tmp_db).unlink(missing_ok=True)
+    print("\nDone. Review the diffs above, then `git diff tests/golden_fixtures/` before committing.")

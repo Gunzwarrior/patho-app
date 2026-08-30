@@ -54,28 +54,66 @@ That's the whole history (11 commits) — `git log -20` returned no more.
 confirmed working in the person's real browser** — see "Fixed and
 verified this round" for both build records, "Quick Type — settled
 design" for the grammar/reasoning, and "Field-consistency validation —
-design question (RESOLVED)" for that design's reasoning. Nothing is
-currently mid-task.
+design question (RESOLVED)" for that design's reasoning.
 
-**Next up: a persistent automated test suite** — decided this session,
-not yet designed or started. See "Immediate next steps" at the bottom.
-Every round's testing so far has been ad-hoc (`AppTest`/direct-call
-scripts written fresh, then deleted — see "Testing discipline" in
-CLAUDE.md), which has worked because a tested-by-Claude round always
-sat between a template and it reaching a real case. Editor UI (Tier 3,
-still not started — see "Overall shape") is specifically about removing
-that round-trip, which removes the safety net along with it. A
-persistent suite is the planned answer, sequenced before or alongside
-Editor UI rather than after.
+**A persistent automated test suite is now mid-task** — full plan and
+per-checkpoint status live in the new **TESTING.md**, tracked briefly in
+"Currently mid-task" below. Scaffolding is built and verified (39 tests
+passing, real `pathology.db` confirmed untouched); most content
+checkpoints are still open and are meant to be picked up piecemeal,
+possibly by different sessions or different models — see TESTING.md's
+"How this fits the mixed-model workflow."
 
 ## Currently mid-task
 
-Nothing in progress right now — field-consistency validation is fully
-built and confirmed by the person in his own browser (see "Fixed and
-verified this round" for the full build record). When a task starts
-that might outlast a session, note the plan and checkpoints here as it
-goes, not just at the end. Clear this section once the task is
-genuinely done — which is what just happened.
+**Persistent test suite — plan written, scaffolding built and verified,
+content checkpoints mostly still open.** Full plan, philosophy, and
+per-checkpoint detail now live in **TESTING.md**, not duplicated here —
+this section just tracks status.
+
+Decided this session: a persistent `pytest` suite is a prerequisite/
+companion to Editor UI, since Editor UI removes the Claude-tested
+round-trip that today's ad-hoc, thrown-away testing depends on as its
+safety net, and since a mixed-model workflow means a change might come
+from a tool with no track record on this codebase. TESTING.md's own
+"How this fits the mixed-model workflow" section has the reasoning on
+which checkpoints are safe to hand an unfamiliar model first.
+
+**Checkpoint status** (see TESTING.md for what each one covers and why):
+- [x] 0. Scaffolding — `tests/conftest.py`'s `db`/`mutable_db`
+      fixtures, `init_db.setup_database()`'s new optional `db_name`
+      parameter (additive, `python3 init_db.py` unaffected). Verified:
+      39 tests pass in <0.1s; real `pathology.db`'s checksum confirmed
+      unchanged before/after a full run, not just assumed.
+- [x] 1. `test_rendering.py` — mostly done (pure functions covered;
+      `build_context`/`render_block` themselves not yet).
+- [ ] 2. `test_quicktype.py` — partial (validator + pure parsing
+      functions covered; `parse_tokens`'s token-consumption paths and
+      the DB-backed `parse_quick_type` entry point are not).
+- [ ] 3. `test_grouping.py` — not started.
+- [x] 4. `test_consistency.py` — done, formalizes this session's
+      ad-hoc verification script.
+- [ ] 5. `test_golden_output.py` — one fixture pair done (`dai` at
+      defaults, confirmed byte-exact against the real rendering
+      pipeline), eight presets plus a few deliberate variations still
+      open. Open question for Thomas: does he still have the original
+      docx samples other case types were verified against, to cross-
+      check new fixtures before freezing them?
+- [ ] 6. `test_workspace_ui.py` — not started. Save for last / most-
+      trusted model: this is where the real historical fragility lives
+      (the widget-key bug alone took three occurrences to become a
+      named convention).
+- [ ] 7. Wire into the documented workflow — **partially done**:
+      CLAUDE.md's "Testing discipline" and its Editor UI note both now
+      point at TESTING.md and list `pytest` as the first step. Not yet
+      done: nothing to add here until checkpoints 2-6 exist to be
+      pointed at as "the suite."
+
+When a task starts that might outlast a session, note the plan and
+checkpoints here as it goes, not just at the end. Clear this section
+once the task is genuinely done — not yet, most content checkpoints are
+still open and are meant to be picked up piecemeal, possibly by
+different sessions or different models.
 
 ## Fixed and verified this round
 
@@ -576,26 +614,25 @@ rather than deferring reconstruction to whichever session syncs next.
 
 ## Immediate next steps, if resuming without other instructions
 
-1. **A persistent automated test suite is the decided next step** —
-   agreed this session, design not yet discussed. Currently *every*
-   round's testing is ad-hoc and thrown away afterward (see "Testing
-   discipline" in CLAUDE.md) — that's worked because a Claude-tested
-   round has always sat between a template change and a real case ever
-   seeing it. Editor UI removes that round-trip on purpose, which is
-   exactly why this needs to exist first or alongside it, not after.
-   Open before writing any code: what runs it (`pytest`? something
-   simpler?), what "golden output" means for the rendering engine (a
-   fixed set of known-good rendered reports to diff against, per case
-   type?), and how it plugs into the existing "regression pass across
-   every case type" habit instead of duplicating it.
+1. **Persistent test suite: pick up the next open checkpoint in
+   TESTING.md.** Scaffolding (checkpoint 0) is done and verified;
+   checkpoints 1 and 4 are mostly/fully done as worked examples;
+   checkpoints 2, 3, 5, 6 are open, separable, and — per TESTING.md's
+   own "How this fits the mixed-model workflow" — deliberately suited to
+   being picked up by different sessions or different models rather
+   than needing to be done in one sitting by one of them. Checkpoint 6
+   (`AppTest`-based UI flows) is the one place real historical fragility
+   lives — save it for last, or for the model with the most track record
+   on this codebase.
 2. Ask for a fresh `git log` at the start of any new session regardless
    — this session's reconciliation (see "Where we are right now") is
    only current as of `d4a1a96`. The `0b498c4` question from earlier
    rounds is fully resolved, not something to re-raise.
-3. Once the test suite exists (or alongside it): Editor UI (Tier 3) is
-   the next real feature. Extending field-consistency validation beyond
-   the Appendix pilot, extending Quick Type configs to Gallbladder/
-   Thyroid, and extending the context/title/conclusion pattern to a
-   future breast preset are all candidate *later* work on top of that,
-   no forced order between them, none currently active.
-3. Don't start the Editor (Tier 3) until Tier 2's content is stable.
+3. Once the test suite's core checkpoints exist (or alongside finishing
+   them): Editor UI (Tier 3) is the next real feature — don't start it
+   until Tier 2's content is stable, per "Overall shape." Extending
+   field-consistency validation beyond the Appendix pilot, extending
+   Quick Type configs to Gallbladder/Thyroid, and extending the
+   context/title/conclusion pattern to a future breast preset are all
+   candidate *later* work on top of that, no forced order between them,
+   none currently active.
