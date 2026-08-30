@@ -113,17 +113,17 @@ which checkpoints are safe to hand an unfamiliar model first.
       success/failure behavior, same-preset save reset, duplicate-case
       gating, and consistency validation/confirmation using `mutable_db`.
       Verified: 76 tests pass; real `pathology.db` checksum unchanged.
-- [ ] 7. Wire into the documented workflow — **partially done**:
-      CLAUDE.md's "Testing discipline" and its Editor UI note both now
-      point at TESTING.md and list `pytest` as the first step. Not yet
-      done: nothing to add here until checkpoints 2-6 exist to be
-      pointed at as "the suite."
+- [x] 7. Wire into the documented workflow — complete: CLAUDE.md makes
+      `pytest` the first/default step, points to TESTING.md for scope
+      and DB isolation, and retains the appropriate AppTest and manual
+      browser/boot boundaries. PROGRESS.md now records checkpoints 1-7
+      as they land.
 
 When a task starts that might outlast a session, note the plan and
 checkpoints here as it goes, not just at the end. Clear this section
-once the task is genuinely done — not yet, most content checkpoints are
-still open and are meant to be picked up piecemeal, possibly by
-different sessions or different models.
+once the task is genuinely done — not yet: only the intentionally
+deferred Thyroid portion of Checkpoint 5 remains, pending its Quick
+Type/preset consolidation.
 
 ## Fixed and verified this round
 

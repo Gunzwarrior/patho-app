@@ -209,14 +209,13 @@ plus same-preset generation reset, duplicate-case Save gating, and the
 consistency-warning confirmation gate. Write paths use `mutable_db`; a
 full run confirms the real `pathology.db` remains untouched.
 
-**Checkpoint 7 — wire it into the documented workflow: not started.**
-Update CLAUDE.md's "Testing discipline" so `pytest` is the first,
-default step before presenting any change that fits something the
-suite already covers — the ad-hoc-script-then-delete habit stays fine
-for genuinely one-off exploratory checks that don't belong in the
-permanent suite, but stops being the *only* option. Point CLAUDE.md at
-this file. Update PROGRESS.md to track completion the same way
-field-consistency validation's checkpoints were tracked.
+**Checkpoint 7 — wire it into the documented workflow: DONE.**
+`CLAUDE.md`'s Testing discipline makes `pytest` the first/default step,
+points directly here for checkpoint scope and DB isolation, and retains
+the appropriate follow-on checks (`py_compile`, direct realistic cases,
+AppTest, and a manual full boot check). `PROGRESS.md` records each
+checkpoint as it lands. One-off exploratory checks still remain
+throwaway scripts when they do not belong in the permanent suite.
 
 ## How this fits the mixed-model workflow
 
