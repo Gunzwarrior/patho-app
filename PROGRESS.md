@@ -66,10 +66,10 @@ possibly by different sessions or different models — see TESTING.md's
 
 ## Currently mid-task
 
-**Persistent test suite — plan written, scaffolding built and verified,
-content checkpoints mostly still open.** Full plan, philosophy, and
-per-checkpoint detail now live in **TESTING.md**, not duplicated here —
-this section just tracks status.
+**Persistent test suite — COMPLETE.** Full plan, philosophy, and
+per-checkpoint detail live in **TESTING.md**. All currently defined
+checkpoints are complete and the suite is ready to accompany the future
+Editor UI work.
 
 Decided this session: a persistent `pytest` suite is a prerequisite/
 companion to Editor UI, since Editor UI removes the Claude-tested
@@ -101,13 +101,11 @@ which checkpoints are safe to hand an unfamiliar model first.
       57 tests pass.
 - [x] 4. `test_consistency.py` — done, formalizes this session's
       ad-hoc verification script.
-- [ ] 5. `test_golden_output.py` — in progress: default fixtures for
-      `dai`, `gt`, and `vb`, plus the consistent Appendix
-      phlegmoneuse/false-membranes variation, are frozen from the real
-      rendering pipeline and covered, as is a synthetic
-      Gallbladder+Appendix two-specimen regression (70 tests pass).
-      Thyroid fixtures are deliberately deferred until `etc0`–`etc5`
-      are consolidated into Quick Type.
+- [x] 5. `test_golden_output.py` — complete: fixture pairs freeze all
+      nine current clinical presets, the consistent Appendix
+      phlegmoneuse/false-membranes variation, and a synthetic
+      Gallbladder+Appendix two-specimen regression. `etc_bi` is frozen
+      with the approved Bethesda II + II default; 88 tests pass.
 - [x] 6. `test_workspace_ui.py` — complete: AppTest covers the
       `etc0`→`etc5` generation/reset path, Quick Type's atomic
       success/failure behavior, same-preset save reset, duplicate-case
@@ -119,11 +117,9 @@ which checkpoints are safe to hand an unfamiliar model first.
       browser/boot boundaries. PROGRESS.md now records checkpoints 1-7
       as they land.
 
-When a task starts that might outlast a session, note the plan and
-checkpoints here as it goes, not just at the end. Clear this section
-once the task is genuinely done — not yet: only the intentionally
-deferred Thyroid portion of Checkpoint 5 remains, pending its Quick
-Type/preset consolidation.
+The persistent test-suite task is genuinely complete. Future template,
+Quick Type, or Editor UI work should run the relevant suite first, as
+documented in CLAUDE.md and TESTING.md.
 
 ## Fixed and verified this round
 

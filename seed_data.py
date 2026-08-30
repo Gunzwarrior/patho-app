@@ -659,9 +659,9 @@ def seed_thyroid_cytology(cursor):
     # key precisely for this). Doubles as a real fast-access preset for
     # genuine 2-nodule cases (same "pre-filled, adjust as needed"
     # philosophy as etc0-etc5) and as the multi-specimen test fixture for
-    # the context/title composition work — default values deliberately
-    # set to CR_Sample.docx's real two nodules, so its rendered output can
-    # be byte-matched directly against that sample.
+    # the context/title composition work. Defaults deliberately cover the
+    # more common real two-nodule shape (Bethesda II in both nodules), not
+    # the older CR_Sample.docx pairing of Bethesda II + I.
     print("Seeding Preset 'etc_bi' (2-nodule fast-access)...")
     cursor.execute(
         "INSERT INTO Presets (short_code, name, category, default_adicap, default_title) VALUES (?, ?, ?, ?, ?)",
@@ -670,7 +670,7 @@ def seed_thyroid_cytology(cursor):
     bi_preset_id = cursor.lastrowid
     bi_nodules = [
         {"nodule_site": "lobaire gauche", "nodule_size_mm": "20", "nodule_eutirads": "4", "thyroid_cytology_pattern": "etc2"},
-        {"nodule_site": "isthmique", "nodule_size_mm": "15", "nodule_eutirads": "3", "thyroid_cytology_pattern": "etc1"},
+        {"nodule_site": "isthmique", "nodule_size_mm": "15", "nodule_eutirads": "3", "thyroid_cytology_pattern": "etc2"},
     ]
     for sort_order, overrides in enumerate(bi_nodules):
         cursor.execute(

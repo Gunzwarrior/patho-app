@@ -42,12 +42,12 @@ class TestGoldenOutputDefaults:
         _, conclusion = render_preset_defaults("dai")
         assert conclusion == _read_fixture("dai_default_conclusion.txt")
 
-    @pytest.mark.parametrize("short_code", ["gt", "vb"])
+    @pytest.mark.parametrize("short_code", ["gt", "vb", "etc0", "etc1", "etc2", "etc3", "etc5", "etc_bi"])
     def test_other_stable_default_micro(self, short_code):
         micro, _ = render_preset_defaults(short_code)
         assert micro == _read_fixture(f"{short_code}_default_micro.txt")
 
-    @pytest.mark.parametrize("short_code", ["gt", "vb"])
+    @pytest.mark.parametrize("short_code", ["gt", "vb", "etc0", "etc1", "etc2", "etc3", "etc5", "etc_bi"])
     def test_other_stable_default_conclusion(self, short_code):
         _, conclusion = render_preset_defaults(short_code)
         assert conclusion == _read_fixture(f"{short_code}_default_conclusion.txt")

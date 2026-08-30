@@ -28,7 +28,13 @@ def render_blocks(blocks_with_overrides):
         micro_txt, conc_txt = rendering.render_block(
             block, overrides, total_specimens=total_specimens
         )
-        micro_blocks.append((block["name"], micro_txt))
+        # Mirrors workspace.py: a composing block's context text replaces
+        # the ordinary block name only in a multi-specimen header. For one
+        # specimen format_micro_plain suppresses headers altogether, so the
+        # value here is harmless but keeping one shared assembly path avoids
+        # a golden render drifting from the live report pipeline.
+        header_context, _, _ = rendering.render_context_fragments(block, overrides)
+        micro_blocks.append((header_context or block["name"], micro_txt))
         conclusion_entries.append({"block": block, "overrides": overrides, "conc_txt": conc_txt})
 
     micro_plain = rendering.format_micro_plain(micro_blocks)

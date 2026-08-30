@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-76 tests currently exist, running in well under a second.
+88 tests currently exist, running in well under a second.
 
 ## Structure
 
@@ -131,13 +131,11 @@ often won't, because nothing about it looks wrong on its own.
    record of exactly how a real report's output changed — arguably
    more informative than the code diff that caused it.
 
-Four fixture pairs exist today: `dai`, `gt`, and `vb` at their stored
-default values, plus Appendix with `false_membranes=True` and
-`appendicite_type=phlegmoneuse`. All are generated from the app's actual
-rendering pipeline, not typed by hand. Thyroid fixtures are deliberately
-deferred until the planned `etc0`–`etc5` Quick Type consolidation has
-settled; freezing those soon-to-change presets now would create churn,
-not protection.
+Eleven fixture pairs exist today: stored defaults for `dai`, `gt`, `vb`,
+`etc0`, `etc1`, `etc2`, `etc3`, `etc5`, and `etc_bi`; the deliberate
+Appendix phlegmoneuse/false-membranes variation; and a synthetic
+Gallbladder+Appendix multi-specimen case. All are generated from the
+app's actual rendering pipeline, not typed by hand.
 
 ## What's deliberately not automated
 
@@ -189,17 +187,15 @@ formalizes the ad-hoc script this session's field-consistency
 validation feature was actually verified with. Good reference for the
 *shape* other checkpoints should take.
 
-**Checkpoint 5 — `test_golden_output.py`: in progress.** Default pairs
-are frozen for `dai`, `gt`, and `vb`, plus the deliberately chosen
+**Checkpoint 5 — `test_golden_output.py`: DONE.** Default pairs are
+frozen for all nine current clinical presets (`dai`, `gt`, `vb`, `etc0`,
+`etc1`, `etc2`, `etc3`, `etc5`, `etc_bi`), plus the deliberately chosen
 field-consistency-compatible Appendix variation
-(`false_membranes=True` + `appendicite_type=phlegmoneuse`). The
-regeneration tool now supports named variations and synthetic scenarios
-as well as defaults. The synthetic Gallbladder+Appendix case freezes
-the multi-specimen numbering/header structure, including the absence of
-single-specimen “Examen…” labels. Thyroid fixtures (`etc0`–`etc5`,
-`etc_bi`) are deliberately deferred until the planned Quick
-Type/preset consolidation settles; then freeze the resulting real
-preset shapes rather than short-lived intermediary ones.
+(`false_membranes=True` + `appendicite_type=phlegmoneuse`) and a
+synthetic Gallbladder+Appendix two-specimen case. The regeneration tool
+supports defaults, named variations, and synthetic scenarios. `etc_bi`
+was confirmed with its clinically useful Bethesda II + II default, and
+the golden helper mirrors Workspace’s composed multi-specimen headers.
 
 **Checkpoint 6 — `test_workspace_ui.py`: DONE.** `AppTest` coverage
 locks the historically fragile direct `etc0`→`etc5` preset switch
