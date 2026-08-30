@@ -66,6 +66,24 @@ untouched by the suite. Full structure and update ritual live in
 
 ## Currently mid-task
 
+**No task currently mid-flight. Per-case Block composition — Stage 0
+COMPLETE (uncommitted).** Live history was verified at session start
+(`b56c38c` HEAD). `composition.derive_block_instances()` establishes a
+Preset's ordered default list; Workspace now saves it as
+`structured_input.block_instances` and restores it on reopen, with the
+required fallback for old cases missing that JSON key. Widget keys,
+override-map keys, and saved-block keys all use immutable `instance_no`,
+never display position. There is deliberately no composition UI or
+add/remove/reorder behavior yet.
+
+Verified: 91 isolated tests pass (the original 88 plus default-derivation,
+Gastric Trio Save → DB → fresh Workspace reopen, and old-case fallback
+coverage); every one of the 11 golden fixture pairs regenerated unchanged;
+and real `pathology.db` SHA-256 remained
+`d49901af6a4fc82bac0e0dcb1f9fc33e0cfc26010dfbdb107cd272c8a04da7a8`
+before and after the final full suite. `python3 -m py_compile` and
+`git diff --check` also pass.
+
 **Persistent test suite — COMPLETE.** Full plan, philosophy, and
 per-checkpoint detail live in **TESTING.md**. All currently defined
 checkpoints are complete and the suite is ready to accompany the future

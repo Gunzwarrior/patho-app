@@ -7,6 +7,7 @@ only read the fixture database.
 
 import pytest
 import database as db_module
+import composition
 from streamlit.testing.v1 import AppTest
 
 
@@ -104,6 +105,47 @@ class TestSaveAndSafetyGates:
         assert saved["status"] == "pending"
         assert saved["pending_reason"] == "IHC"
         assert any("PENDING-1" in message.value for message in mutable_workspace.success)
+
+    def test_multiblock_case_composition_round_trips_on_reopen(self, mutable_workspace):
+        gt_label = _preset_label(mutable_workspace, "gt")
+        _select_preset(mutable_workspace, gt_label)
+        generation = mutable_workspace.session_state["_form_generation"]
+        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("GT-COMPOSE-1").run()
+
+        preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "gt")
+        expected_instances = composition.derive_block_instances(
+            db_module.get_preset_blocks(preset["id"])
+        )
+        _button_by_label(mutable_workspace, "💾 Save as Pending").click().run()
+
+        saved = db_module.get_case_by_number("GT-COMPOSE-1")
+        assert saved["structured_input"]["block_instances"] == expected_instances
+
+        reopened = AppTest.from_file("pages/workspace.py")
+        reopened.run()
+        assert not reopened.exception
+        reopened.session_state["_reopen_case_number"] = "GT-COMPOSE-1"
+        reopened.session_state["_do_case_reopen"] = True
+        reopened.run()
+
+        assert not reopened.exception
+        assert reopened.session_state["_case_block_instances"] == expected_instances
+
+    def test_reopen_old_case_falls_back_to_preset_instances(self, mutable_workspace):
+        preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "gt")
+        assert db_module.save_case(
+            "GT-LEGACY-1", preset["id"], "", {"blocks": {}}, "", status="pending"
+        )
+        expected_instances = composition.derive_block_instances(
+            db_module.get_preset_blocks(preset["id"])
+        )
+
+        mutable_workspace.session_state["_reopen_case_number"] = "GT-LEGACY-1"
+        mutable_workspace.session_state["_do_case_reopen"] = True
+        mutable_workspace.run()
+
+        assert not mutable_workspace.exception
+        assert mutable_workspace.session_state["_case_block_instances"] == expected_instances
 
     def test_existing_case_disables_save_until_overwrite_is_confirmed(self, mutable_workspace):
         dai = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
