@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-70 tests currently exist, running in well under a second.
+73 tests currently exist, running in well under a second.
 
 ## Structure
 
@@ -201,17 +201,15 @@ single-specimen “Examen…” labels. Thyroid fixtures (`etc0`–`etc5`,
 Type/preset consolidation settles; then freeze the resulting real
 preset shapes rather than short-lived intermediary ones.
 
-**Checkpoint 6 — `test_workspace_ui.py`: not started, save for last.**
-`AppTest`-based coverage of the historically fragile session-state
-flows: preset-switch reset, widget-key generation-suffixing surviving a
-same-preset Save-triggered reset, the duplicate-case-number guard, the
-Quick Type apply flow (success and the "leftover characters" failure
-path), the consistency-validation banner/gate. Needs `mutable_db` for
-anything that actually saves a Case. This is where the real fragility
-in this codebase has lived — the widget-key bug alone took three
-separate real occurrences to become a named convention — so it deserves
-the most care, and is the checkpoint I'd trust to an unfamiliar model
-last, once it's built some track record on the earlier ones.
+**Checkpoint 6 — `test_workspace_ui.py`: in progress.** Initial
+`AppTest` coverage locks the historically fragile direct
+`etc0`→`etc5` preset switch (generation bump, preserved Case ID, and
+reset field default) and Quick Type’s atomic success/failure behavior.
+Still open: same-preset Save-triggered reset, duplicate-case guard, and
+consistency-validation banner/gate. Those save paths need `mutable_db`.
+This is where the real fragility in this codebase has lived — the
+widget-key bug alone took three separate real occurrences to become a
+named convention — so it deserves the most care.
 
 **Checkpoint 7 — wire it into the documented workflow: not started.**
 Update CLAUDE.md's "Testing discipline" so `pytest` is the first,
