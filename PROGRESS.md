@@ -599,6 +599,130 @@ implementation plan/checkpoints.
   the same widget-state bug family that's already bitten this project
   three times.
 
+## Per-case Block composition — settled design (Claude.ai chat)
+
+Design proposal discussed and settled this session: how a Preset stays a
+fixed starting point while one Case can add, remove, or reorder Block
+instances for that Case alone. **Not yet built** — the staged
+implementation plan below is the next actual work; build status against
+it will be tracked in "Currently mid-task" as it lands, same
+separation-of-concerns as Quick Type's own settled-design-vs-build-status
+split above.
+
+- **No new table, no `Presets`/`Preset_Blocks` schema change.** One new
+  key on the existing `Cases.structured_input` JSON: `block_instances`,
+  an ordered list of `{block_id, instance_no}`. A case untouched from its
+  preset has `block_instances` == a straight echo of
+  `db.get_preset_blocks()`; old saved cases with no `block_instances` key
+  fall back to deriving it from the preset on reopen. Mirrors how
+  `master_lock`/`wildcard_notes`/`context_title_lock` already live as
+  case-specific divergence inside `structured_input` rather than as new
+  tables.
+- **Identity (`instance_no`) is decoupled from display order.** Today
+  `Preset_Blocks.sort_order` does both jobs at once (widget-key/
+  `structured_input` identity AND report position) — composition needs to
+  split them, since reordering must never change a widget's key.
+  `instance_no` is assigned once, at add-time, and never changes; only its
+  position in `block_instances` changes on reorder. This means **reorder
+  needs no `_form_generation` bump and no widget remount** — deliberately
+  sidesteps a fifth instance of the widget-key-staleness bug family (Case
+  ID, Fields, Master Lock, preset-switch) rather than risking one.
+- **Ad hoc `instance_no` namespace**: a fixed offset (1000) plus a
+  per-case incrementing counter for instances added beyond the preset's
+  own set — guaranteed not to collide with any real (small-integer)
+  `Preset_Blocks.sort_order`.
+- **Remove is hard-clear, not soft-hide** — decided explicitly by the
+  person: "removed is removed." A removed instance's typed values are not
+  preserved if it's re-added later in the same session.
+- **Reorder via ▲▼ buttons**, swap-with-neighbor + `st.rerun()` — no
+  drag-and-drop; consistent with this app's existing avoidance of fragile
+  JS-into-Streamlit-internals hacks (Copy-to-Diamic, scroll-to-top). If the
+  "🧩 Compose specimens" panel adds too much always-visible tabbing, it may
+  move into a collapsed `st.expander`, same pattern as "➕ Niveaux / IHC /
+  Colorations" — deliberately left open, to be settled by how it actually
+  feels in use rather than decided up front.
+- **New `composition.py` module** (parallel to `grouping.py`/
+  `quicktype.py`/`consistency.py`): pure functions for the
+  composition-list operations (add/remove/reorder, ad hoc `instance_no`
+  assignment, deriving `block_instances` from a preset's defaults) — kept
+  separate from `workspace.py`'s Streamlit/session_state wiring, same
+  architecture already used for every other non-rendering piece of logic
+  in this app.
+- **Add pulls bare Block/Field defaults, not any preset's
+  `field_overrides`.** An ad hoc-added block starts from `Blocks`/
+  `Block_Fields` defaults only — a "second instance of a Block already in
+  this preset" and "a genuinely new-to-this-preset Block" are the same
+  operation from Add's point of view. Cross-preset default-pulling is
+  explicitly out of v1.
+- **`total_specimens` becomes `len(case_block_instances)`** instead of
+  `len(db.get_preset_blocks(preset_id))` — the only change needed in
+  `workspace.py`'s main loop; `render_block`/`format_micro_plain`/
+  `_merge_section` already take it as a plain argument and need no
+  internal changes.
+- **Grouping adjacency changes on purpose** — `_merge_section` only merges
+  contiguous same-signature entries, so reordering can both break an
+  existing merge and create a new one. This is the clinical point of the
+  feature (specimen receipt order affects grouping), not a bug to guard
+  against, but it does mean new tests must cover both directions
+  explicitly.
+- **Quick Type resets composition to the preset defaults.** Decided by
+  the person: "Quick Type is a way to start a report, not supposed to be
+  used while modifying the report unless I want to start over." Applying
+  a Quick Type code after a composition edit discards the composed list
+  and reverts to `db.get_preset_blocks(preset_id)`, same as an ordinary
+  preset switch already does.
+- **Reopen restores `block_instances`**; a referenced `block_id` that no
+  longer exists (not possible today, but will be once Editor UI can
+  delete Blocks) fails loud with a new `_reopen_error`, same posture as
+  the existing "preset no longer exists" check.
+- **Validated/pending freeze behavior is unchanged** — freezing happens
+  at the `rendered_html` level, orthogonal to how the instance list was
+  built. No new restriction on reopening/re-editing a validated case's
+  composition; it inherits whatever latitude already exists for editing
+  anything else on a reopened validated case.
+- **Explicitly out of v1**: `is_table` blocks (future prostate biopsies);
+  pulling an ad hoc addition's field defaults from a different preset's
+  `field_overrides`; any relational (non-JSON) storage of composition;
+  Quick Type authoring against a composed case; anything that writes back
+  to `Preset_Blocks` itself (that's Editor UI's job).
+
+**Staged implementation plan:**
+- **Stage 0 — plumbing only, no UI.** Wire `block_instances` read/write,
+  switch widget/save keys from `sort_order` to `instance_no`,
+  `case_block_instances` still always seeded from the preset. Zero
+  behavior change — verified by re-running all 88 existing tests and
+  regenerating every golden fixture to confirm byte-for-byte no diff.
+- **Stage 1 — remove + reorder only.** Exercises numbering/grouping-
+  adjacency under real reordering. New tests: `test_grouping.py`
+  reorder-breaks-a-merge / reorder-creates-a-merge cases (same existing
+  grouping functions, new non-default-order inputs — no new grouping code
+  needed); `test_workspace_ui.py` AppTest for remove→save→reopen and
+  reorder→save→reopen; a couple of golden fixtures for a hand-verified
+  reordered Gastric Trio.
+- **Stage 2 — add existing Block.** Needs `db.get_block_by_id()` (new)
+  and `composition.py`'s add logic. New tests: a 4-specimen synthetic
+  golden fixture, add→save→reopen AppTest, and a
+  Quick-Type-after-composition-edit test confirming the reset-to-defaults
+  behavior above.
+- **Stage 3 — full regression** across all 9 presets + manual boot check,
+  per CLAUDE.md's existing testing discipline, before anything is shown
+  as done.
+
+**Test placement** (standard practice, matching this project's existing
+pattern — a new module gets its own test file, new inputs to existing
+logic extend the existing file, new UI flows extend the existing AppTest
+file):
+- New `test_composition.py` — pure-function tests for `composition.py`
+  (add/remove/reorder, `instance_no` assignment, preset-default
+  derivation, backward-compat fallback) plus the DB-backed
+  `block_instances` save/reopen round trip.
+- `test_grouping.py` — gains the reorder-breaks-merge /
+  reorder-creates-merge cases.
+- `test_golden_output.py` / `regenerate_golden.py` — gains the reordered
+  Gastric Trio and 4-specimen synthetic fixtures.
+- `test_workspace_ui.py` — gains AppTest scenarios for add/remove/reorder
+  flows and composed-case save→reopen.
+
 ## Open question: keeping this file honest across tools
 
 The person is trialing a mixed workflow — this Claude.ai chat when free,
@@ -618,15 +742,12 @@ rather than deferring reconstruction to whichever session syncs next.
 
 ## Immediate next steps, if resuming without other instructions
 
-1. **Plan flexible per-case Block composition before Editor UI.** The
-   current Preset model is a fixed ordered list of Block instances; rare
-   cases need an operator to add an existing Block, remove one, or
-   reorder them for that individual case (e.g. extra erosive-zone or
-   polyp blocks, or antrum/fundus/duodenum reordered by specimen
-   receipt). This is not template editing: it must preserve the existing
-   Block vocabulary, render/group correctly, save/reopen the chosen
-   ordered instances, and gain explicit regression coverage before
-   Editor UI is designed around it.
+1. **Build per-case Block composition, staged.** Design is settled — see
+   "Per-case Block composition — settled design" above for the full
+   reasoning, decisions, and test plan. Start with Stage 0 (plumbing
+   only: `structured_input.block_instances`, `instance_no`/order split,
+   zero behavior change) and verify it against the existing 88-test suite
+   plus every golden fixture before touching any UI.
 2. Ask for a fresh `git log` at the start of any new session regardless;
    the history above is a historical reconciliation snapshot, not a
    substitute for the live repository state. The `0b498c4` question from
