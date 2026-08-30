@@ -9,7 +9,26 @@ import composition
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
 CASE_SCOPED_EXACT_KEYS = (
     "_wildcard_preset_id", "_loaded_case_number", "_case_block_instances",
+    "_composition_field_restore",
 )
+
+
+def _preserve_fields_for_composition(blocks, form_generation):
+    """Carry live field values through a composition-triggered rerun.
+
+    Composition controls render above the fields. Their explicit rerun can
+    otherwise happen before Streamlit re-instantiates those widgets, which
+    leaves the browser showing an old value while server-side rendering falls
+    back to the Field default. This is deliberately not a generation bump:
+    instance_no keeps the widget identity stable through a reorder.
+    """
+    st.session_state["_composition_field_restore"] = {
+        f"field_{block['block_id']}_{block['instance_no']}_{field['key']}_{form_generation}":
+        st.session_state[f"field_{block['block_id']}_{block['instance_no']}_{field['key']}_{form_generation}"]
+        for block in blocks
+        for field in block["fields"]
+        if f"field_{block['block_id']}_{block['instance_no']}_{field['key']}_{form_generation}" in st.session_state
+    }
 
 
 def resolve_case_blocks(preset_blocks, block_instances):
@@ -28,6 +47,8 @@ def resolve_case_blocks(preset_blocks, block_instances):
     resolved_blocks = []
     for instance in block_instances:
         block = defaults.get((instance["block_id"], instance["instance_no"]))
+        if not block:
+            block = db.get_block_by_id(instance["block_id"])
         if not block:
             raise ValueError(
                 f"Block instance {instance['block_id']}#{instance['instance_no']} "
@@ -326,6 +347,12 @@ if st.session_state.pop("_do_quick_type_apply", False):
                     _qt_summary_parts.append(f"{_qt_field['label']}={_qt_raw_value}")
         st.session_state["_quicktype_success"] = "✅ " + " ; ".join(_qt_summary_parts)
 
+# Must run before any field widget below is instantiated. See
+# _preserve_fields_for_composition() for why composition's explicit rerun
+# needs this one-shot restoration even though widget identities are stable.
+for _field_key, _field_value in st.session_state.pop("_composition_field_restore", {}).items():
+    st.session_state[_field_key] = _field_value
+
 form_gen = st.session_state.get("_form_generation", 0)
 
 # Compact pending-cases panel — lives in the sidebar so it's visible
@@ -461,6 +488,7 @@ if selected_label != "-- Select --":
                 remove = st.button("Retirer", key=f"compose_remove_{index}", disabled=len(blocks) == 1)
 
             if move_up or move_down:
+                _preserve_fields_for_composition(blocks, form_gen)
                 neighbor = index - 1 if move_up else index + 1
                 for note in st.session_state.get("wildcard_notes", []):
                     if note.get("target_idx") == index:
@@ -473,6 +501,7 @@ if selected_label != "-- Select --":
                 st.rerun()
 
             if remove:
+                _preserve_fields_for_composition(blocks, form_gen)
                 removed = block_instances[index]
                 prefix = f"field_{removed['block_id']}_{removed['instance_no']}_"
                 for key in list(st.session_state):
@@ -485,6 +514,18 @@ if selected_label != "-- Select --":
                 ]
                 st.session_state["_case_block_instances"] = composition.remove_instance(block_instances, index)
                 st.rerun()
+
+        add_options = db.get_all_blocks()
+        add_names = {block["id"]: block["name"] for block in add_options}
+        selected_addition_id = st.selectbox(
+            "Ajouter un spécimen", list(add_names), format_func=add_names.get, key="compose_add_block"
+        )
+        if st.button("Ajouter", key="compose_add"):
+            _preserve_fields_for_composition(blocks, form_gen)
+            st.session_state["_case_block_instances"] = composition.add_instance(
+                block_instances, selected_addition_id
+            )
+            st.rerun()
 
     # Peeked early: the actual master_lock toggle widget is declared later
     # (in "2. Final Report"), but field edits made while it's on have no

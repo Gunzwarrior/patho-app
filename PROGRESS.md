@@ -66,8 +66,33 @@ untouched by the suite. Full structure and update ritual live in
 
 ## Currently mid-task
 
-**No task currently mid-flight. Per-case Block composition — Stage 1
-COMPLETE (uncommitted).** Stage 0 is committed as `384f43c`. Stage 1 adds
+**No task currently mid-flight. Per-case Block composition — Stage 2
+COMPLETE (committed as `d2ad67e`).** Stages 0 and 1 are committed as
+`384f43c` and `8270a53`. Stage 2 adds existing non-table Blocks with bare Block/Field
+defaults only, a collision-free ad hoc `instance_no` starting at 1000, and
+the required Quick Type reset back to Preset defaults. No Preset editing or
+cross-Preset override copying is included.
+
+Thomas checked both relevant browser paths: Stage 1 remove → save → reopen,
+and Stage 2 add → save → reopen plus Quick Type reset after composition.
+This covers the frontend interaction boundary that AppTest cannot fully
+prove. The composition-rerun stale-render bug found during Stage 2 is fixed:
+composition actions now one-shot preserve current field widget values before
+their early rerun and restore them before widgets instantiate again, without
+changing form generation or instance identity.
+
+Verified: 101 isolated tests pass; the required synthetic four-specimen
+Gastric Trio + Appendix golden fixture is frozen; every existing and new
+fixture regenerates unchanged; real `pathology.db` SHA-256 remains
+`8269ec30a58aa580aab0b5c9b7c30a7272858c4bfb9ba2d2a4ff4b930a92e5a3`
+before/after the full suite; `py_compile`, `git diff --check`, and the
+`app.py` Streamlit boot fetched with `wget` pass.
+
+**Stage 3 — full composition regression COMPLETE.** The all-preset golden
+regeneration and full suite/real-DB checksum/boot checks above are its
+required verification; no additional code path was needed.
+
+**Per-case Block composition — Stage 1 COMPLETE.** Stage 0 is committed as `384f43c`. Stage 1 adds
 only remove and ▲▼ reorder controls, preserving immutable `instance_no`
 while changing the ordered case list. Wildcard-note targets move with their
 specimen (and are dropped when that specimen is removed), since their saved

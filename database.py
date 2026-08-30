@@ -96,6 +96,41 @@ def get_preset_blocks(preset_id):
     return blocks
 
 
+def get_all_blocks():
+    """Non-table Blocks available for ad hoc case composition."""
+    conn = get_db_connection()
+    rows = conn.execute("SELECT id, key, name FROM Blocks WHERE is_table = 0 ORDER BY name").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_block_by_id(block_id):
+    """One bare Block with Field/Block_Field defaults, never Preset overrides."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT b.id AS block_id, b.* FROM Blocks b WHERE b.id = ?", (block_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    block = dict(row)
+    field_rows = conn.execute(
+        """SELECT bf.*, f.key AS field_key, f.label AS field_label, f.type AS field_type,
+                  f.options AS field_options, f.default_value AS field_default,
+                  f.conclusion_addendum_template AS field_addendum_template
+           FROM Block_Fields bf JOIN Fields f ON f.id = bf.field_id
+           WHERE bf.block_id = ? ORDER BY bf.sort_order""",
+        (block_id,),
+    ).fetchall()
+    conn.close()
+    block["fields"] = [{
+        "key": field["field_key"], "label": field["label_override"] or field["field_label"],
+        "type": field["field_type"], "options": json.loads(field["field_options"]) if field["field_options"] else None,
+        "value": field["default_override"] if field["default_override"] is not None else field["field_default"],
+        "conclusion_addendum_template": field["field_addendum_template"],
+        "context_section": bool(field["context_section"]),
+    } for field in field_rows]
+    return block
+
+
 def get_preset_block_rows(preset_id, block_id):
     """Pre-filled row instances for is_table blocks (e.g. the 6 prostate sites)."""
     conn = get_db_connection()

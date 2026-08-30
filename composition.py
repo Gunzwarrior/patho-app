@@ -31,3 +31,10 @@ def move_instance(block_instances, index, offset):
     moved = list(block_instances)
     moved[index], moved[target] = moved[target], moved[index]
     return moved
+
+
+def add_instance(block_instances, block_id):
+    """Append an ad hoc Block with a per-case, non-preset identity."""
+    ad_hoc_numbers = [item["instance_no"] for item in block_instances if item["instance_no"] >= 1000]
+    instance_no = max(ad_hoc_numbers, default=999) + 1
+    return [*block_instances, {"block_id": block_id, "instance_no": instance_no}]

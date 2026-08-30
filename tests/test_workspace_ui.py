@@ -169,6 +169,44 @@ class TestSaveAndSafetyGates:
         assert not reopened.exception
         assert reopened.session_state["_case_block_instances"] == expected
 
+    def test_composition_rerun_preserves_rendered_field_values(self, workspace):
+        _select_preset(workspace, _preset_label(workspace, "gt"))
+        normal = next(widget for widget in workspace.checkbox if widget.label == "Normal ?")
+        normal.set_value(False).run()
+        generation = workspace.session_state["_form_generation"]
+        assert "Anomalie détectée." in workspace.text_area(key=f"final_micro_edit_{generation}").value
+
+        workspace.button(key="compose_down_0").click().run()
+        assert "Anomalie détectée." in workspace.text_area(key=f"final_micro_edit_{generation}").value
+
+    def test_add_block_uses_bare_defaults_and_round_trips(self, mutable_workspace):
+        _select_preset(mutable_workspace, _preset_label(mutable_workspace, "gt"))
+        generation = mutable_workspace.session_state["_form_generation"]
+        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("GT-ADD-1").run()
+        add_widget = mutable_workspace.selectbox(key="compose_add_block")
+        appendix = next(block for block in db_module.get_all_blocks() if block["key"] == "appendice")
+        add_widget.set_value(appendix["id"]).run()
+        mutable_workspace.button(key="compose_add").click().run()
+
+        added = mutable_workspace.session_state["_case_block_instances"][-1]
+        assert added["block_id"] == appendix["id"]
+        assert added["instance_no"] == 1000
+        _button_by_label(mutable_workspace, "💾 Save as Pending").click().run()
+        saved = db_module.get_case_by_number("GT-ADD-1")
+        assert saved["structured_input"]["blocks"]["appendice#1000"]["appendicite_type"] == "endo"
+
+    def test_quick_type_resets_composition_to_preset_defaults(self, workspace):
+        _select_preset(workspace, _preset_label(workspace, "gt"))
+        workspace.button(key="compose_add").click().run()
+        assert len(workspace.session_state["_case_block_instances"]) == 4
+
+        generation = workspace.session_state["_form_generation"]
+        workspace.text_input(key=f"qt_input_{generation}").set_value("dai").run()
+        dai = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
+        assert workspace.session_state["_case_block_instances"] == composition.derive_block_instances(
+            db_module.get_preset_blocks(dai["id"])
+        )
+
     def test_existing_case_disables_save_until_overwrite_is_confirmed(self, mutable_workspace):
         dai = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
         assert db_module.save_case("DUP-1", dai["id"], "", {}, "", status="pending", pending_reason="IHC")
