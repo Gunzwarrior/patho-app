@@ -3,6 +3,7 @@ import database as db
 import rendering
 import grouping
 import quicktype
+import consistency
 
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
 CASE_SCOPED_EXACT_KEYS = ("_wildcard_preset_id", "_loaded_case_number")
@@ -516,6 +517,7 @@ if selected_label != "-- Select --":
 
     st.subheader("1. Medical Variables", anchor=False)
     micro_blocks, conclusion_entries = [], []
+    all_consistency_warnings = []
 
     for i, block in enumerate(blocks):
         st.markdown(f"**{i+1}. {block['name']}**")
@@ -540,6 +542,13 @@ if selected_label != "-- Select --":
             widget_key = f"field_{block['block_id']}_{block['sort_order']}_{field['key']}_{form_gen}"
             with col:
                 overrides[field["key"]] = render_field_widget(field, widget_key, master_lock_active)
+
+        # Checked here, once this block's overrides are fully resolved --
+        # identical regardless of whether each value came from this loop's
+        # own widgets, a Preset default, or a Quick Type code, since all
+        # three are already folded into `overrides` by this point. See
+        # consistency.py / PROGRESS.md for the full design reasoning.
+        all_consistency_warnings.extend(consistency.check_block(block, overrides))
 
         micro_txt, conc_txt = rendering.render_block(block, overrides, total_specimens=len(blocks))
         # With 2+ specimens, a block's own composed context (if it set
@@ -699,10 +708,26 @@ if selected_label != "-- Select --":
         "final_title_edit": title,
     }
 
+    # Field-consistency warning: consolidated across every block in the
+    # case (not just one), shown once each even if the identical message
+    # fired from more than one block instance. Warn-and-confirm, same
+    # pattern as the duplicate-case-number guard above — never a hard
+    # block, since a rare-but-real presentation shouldn't be something
+    # this tool refuses to let him document accurately.
+    consistency_confirmed = True
+    unique_consistency_warnings = list(dict.fromkeys(all_consistency_warnings))
+    if unique_consistency_warnings:
+        for msg in unique_consistency_warnings:
+            st.warning(f"⚠️ {msg}")
+        consistency_confirmed = st.checkbox(
+            "Je comprends — poursuivre malgré l'incohérence signalée",
+            key=f"consistency_confirm_{form_gen}",
+        )
+
     c_pending, c_validated, c_copy = st.columns(3)
 
     with c_pending:
-        if st.button("💾 Save as Pending", use_container_width=True, disabled=not overwrite_confirmed):
+        if st.button("💾 Save as Pending", use_container_width=True, disabled=not (overwrite_confirmed and consistency_confirmed)):
             if case_id:
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
                                  status="pending", pending_reason=pending_reason_value):
@@ -718,7 +743,7 @@ if selected_label != "-- Select --":
                 st.warning("⚠️ Please enter a Case ID before saving.")
 
     with c_validated:
-        if st.button("✅ Save as Validated", use_container_width=True, type="primary", disabled=not overwrite_confirmed):
+        if st.button("✅ Save as Validated", use_container_width=True, type="primary", disabled=not (overwrite_confirmed and consistency_confirmed)):
             if case_id:
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
                                  status="validated", pending_reason=None):

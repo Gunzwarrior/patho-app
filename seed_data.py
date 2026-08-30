@@ -11,6 +11,7 @@ from seed_all() — no schema changes needed for ordinary content.
 
 import json
 import quicktype
+import consistency
 
 
 def field_id(cursor, key):
@@ -412,6 +413,55 @@ def seed_quick_type_tokens(cursor):
     )
 
 
+def seed_consistency_rules(cursor):
+    """
+    Field_Consistency_Rules -- deliberately pilot-only for now (just
+    Appendix), same "pilot on one case type, verify end-to-end before
+    extending" approach seed_quick_type_tokens() used for 'dai'. Each
+    Block's rules are validated immediately via
+    consistency.validate_consistency_rules() right before insertion -- a
+    bad config raises here, at seed time, and never reaches init_db.py's
+    output.
+
+    Appendix: checking "false_membranes" is clinically inconsistent with
+    the milder appendicite_type values (endo / suppuree / intervalle) --
+    matches the person's own stated example from the design discussion.
+
+    NOTE: the message text below is a draft, not yet confirmed with
+    Thomas (see PROGRESS.md, "Field-consistency validation" checkpoint
+    3) -- treat the exact French wording as a placeholder pending his
+    sign-off, not as final content.
+    """
+    print("Seeding Field_Consistency_Rules (Appendice pilot)...")
+    appendice_id = block_id(cursor, "appendice")
+    appendice_fields = {"appendix_size_cm", "false_membranes", "appendicite_type"}
+
+    rules = [
+        {
+            "field_a_key": "false_membranes",
+            "field_a_values": [True],
+            "field_b_key": "appendicite_type",
+            "field_b_values": ["endo", "suppuree", "intervalle"],
+            "message": (
+                "Fausses membranes cochées avec un type d'appendicite (endo-appendicite, "
+                "appendicite suppurée ou appendicite d'intervalle) où leur présence est "
+                "inhabituelle -- vérifier la cohérence avant de valider."
+            ),
+        },
+    ]
+    consistency.validate_consistency_rules(appendice_fields, rules)
+    cursor.executemany(
+        "INSERT INTO Field_Consistency_Rules "
+        "(block_id, field_a_key, field_a_values, field_b_key, field_b_values, message) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (appendice_id, r["field_a_key"], json.dumps(r["field_a_values"]),
+             r["field_b_key"], json.dumps(r["field_b_values"]), r["message"])
+            for r in rules
+        ],
+    )
+
+
 def seed_cytology_macro_fields(cursor):
     """
     Fields for the generic cytology macro pattern (volume, color, spread
@@ -645,6 +695,7 @@ def seed_all(cursor):
     seed_gallbladder(cursor)
     seed_appendix(cursor)
     seed_quick_type_tokens(cursor)
+    seed_consistency_rules(cursor)
     seed_cytology_macro_fields(cursor)
     seed_thyroid_cytology(cursor)
     seed_shared_snippets(cursor)

@@ -132,6 +132,31 @@ def get_quick_type_tokens(preset_id):
     ]
 
 
+def get_consistency_rules(block_id):
+    """Field_Consistency_Rules for one Block (see consistency.py for the
+    evaluation logic). Empty list for a Block with no rules configured --
+    that's the common case, not an error; consistency.check_block()
+    treats it as "nothing to check, no warnings.\""""
+    conn = get_db_connection()
+    rows = conn.execute(
+        """SELECT field_a_key, field_a_values, field_b_key, field_b_values, message
+           FROM Field_Consistency_Rules
+           WHERE block_id = ?""",
+        (block_id,),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "field_a_key": r["field_a_key"],
+            "field_a_values": json.loads(r["field_a_values"]),
+            "field_b_key": r["field_b_key"],
+            "field_b_values": json.loads(r["field_b_values"]),
+            "message": r["message"],
+        }
+        for r in rows
+    ]
+
+
 def get_conclusion_group_label(block_keys):
     """
     block_keys: list of block key strings sharing an identical conclusion

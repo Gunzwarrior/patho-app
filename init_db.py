@@ -24,6 +24,7 @@ def setup_database():
     print("Dropping old tables (if they exist)...")
     cursor.executescript("""
         DROP TABLE IF EXISTS Cases;
+        DROP TABLE IF EXISTS Field_Consistency_Rules;
         DROP TABLE IF EXISTS Quick_Type_Tokens;
         DROP TABLE IF EXISTS Conclusion_Group_Labels;
         DROP TABLE IF EXISTS Preset_Block_Rows;
@@ -227,6 +228,32 @@ def setup_database():
                                                     -- "stop at the next
                                                     -- non-digit or end of
                                                     -- string."
+        );
+
+        -- FIELD_CONSISTENCY_RULES: flags clinically-inconsistent field-value
+        -- combinations within one Block. No directionality between A/B — a
+        -- rule fires when the block's *current resolved* value for
+        -- field_a_key is in field_a_values AND its value for field_b_key is
+        -- in field_b_values. Checked generically wherever a block's fields
+        -- get resolved (rendering.build_context), so it's the same check
+        -- regardless of whether the values arrived via manual widget
+        -- selection, a Preset default, or Quick Type — see consistency.py.
+        -- Warn-and-confirm, never a hard block: a rule firing shows a
+        -- message and requires an explicit "proceed anyway" checkbox
+        -- before Save, the same pattern as the duplicate-case-number
+        -- guard. Scoped to one Block for v1 — every real example so far
+        -- (Appendix) is two fields on the same Block; a cross-block/
+        -- case-level version isn't designed and shouldn't be assumed
+        -- needed until a real case for it shows up.
+        CREATE TABLE Field_Consistency_Rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            block_id INTEGER NOT NULL REFERENCES Blocks(id),
+            field_a_key TEXT NOT NULL,
+            field_a_values JSON NOT NULL,  -- resolved/coerced values, e.g.
+                                            -- [true] or ["endo","suppuree"]
+            field_b_key TEXT NOT NULL,
+            field_b_values JSON NOT NULL,
+            message TEXT NOT NULL          -- shown verbatim in the warning banner
         );
 
         -- SNIPPETS: reusable text fragments, referenced by key from templates

@@ -214,6 +214,15 @@ reconsider, not just re-explain.
   templates are still actively being corrected against real-world usage
   (see PROGRESS.md), and building Editor UI against templates that keep
   changing would mean redoing Editor work too. Wait until Tier 2 settles.
+  **A persistent automated test suite is a decided prerequisite/companion
+  (see PROGRESS.md, "Immediate next steps") — not yet designed or built.**
+  Every round's testing today is ad-hoc and thrown away afterward (see
+  "Testing discipline" below), which has worked only because a
+  Claude-tested round has always sat between a template edit and a real
+  case seeing it. Editor UI is specifically about removing that
+  round-trip, so it can't quietly inherit the same "test it fresh each
+  time, then delete the script" habit — that habit assumes a session like
+  this one is doing the editing, not the person directly.
 - **Snippet library assumption**: don't assume the person's whole aText
   library will become Snippets. Most of it turned out to be Field-driven
   variation or distinct Blocks. Categorize new content carefully using the
@@ -286,7 +295,11 @@ presenting anything:
 - Full app boot check (`streamlit run` + `curl` every page route) before
   presenting.
 - Clean up test data from `pathology.db` and delete throwaway test scripts
-  after each round — don't leave residue.
+  after each round — don't leave residue. **This convention holds until a
+  persistent test suite exists (decided, not yet built — see
+  PROGRESS.md); once it does, tests that belong in that suite stop being
+  throwaway and should be added to it instead of written fresh and
+  deleted.**
 - Be explicit about the boundary of what's actually been verified. `AppTest`
   confirms server-side/session_state correctness; it does **not** run a
   real browser, so it cannot catch frontend-only staleness bugs (this

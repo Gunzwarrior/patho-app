@@ -15,185 +15,147 @@ question that raises.
 
 ## Where we are right now (read this first)
 
-**Active work is "Quick Type"** — see "Currently mid-task" below.
-Checkpoints 1-3 are done and verified (sandbox + `AppTest`), piloted on
-`dai` only. Checkpoint 4 (real-browser confirmation) is in progress: one
-round of feedback already came back and was addressed (removed a
-vestigial "Load" button in favor of a bare Enter-driven text_input — see
-Checkpoint 3 for why that's more than a cosmetic change). Waiting on
-confirmation of this latest revision. Everything from here through
-"Fixed and verified this round" is the record of the *previous* round's
-work (Clinical Context/Title/Conclusion composition), kept for
-reference.
+**Reconciled against a real `git log --oneline -20`, pasted by Thomas
+this session:**
+```
+d4a1a96 (HEAD -> main) Add field-consistency validation, pilot on Appendix
+460034b (origin/main) Replace Quick Type's form+button with a bare Enter-driven text_input
+8cea2a7 Wire Quick Type into the Workspace UI
+d71a2c7 Add Quick Type parser (dai end-to-end)
+25c690a Add Quick Type schema and config validator, pilot on dai
+8195b52 Switch decimal fields to a parsed text_input, not number_input
+06d5605 Allow blank context fields; separate conclusion label from title fragment
+9405865 Wire multi-specimen context composition into headers and conclusion
+ada771e Add 2-nodule Thyroid Cytology preset (etc_bi)
+86d603b Fix widget/save key collision when a Preset reuses one Block twice
+51fb9d1 Add Clinical Context section with Title/Context composition
+```
+That's the whole history (11 commits) — `git log -20` returned no more.
 
-The Clinical Context/Title/Conclusion composition feature at the top of
-"Fixed and verified this round" is confirmed **working** in the
-person's real browser as of this update, but **not yet committed** — he
-asked for this file to be updated first, committing right after. If
-`git log` doesn't show it yet, that's expected, not a discrepancy.
+- **Clinical Context/Title/Conclusion composition IS committed** —
+  `51fb9d1`, `86d603b`, `9405865`, `06d5605` account for it. The
+  previous version of this paragraph said "not yet committed" and cited
+  three different hashes (`1601015`, `32f0e3f`, `5988fe4`) that don't
+  appear anywhere in this log — that was stale/wrong, not a real
+  discrepancy; corrected here.
+- **Field-consistency validation is committed**: `d4a1a96`.
+- **`0b498c4` is resolved, not a mystery**: confirmed directly by
+  Thomas — a tiny manual fix he made himself outside a documented
+  session. It doesn't appear in the current log at all (likely folded
+  into history differently since, or the log this file's earlier claim
+  was based on was itself already stale) — this is a solo local repo
+  with no shared remote, so history moving around costs nothing per
+  CLAUDE.md's own convention. Nothing further to chase here.
+- **`origin/main` is one commit behind local `main`** (`460034b` vs.
+  `d4a1a96`) — `d4a1a96` hasn't been pushed yet. Not urgent on a solo
+  repo, just noted for accuracy.
 
-Everything else in that section — starting from "Gallbladder
-cholesterolosis blank-line bug" onward — is confirmed **committed**:
-the person's own `git log --oneline -20` (pasted into an earlier
-session, reconciled at the time) showed `1601015`, `32f0e3f`, and
-`5988fe4` matching those entries. **One discrepancy from that same log,
-still not reconciled**: its HEAD was `0b498c4 "Switch cholesterolosis
-and lithiasis fields"` — a commit not described anywhere in this file.
-Likely a small manual tweak done outside a documented AI session;
-confirm what it actually contains (`git show 0b498c4`) before assuming
-this file is complete.
+**Quick Type and field-consistency validation are both fully done and
+confirmed working in the person's real browser** — see "Fixed and
+verified this round" for both build records, "Quick Type — settled
+design" for the grammar/reasoning, and "Field-consistency validation —
+design question (RESOLVED)" for that design's reasoning. Nothing is
+currently mid-task.
+
+**Next up: a persistent automated test suite** — decided this session,
+not yet designed or started. See "Immediate next steps" at the bottom.
+Every round's testing so far has been ad-hoc (`AppTest`/direct-call
+scripts written fresh, then deleted — see "Testing discipline" in
+CLAUDE.md), which has worked because a tested-by-Claude round always
+sat between a template and it reaching a real case. Editor UI (Tier 3,
+still not started — see "Overall shape") is specifically about removing
+that round-trip, which removes the safety net along with it. A
+persistent suite is the planned answer, sequenced before or alongside
+Editor UI rather than after.
 
 ## Currently mid-task
 
-**"Quick Type" — building now, Checkpoint 2 of 4 done (Claude.ai chat).**
-Full design settled this session; see "Quick Type — settled design" below
-for the complete grammar/token/parsing reasoning, not repeated here.
-
-- **Checkpoint 1 — schema + validator (done, sandbox-verified, not yet
-  committed to the person's real repo — commit message given, timing is
-  his call).** New `Quick_Type_Tokens` table (`init_db.py`): `preset_id`,
-  `sort_order` (flattened, block-agnostic position), `block_sort_order`
-  (inert, always 0 today — see design section for why it exists anyway),
-  `field_key`, `token_kind` ('lookup' | 'measurement'), `lookup_table`
-  (JSON), `digit_width` (sanity cap — see the corrected note under
-  Checkpoint 2 for exactly what it does and doesn't guarantee). New
-  module `quicktype.py`: `validate_quick_type_config(tokens)` — checks
-  (1) every lookup key is exactly 1 char and not a reserved character,
-  (2) every measurement token is either last or followed by a token
-  whose possible first-characters don't overlap digits, (3) added while
-  building Checkpoint 2 — every token's `block_sort_order` is contiguous
-  across the sequence, never interleaved (the parser's block-cursor logic
-  assumes this; wasn't checked until something actually depended on it).
-  Piloted on `dai` only (`seed_quick_type_tokens()` in `seed_data.py`,
-  called from `seed_all()`): token 1 = `appendicite_type` lookup
-  (`"1"`-`"6"` → endo/suppuree/periappendicite/phlegmoneuse/gangreneuse/
-  intervalle, confirmed against the real Field's option order), token 2 =
-  `appendix_size_cm` measurement (safe because it's last). **Verified**:
-  `py_compile` clean; a real `init_db.py` → `seed_data.seed_all()` run
-  seeds and validates `dai`'s tokens with no error; rows read back
-  correctly from `pathology.db`; the validator exercised directly against
-  7 adversarial synthetic configs, not just the real one — both
-  genuinely-ambiguous adjacency cases correctly raise (measurement→
-  measurement, measurement→digit-keyed lookup), the real-world-motivated
-  safe case correctly passes (measurement→letter-keyed lookup, the
-  `8fvicl` shape), a reserved-character collision, an unsupported
-  multi-char lookup key, and a non-contiguous `block_sort_order` all
-  correctly raise with specific messages, and an empty token list is
-  correctly treated as "not an error, just not quick-typeable yet."
-  Backend-only, pure logic, solid automated coverage — committable
-  without waiting on a real-browser check, per the convention below.
-- **Checkpoint 2 — parser (done, sandbox-verified, not yet committed).**
-  `quicktype.py` gained: `find_preset_by_prefix(raw_code, presets)` (pure,
-  longest-registered-short_code-prefix match — deliberately no ambiguity
-  error when more than one short_code prefixes the input, see design
-  section on why that's a config-authoring concern, not a parse-time
-  one), `parse_tokens(remainder, tokens)` (pure, the actual token-walking
-  logic — lookup/measurement consumption, `!` block-skip with auto-
-  rollover as the no-`!`-needed default), and `parse_quick_type(raw_code)`
-  (convenience wrapper fetching from the DB itself, mirroring how
-  `grouping.py` already calls `database.get_conclusion_group_label`
-  directly rather than requiring the caller to inject data). New
-  `database.get_quick_type_tokens(preset_id)`. **Verified**: real `dai`
-  end-to-end — `dai`/`dai3`/`dai37` all resolve the right preset and
-  field overrides; `dai9` (key out of table), `dai37x` (trailing
-  unparseable chars), `dai!` (nothing to skip to in a single-block
-  preset), and `zzz` (no matching preset) all fail with specific,
-  non-generic error messages, nothing silently guessed. A synthetic
-  2-block fixture (hand-built, since no real preset spans 2 blocks yet)
-  confirmed auto-rollover into the next block with no `!` needed, `!`
-  correctly skipping a block's remaining tokens early, and a second `!`
-  past the last block correctly erroring. Every preset *without* any
-  Quick Type config (8 of 9) degrades sensibly — bare code still resolves
-  the preset with zero overrides, any trailing character is a clean
-  "no modifiers configured" error, no crash.
-  **One correction made mid-verification, worth recording**: an early
-  test assumed `digit_width` bounds a measurement token's digits counting
-  from the start of the *whole typed remainder*. It doesn't — the cap
-  applies starting from wherever that specific token begins consuming
-  (i.e., after whatever earlier tokens already ate their own characters).
-  `"dai375"` was expected to error as a mistyped "37" but actually parses
-  validly as `appendicite_type=periappendicite` (from `"3"`) +
-  `appendix_size_cm="75"` (2 digits, right at the cap, starting from
-  position 1) — a different, legitimate parse, not a bug. `digit_width`
-  still does catch a genuine overrun (`"dai3999"` correctly errors,
-  "9" left over once the 2-digit cap is hit) — the guarantee is just
-  per-token, not "first N characters of the string."
-- **Checkpoint 3 — UI wiring (done, sandbox + AppTest verified, not yet
-  committed).** New third column (`c1, c2, c3 = st.columns([1, 2, 1])`)
-  next to the Preset dropdown: a bare `text_input` (no `st.form`) with
-  `on_change=_handle_quick_type_submit`, calling
-  `quicktype.parse_quick_type()` the instant its value commits (Enter or
-  blur). **Revised after first landing on an `st.form` + "Load" button**
-  (person's real-browser feedback: the button served no purpose since
-  Enter alone was always how it got used) — worth recording why the
-  redesign is a bare `on_change` callback rather than just hiding the
-  button: `st.form` structurally requires a visible submit button to
-  exist at all (confirmed directly from Streamlit's own source), so
-  hiding it wasn't an option, and it turned out not to be needed anyway
-  — `st.form` exists specifically to fix a timing race between a
-  text_input's own blur-commit and a *separate* button's click landing
-  first. With no separate button, that race can't happen: the callback
-  IS the field's own commit event. Net effect is also simpler, not just
-  smaller — one rerun instead of two (form-submit sets a flag then calls
-  `st.rerun()`; the callback runs at the start of the rerun Streamlit
-  already triggers for the value change, no explicit rerun needed), and
-  a parse failure now leaves the mistyped code in the box instead of
-  wiping it, since a bare `text_input` only clears when its key changes
-  generation — which only happens on a *successful* apply — where the
-  form's `clear_on_submit=True` used to wipe it unconditionally, success
-  or failure alike.
-  On success: its **own** flag (`_do_quick_type_apply`, distinct from
-  `_do_preset_switch_reset` — reusing an existing one-shot flag for a
-  second purpose is exactly the `_form_generation`-scoped-key bug
-  pattern already hit before) carries the resolved `(preset_id,
-  overrides)`; a top-of-script block (mirroring case-reopen's own
-  two-phase shape) preserves `case_id` and skips `clinical_info` — same
-  as a manual preset switch, since a Quick Type code IS a preset
-  selection — sets `preset_select` and `_last_selected_label` together
-  (prevents the preset-switch-change watcher from firing a second,
-  unwanted reset), seeds each resolved field's real widget key under the
-  new generation, and queues a summary message
-  (`_quicktype_success`/`_quicktype_error`, in the existing one-shot
-  message queue) built from resolved field *labels*, not raw keys. On
-  failure: same queue, `_quicktype_error`, box left untouched.
-  **Verified via `streamlit.testing.v1.AppTest`** (installed in-sandbox
-  for this — note a couple of runs needed `timeout=15` over the default
-  3s under repeated invocations in this sandbox, a harness flake, not an
-  app issue): confirmed zero "Load"-labeled buttons exist anywhere;
-  `dai37` via `set_value()` alone (no click, simulating Enter) → preset
-  dropdown "Appendice (dai)", real `appendicite_type` selectbox reads
-  `periappendicite`, real `appendix_size_cm` text_input reads `7`,
-  success banner `dai ; Taille (cm)=7 ; Type d'appendicite=
-  periappendicite`; `dai9` → specific error, preset dropdown still at
-  "-- Select --", **and the box still shows the typed `dai9`** (the new,
-  better failure behavior); bare `dai` → applied with zero overrides,
-  minimal banner; empty value → clean no-op, no message, no crash. Full
-  regression: cycling the dropdown through all 9 presets normally — zero
-  exceptions.
-  **One correction made during the earlier pass**: the button label and
-  two message strings were first written in French out of habit — fixed to
-  English before verifying, to match this app's actual convention
-  (English UI chrome — buttons, warnings, section headers — vs. French
-  clinical field labels, e.g. the existing "Reopen"/"Enter a case number
-  first" strings right above this same form).
-- **Checkpoint 4 — real browser confirmation, in progress.** Person's
-  first real-browser pass confirmed the core mechanics work flawlessly
-  and surfaced the one piece sandbox testing couldn't have caught — a
-  UX judgment call (the button was vestigial) rather than a correctness
-  bug. Addressed above (bare `on_change` callback, no button). Still
-  waiting on his confirmation that this revision feels right at typing
-  speed in the real browser before considering the whole feature done.
-  right in a real browser at typing speed — AppTest confirms mechanics,
-  not feel.
-
-`dai` is deliberately the only preset with a Quick Type config right now
-— extending to Gallbladder/Thyroid is explicitly follow-up work, once
-`dai` has been exercised end-to-end through the real parser and UI, not
-before.
+Nothing in progress right now — field-consistency validation is fully
+built and confirmed by the person in his own browser (see "Fixed and
+verified this round" for the full build record). When a task starts
+that might outlast a session, note the plan and checkpoints here as it
+goes, not just at the end. Clear this section once the task is
+genuinely done — which is what just happened.
 
 ## Fixed and verified this round
 
-**Clinical Context / Title / Conclusion composition feature — fully
+**Field-consistency validation — fully built and confirmed by the
+person in his own browser, not just sandbox-verified.** Design
+discussion and the "why not dynamic option-restriction" reasoning are
+in "Field-consistency validation — design question (RESOLVED)" below,
+not repeated here — this is the build record. **One real-browser bug
+along the way**: his first test showed no warning at all — turned out
+to be an unsaved edit to `workspace.py` in his editor (never hit
+Ctrl+S), not a code defect; worth remembering as a first thing to check
+next time a change "does nothing" despite `init_db.py` and the sandbox
+both looking right.
+
+- **Schema** (`init_db.py`): new `Field_Consistency_Rules` table —
+  `block_id`, a symmetric `field_a_key`/`field_a_values` +
+  `field_b_key`/`field_b_values` pair (JSON value lists, no
+  directionality between the two sides), and a `message`. Scoped to one
+  Block for v1 — a cross-block/case-level version isn't designed and
+  shouldn't be assumed needed until a real case for it shows up.
+- **`consistency.py`** (new module, parallel to `grouping.py`/
+  `quicktype.py`): `check_block(block, overrides)` resolves the block's
+  current values via `rendering.build_context()` and returns every fired
+  rule's message (`[]` = consistent, the common case);
+  `validate_consistency_rules()` is the seed-time config sanity check
+  (unknown field key, a rule comparing a field to itself, an empty value
+  list), same role `quicktype.validate_quick_type_config()` plays for
+  Quick Type. `database.get_consistency_rules(block_id)` added alongside.
+- **`seed_data.py` pilot rule** — Appendix only (same "pilot on one case
+  type" approach Quick Type used on `dai`): `false_membranes=True`
+  flagged against `appendicite_type` in `{endo, suppuree, intervalle}`.
+  Message wording confirmed fine as a first pass by the person;
+  explicitly **not a priority** to revisit further right now.
+- **`workspace.py` wiring**: checked once per block, right where
+  `render_block()` already runs, so the check sees a block's fully
+  resolved values regardless of whether they came from a widget, a
+  Preset default, or Quick Type — confirmed directly by sandbox testing
+  all three paths independently, including a Quick-Type-set field
+  combined with a widget-set field firing correctly together. One
+  consolidated warning banner + a single "proceed anyway" checkbox
+  before the Save row, reusing the duplicate-case-number guard's exact
+  pattern; both Save buttons gated on `overwrite_confirmed and
+  consistency_confirmed`. Confirmed in his own browser: banner shows in
+  the right spot, fires exactly when it should, and the checkbox lets
+  him save anyway rather than hard-blocking.
+
+**"Quick Type" — fully built and confirmed by the person in his own
+browser, not just sandbox-verified.** Fast-typed shortcut codes (e.g.
+`dai37`) that resolve to a preset plus field overrides in one move. Full
+grammar/token/ambiguity reasoning lives in "Quick Type — settled design"
+below, not repeated here — this is the build record.
+
+- **Schema + validator** (`init_db.py`, new `quicktype.py`): new
+  `Quick_Type_Tokens` table, `validate_quick_type_config()` enforcing the
+  digit-adjacency rule that makes concatenated (no-delimiter) tokens
+  unambiguous, plus a `block_sort_order`-contiguity check added once the
+  parser actually depended on it. Piloted on `dai` only — extending to
+  Gallbladder/Thyroid is explicit follow-up work, not done yet.
+- **Parser** (`quicktype.py`): `find_preset_by_prefix()` (longest-match
+  against `Presets.short_code`), `parse_tokens()` (lookup/measurement
+  consumption, `!` for early block-skip, automatic rollover into the next
+  block with no `!` needed otherwise), `parse_quick_type()` convenience
+  wrapper. A synthetic 2-block fixture confirmed block-transition logic
+  works even though no real preset spans 2 blocks yet.
+- **UI** (`workspace.py`): a `text_input` next to the Preset dropdown,
+  its own one-shot apply flag (`_do_quick_type_apply`, not reused from
+  `_do_preset_switch_reset`), atomic apply-or-reject with a specific
+  error on failure. **Revised once from real-browser feedback**: the
+  first version wrapped this in `st.form` with a submit button, mirroring
+  the existing reopen box — the button turned out to be vestigial, since
+  Enter alone was always how it got used. Replaced with a bare
+  `on_change` callback (no button at all): simpler (one rerun instead of
+  two) and better-behaved on failure (the mistyped code stays in the box
+  for in-place correction, instead of a form's `clear_on_submit` wiping
+  it unconditionally). Worth remembering for future text-entry-plus-
+  action UI in this app — check whether a form is actually needed
+  (a *separate* button to race against a text_input's blur-commit) before
+  reaching for one by default.
+
+
 done, confirmed by the person in his own browser (not just
 sandbox-verified).** Multi-session piece of work, largest change this
 project has had. Full design reasoning below for anyone extending this
@@ -460,7 +422,12 @@ The plan has two tiers:
 - **Tier 3 (informal) — self-service**: the Editor UI. **Not started** —
   deliberately deferred until Tier 2's content settles further, since
   building the Editor against templates that are still actively changing
-  would mean re-doing Editor work too.
+  would mean re-doing Editor work too. **A persistent automated test
+  suite was decided on this session as a prerequisite/companion, not yet
+  designed** — see "Immediate next steps": Editor UI's whole point is
+  self-service template editing without a Claude-tested round-trip
+  first, which is exactly the safety net today's ad-hoc, thrown-away
+  testing depends on.
 
 ## Quick Type — settled design (Claude.ai chat)
 
@@ -557,7 +524,11 @@ conflated as checkpoints land.
   core parser is a clean `string -> (preset, field_overrides)` function —
   later extensions, not part of the initial build.
 
-## Genuinely new architectural question — needs a real decision, not just a fix
+## Field-consistency validation — design question (RESOLVED)
+
+Kept verbatim below for the record of what was actually considered —
+see "Currently mid-task" above for the decision and the concrete
+implementation plan/checkpoints.
 
 - **Field-consistency validation.** Example: selecting "fausses
   membranes" on Appendix shouldn't be combinable with mild severity
@@ -574,7 +545,17 @@ conflated as checkpoints land.
   round (see "Fixed and verified this round") — that one was "the same
   single fact shouldn't be typed twice," this one is "two different,
   individually valid field values shouldn't be combinable." Solving one
-  didn't solve the other. Still open.
+  didn't solve the other.
+
+  **Decision**: warn-and-confirm on resolved field values, checked
+  generically at the same point across all three entry paths (manual
+  widget, Preset default, Quick Type) — not dynamic option-restriction.
+  Rejected option-restriction because it can only ever cover the manual
+  widget (Quick Type and Preset overrides bypass it entirely), and
+  because dynamically shrinking a `st.selectbox`'s options risks a
+  crash/silent-jump if the current value falls outside the new list —
+  the same widget-state bug family that's already bitten this project
+  three times.
 
 ## Open question: keeping this file honest across tools
 
@@ -595,20 +576,26 @@ rather than deferring reconstruction to whichever session syncs next.
 
 ## Immediate next steps, if resuming without other instructions
 
-1. Ask for `git log` to establish real state, and confirm what's
-   actually committed. The Clinical Context/Title/Conclusion feature and
-   its bug fixes should all be one or a few recent commits — reconcile
-   against "Fixed and verified this round" if anything looks
-   unfamiliar. The `0b498c4` commit flagged earlier in this file was
-   never actually reconciled — still worth a `git show 0b498c4` if it
-   comes up.
-2. **Quick Type just needs the person's own real-browser check
-   (Checkpoint 4)** — everything else is built and verified. See
-   "Currently mid-task" and "Quick Type — settled design" above before
-   touching it further. Once confirmed, natural next things: extending
-   Quick Type configs to Gallbladder/Thyroid (deliberately not done yet
-   — `dai` was the whole point of piloting on one preset first),
-   extending the context/title/conclusion pattern to a future breast
-   preset, or the `fausses_membranes` field-combination validation
-   question below.
+1. **A persistent automated test suite is the decided next step** —
+   agreed this session, design not yet discussed. Currently *every*
+   round's testing is ad-hoc and thrown away afterward (see "Testing
+   discipline" in CLAUDE.md) — that's worked because a Claude-tested
+   round has always sat between a template change and a real case ever
+   seeing it. Editor UI removes that round-trip on purpose, which is
+   exactly why this needs to exist first or alongside it, not after.
+   Open before writing any code: what runs it (`pytest`? something
+   simpler?), what "golden output" means for the rendering engine (a
+   fixed set of known-good rendered reports to diff against, per case
+   type?), and how it plugs into the existing "regression pass across
+   every case type" habit instead of duplicating it.
+2. Ask for a fresh `git log` at the start of any new session regardless
+   — this session's reconciliation (see "Where we are right now") is
+   only current as of `d4a1a96`. The `0b498c4` question from earlier
+   rounds is fully resolved, not something to re-raise.
+3. Once the test suite exists (or alongside it): Editor UI (Tier 3) is
+   the next real feature. Extending field-consistency validation beyond
+   the Appendix pilot, extending Quick Type configs to Gallbladder/
+   Thyroid, and extending the context/title/conclusion pattern to a
+   future breast preset are all candidate *later* work on top of that,
+   no forced order between them, none currently active.
 3. Don't start the Editor (Tier 3) until Tier 2's content is stable.
