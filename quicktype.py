@@ -234,6 +234,16 @@ def parse_tokens(remainder, tokens):
     i = 0
 
     while i < len(remainder):
+        # Automatic rollover is represented by tok_idx advancing into the
+        # next block's contiguous token run. Keep block_pos aligned with
+        # that cursor before handling '!' so a skip after rollover skips
+        # the block currently awaiting input, rather than the one just
+        # consumed.
+        if tok_idx < len(tokens):
+            block_pos = blocks_seq.index(tokens[tok_idx].get("block_sort_order", 0))
+        else:
+            block_pos = len(blocks_seq) - 1
+
         char = remainder[i]
 
         if char == "!":

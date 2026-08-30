@@ -1,13 +1,11 @@
 """
-Starter unit tests for quicktype.py. This file is intentionally partial
--- it covers the config validator and the pure parsing functions, not
-yet the DB-backed parse_quick_type() entry point or every rejection
-path validate_quick_type_config() checks. Left as an explicit gap for
-Checkpoint 2 (see TESTING.md) rather than filled in here, so a model
-picking that checkpoint up has a real, separable piece of work.
+Unit tests for quicktype.py. Covers configuration validation, pure token
+parsing (including measurement caps and multi-block rollover/skip
+semantics), and the DB-backed parse_quick_type() entry point.
 """
 
 import pytest
+import quicktype
 from quicktype import validate_quick_type_config, find_preset_by_prefix, parse_tokens
 
 
@@ -25,6 +23,16 @@ class TestValidateQuickTypeConfig:
         with pytest.raises(ValueError, match="reserved"):
             validate_quick_type_config(tokens)
 
+    def test_rejects_empty_lookup_table(self):
+        tokens = [{"field_key": "x", "token_kind": "lookup", "lookup_table": {}}]
+        with pytest.raises(ValueError, match="empty lookup_table"):
+            validate_quick_type_config(tokens)
+
+    def test_rejects_unknown_token_kind(self):
+        tokens = [{"field_key": "x", "token_kind": "flag"}]
+        with pytest.raises(ValueError, match="Unknown token_kind 'flag'"):
+            validate_quick_type_config(tokens)
+
     def test_rejects_ambiguous_measurement_before_digit_keyed_token(self):
         tokens = [
             {"field_key": "size", "token_kind": "measurement", "block_sort_order": 0},
@@ -39,6 +47,15 @@ class TestValidateQuickTypeConfig:
             {"field_key": "size", "token_kind": "measurement", "block_sort_order": 0},
         ]
         validate_quick_type_config(tokens)
+
+    def test_rejects_non_contiguous_block_tokens(self):
+        tokens = [
+            {"field_key": "first", "token_kind": "lookup", "lookup_table": {"a": "a"}, "block_sort_order": 0},
+            {"field_key": "second", "token_kind": "lookup", "lookup_table": {"b": "b"}, "block_sort_order": 1},
+            {"field_key": "third", "token_kind": "lookup", "lookup_table": {"c": "c"}, "block_sort_order": 0},
+        ]
+        with pytest.raises(ValueError, match="reappears non-contiguously"):
+            validate_quick_type_config(tokens)
 
 
 class TestFindPresetByPrefix:
@@ -55,6 +72,11 @@ class TestFindPresetByPrefix:
 
 
 class TestParseTokens:
+    TOKENS = [
+        {"field_key": "appendicite_type", "token_kind": "lookup", "lookup_table": {"3": "periappendicite"}, "block_sort_order": 0},
+        {"field_key": "appendix_size_cm", "token_kind": "measurement", "lookup_table": None, "digit_width": 2, "block_sort_order": 0},
+    ]
+
     def test_no_tokens_configured_and_no_remainder_is_valid(self):
         overrides, error = parse_tokens("", [])
         assert overrides == {} and error is None
@@ -67,3 +89,70 @@ class TestParseTokens:
         tokens = [{"field_key": "x", "token_kind": "lookup", "lookup_table": {"1": "y"}, "block_sort_order": 0}]
         overrides, error = parse_tokens("!", tokens)
         assert overrides is None and "no next block" in error
+
+    def test_consumes_lookup_token(self):
+        overrides, error = parse_tokens("3", self.TOKENS)
+        assert error is None
+        assert overrides == {0: {"appendicite_type": "periappendicite"}}
+
+    def test_consumes_measurement_token_after_lookup(self):
+        overrides, error = parse_tokens("37", self.TOKENS)
+        assert error is None
+        assert overrides == {
+            0: {"appendicite_type": "periappendicite", "appendix_size_cm": "7"}
+        }
+
+    def test_digit_width_leaves_excess_digits_unparsed(self):
+        overrides, error = parse_tokens("3123", self.TOKENS)
+        assert overrides is None
+        assert "'3' left over" in error
+
+    def test_auto_rolls_into_next_block(self):
+        tokens = [
+            {"field_key": "first", "token_kind": "lookup", "lookup_table": {"a": "one"}, "block_sort_order": 0},
+            {"field_key": "second", "token_kind": "lookup", "lookup_table": {"b": "two"}, "block_sort_order": 1},
+        ]
+        overrides, error = parse_tokens("ab", tokens)
+        assert error is None
+        assert overrides == {0: {"first": "one"}, 1: {"second": "two"}}
+
+    def test_bang_skips_remaining_tokens_in_current_block(self):
+        tokens = [
+            {"field_key": "first", "token_kind": "lookup", "lookup_table": {"a": "one"}, "block_sort_order": 0},
+            {"field_key": "skipped", "token_kind": "lookup", "lookup_table": {"x": "skip"}, "block_sort_order": 0},
+            {"field_key": "second", "token_kind": "lookup", "lookup_table": {"b": "two"}, "block_sort_order": 1},
+        ]
+        overrides, error = parse_tokens("a!b", tokens)
+        assert error is None
+        assert overrides == {0: {"first": "one"}, 1: {"second": "two"}}
+
+    def test_bang_after_auto_rollover_skips_the_current_block(self):
+        tokens = [
+            {"field_key": "first", "token_kind": "lookup", "lookup_table": {"a": "one"}, "block_sort_order": 0},
+            {"field_key": "second", "token_kind": "lookup", "lookup_table": {"b": "two"}, "block_sort_order": 1},
+            {"field_key": "third", "token_kind": "lookup", "lookup_table": {"c": "three"}, "block_sort_order": 2},
+        ]
+        overrides, error = parse_tokens("a!c", tokens)
+        assert error is None
+        assert overrides == {0: {"first": "one"}, 2: {"third": "three"}}
+
+
+class TestParseQuickType:
+    def test_db_backed_appendix_code_resolves_preset_and_overrides(self, db):
+        preset, overrides, error = quicktype.parse_quick_type(" dai37 ")
+        assert error is None
+        assert preset["short_code"] == "dai"
+        assert overrides == {
+            0: {"appendicite_type": "periappendicite", "appendix_size_cm": "7"}
+        }
+
+    def test_db_backed_bare_code_without_tokens_is_valid(self, db):
+        preset, overrides, error = quicktype.parse_quick_type("vb")
+        assert error is None
+        assert preset["short_code"] == "vb"
+        assert overrides == {}
+
+    def test_rejects_unknown_db_backed_code(self, db):
+        preset, overrides, error = quicktype.parse_quick_type("unknown")
+        assert preset is None and overrides is None
+        assert "no preset short_code matches" in error

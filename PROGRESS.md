@@ -87,10 +87,16 @@ which checkpoints are safe to hand an unfamiliar model first.
       unchanged before/after a full run, not just assumed.
 - [x] 1. `test_rendering.py` — mostly done (pure functions covered;
       `build_context`/`render_block` themselves not yet).
-- [ ] 2. `test_quicktype.py` — partial (validator + pure parsing
-      functions covered; `parse_tokens`'s token-consumption paths and
-      the DB-backed `parse_quick_type` entry point are not).
-- [ ] 3. `test_grouping.py` — not started.
+- [x] 2. `test_quicktype.py` — lookup/measurement consumption,
+      `digit_width`, multi-block rollover/skip semantics, every config
+      validator rejection path, and DB-backed `parse_quick_type` are
+      covered. The new rollover/skip regression test exposed and fixed
+      a real parser cursor bug. Verified: 51 tests pass; real
+      `pathology.db` checksum unchanged before/after.
+- [x] 3. `test_grouping.py` — contiguous-only merging, case-wide
+      numbering, conclusion-group boundaries/no-group fallback, and
+      addendum agreement/conflict-drop behavior are covered. Verified:
+      57 tests pass.
 - [x] 4. `test_consistency.py` — done, formalizes this session's
       ad-hoc verification script.
 - [ ] 5. `test_golden_output.py` — one fixture pair done (`dai` at

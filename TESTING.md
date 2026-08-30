@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-39 tests currently exist, running in well under a second.
+57 tests currently exist, running in well under a second.
 
 ## Structure
 
@@ -166,22 +166,20 @@ and `render_block()` themselves aren't covered yet (they need a real
 Block, so they'd use the `db` fixture) — a reasonable next addition to
 this same file.
 
-**Checkpoint 2 — `test_quicktype.py`: partial, real gap.** Covers
-`validate_quick_type_config()`'s main rejection paths and the pure
-parsing functions. NOT yet covered: `parse_tokens()`'s lookup-token and
-measurement-token consumption paths, `digit_width` capping, the
-DB-backed `parse_quick_type()` entry point. Good next piece for
-whichever model/session picks this up — self-contained, and this
-project's most parser-heavy module, so it rewards careful test design.
+**Checkpoint 2 — `test_quicktype.py`: DONE.** Covers every
+`validate_quick_type_config()` rejection path, lookup and measurement
+consumption, `digit_width` capping, multi-block automatic rollover and
+`!` skip semantics, plus the DB-backed `parse_quick_type()` entry point.
+The rollover/skip regression test exposed and fixed a real parser bug:
+after automatic rollover, `!` had been skipping to the block already
+awaiting input rather than past it.
 
-**Checkpoint 3 — `test_grouping.py`: not started.** `_merge_section`'s
-contiguous-run merging and numbering, `_partition_into_sections`'s
-conclusion_group boundary behavior (including the "nothing sets
-conclusion_group → one section" fallback), and
-`compute_conclusion_addenda`'s conflict-drops-silently behavior — that
-last one is the "never guess a synthesis rule" property CLAUDE.md calls
-out explicitly, worth a named regression test rather than incidental
-coverage.
+**Checkpoint 3 — `test_grouping.py`: DONE.** Covers `_merge_section`'s
+contiguous-only merging and case-wide numbering,
+`_partition_into_sections`'s group boundaries and no-group fallback,
+and `compute_conclusion_addenda`'s agreement and named
+conflict-drops-silently behavior. The latter explicitly preserves the
+"never guess a synthesis rule" safety property.
 
 **Checkpoint 4 — `test_consistency.py`: done** as a worked example —
 formalizes the ad-hoc script this session's field-consistency
