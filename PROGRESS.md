@@ -7,13 +7,16 @@ record from earlier rounds.
 
 ## Current status
 
-**No task is currently in progress.** The next task is an **Editor UI design
-discussion**; implementation has not started.
+**No task is currently in progress.** The Editor UI design is frozen for
+implementation. The next task is **Stage 1: read-only Editor navigator,
+relationship/impact display, and real default preview**; no Editor write path
+is enabled at this stage.
 
 Tier 1 (foundation) is complete. Tier 2 content is now considered **stable
 enough to expose for self-editing**, with the usual safeguard that a real
-template/content change still needs clinical review before its fixtures are
-updated. Tier 3 (Editor UI) may now be planned.
+template/content change still needs clinical review before an operational
+baseline is deliberately updated. Tier 3 (Editor UI) may now be implemented
+only in the frozen stages defined in `EDITOR_UI_PROPOSAL.md`.
 
 ## Last verified state
 
@@ -39,14 +42,15 @@ Always verify this against a fresh `git log --oneline -20` and `git status`
 at the start of a session; this document describes the checked state above,
 not any later local work.
 
-## Editor UI planning boundary
+## Editor UI implementation boundary
 
-The first Editor UI discussion should decide which editing capabilities are
-in scope and the safety model for changing live templates/data. It should
-use the existing test suite and golden-fixture review ritual rather than
-inventing a parallel workflow.
+`EDITOR_UI_PROPOSAL.md` is the frozen design baseline, including its
+validated-case protection, pending-case acknowledgement, recovery, test
+isolation, and staging requirements. Start at its read-only Stage 1. Do not
+enable content writes until Stage 2 is fully implemented and verified; each
+stage must leave the repository tested and self-consistent before the next.
 
-Not blockers for starting that discussion: extending Quick Type beyond
+Not blockers for starting implementation: extending Quick Type beyond
 `dai`, extending field-consistency beyond the Appendix pilot, and future
 case-type content such as breast.
 
@@ -56,4 +60,4 @@ case-type content such as breast.
 - **Test commands, DB isolation, and fixture ritual:** `TESTING.md`
 - **Settled design rationale and completed historical build records:**
   `HISTORY.md`
-
+- **Editor UI (Tier 3) design proposal:** `EDITOR_UI_PROPOSAL.md`
