@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import re
 import pandas as pd
 
 DB_NAME = "pathology.db"
@@ -102,6 +103,153 @@ def get_all_blocks():
     rows = conn.execute("SELECT id, key, name FROM Blocks WHERE is_table = 0 ORDER BY name").fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_all_editor_blocks():
+    """Returns every Block with its rendering metadata for the read-only Editor."""
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM Blocks ORDER BY name, key").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_all_fields():
+    """Returns every Field for the read-only Editor."""
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM Fields ORDER BY label, key").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_preset_usage(preset_id):
+    """Ordered Blocks (with resolved Fields) used by one Preset."""
+    return get_preset_blocks(preset_id)
+
+
+def get_block_usage(block_id):
+    """Relationships and conservative pending-case impact for one Block.
+
+    A saved composed case records its actual Block instances. Older saved
+    cases have no such list and therefore still use their Preset's current
+    Block list. This mirrors the current reopen behaviour without changing
+    it; Stage 1 only displays the result and never writes it.
+    """
+    conn = get_db_connection()
+    preset_rows = conn.execute(
+        """SELECT p.id, p.name, p.short_code, p.category, pb.sort_order
+           FROM Preset_Blocks pb JOIN Presets p ON p.id = pb.preset_id
+           WHERE pb.block_id = ? ORDER BY p.category, p.name, pb.sort_order""",
+        (block_id,),
+    ).fetchall()
+    field_rows = conn.execute(
+        """SELECT f.*, bf.sort_order, bf.label_override, bf.default_override,
+                  bf.context_section
+           FROM Block_Fields bf JOIN Fields f ON f.id = bf.field_id
+           WHERE bf.block_id = ? ORDER BY bf.sort_order""",
+        (block_id,),
+    ).fetchall()
+    pending_rows = conn.execute(
+        "SELECT preset_id, structured_input FROM Cases WHERE status = 'pending'"
+    ).fetchall()
+
+    impacted = _pending_case_count_for_block_ids(conn, {block_id}, pending_rows)
+    conn.close()
+    return {
+        "presets": [dict(row) for row in preset_rows],
+        "fields": [dict(row) for row in field_rows],
+        "pending_case_count": impacted,
+    }
+
+
+def get_field_usage(field_id):
+    """Relationships and pending-case impact for one Field."""
+    conn = get_db_connection()
+    block_rows = conn.execute(
+        """SELECT b.id, b.key, b.name, bf.sort_order, bf.label_override,
+                  bf.default_override, bf.context_section
+           FROM Block_Fields bf JOIN Blocks b ON b.id = bf.block_id
+           WHERE bf.field_id = ? ORDER BY b.name, bf.sort_order""",
+        (field_id,),
+    ).fetchall()
+    block_ids = {row["id"] for row in block_rows}
+    preset_rows = conn.execute(
+        """SELECT DISTINCT p.id, p.name, p.short_code, p.category
+           FROM Preset_Blocks pb JOIN Presets p ON p.id = pb.preset_id
+           JOIN Block_Fields bf ON bf.block_id = pb.block_id
+           WHERE bf.field_id = ? ORDER BY p.category, p.name""",
+        (field_id,),
+    ).fetchall()
+    pending_rows = conn.execute(
+        "SELECT preset_id, structured_input FROM Cases WHERE status = 'pending'"
+    ).fetchall()
+
+    impacted = _pending_case_count_for_block_ids(conn, block_ids, pending_rows)
+    conn.close()
+    return {
+        "blocks": [dict(row) for row in block_rows],
+        "presets": [dict(row) for row in preset_rows],
+        "pending_case_count": impacted,
+    }
+
+
+def get_snippet_usage(shortcut):
+    """Returns Blocks whose templates call one Snippet shortcut exactly."""
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM Blocks ORDER BY name, key").fetchall()
+    snippet_call = re.compile(r"snippet\(\s*(['\"])" + re.escape(shortcut) + r"\1\s*\)")
+    template_columns = (
+        "macro_template", "micro_template", "conclusion_template", "context_template",
+        "title_fragment_template", "conclusion_label_template",
+    )
+    blocks = [
+        dict(row) for row in rows
+        if any(snippet_call.search(row[column] or "") for column in template_columns)
+    ]
+    pending_rows = conn.execute(
+        "SELECT preset_id, structured_input FROM Cases WHERE status = 'pending'"
+    ).fetchall()
+    pending_case_count = _pending_case_count_for_block_ids(
+        conn, {block["id"] for block in blocks}, pending_rows
+    )
+    conn.close()
+    return {"blocks": blocks, "pending_case_count": pending_case_count}
+
+
+def get_preset_pending_case_count(preset_id):
+    """Number of pending cases directly saved against one Preset."""
+    conn = get_db_connection()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM Cases WHERE status = 'pending' AND preset_id = ?", (preset_id,)
+    ).fetchone()[0]
+    conn.close()
+    return count
+
+
+def _pending_case_count_for_block_ids(conn, block_ids, pending_rows):
+    """Counts unique pending cases whose saved composition uses Block IDs.
+
+    The helper deliberately accepts fetched rows so a caller can calculate its
+    entire impact view with one connection and without relying on SQLite's
+    JSON extension.  A case without saved composition remains a legacy case
+    and inherits its Preset's Blocks, exactly as current reopen does.
+    """
+    if not block_ids:
+        return 0
+    impacted = 0
+    for case in pending_rows:
+        structured_input = json.loads(case["structured_input"]) if case["structured_input"] else {}
+        instances = structured_input.get("block_instances")
+        if instances is not None:
+            impacted += any(instance.get("block_id") in block_ids for instance in instances)
+            continue
+        placeholders = ", ".join("?" for _ in block_ids)
+        inherited = conn.execute(
+            f"""SELECT 1 FROM Preset_Blocks WHERE preset_id = ?
+                AND block_id IN ({placeholders}) LIMIT 1""",
+            (case["preset_id"], *block_ids),
+        ).fetchone()
+        impacted += bool(inherited)
+    return impacted
 
 
 def get_block_by_id(block_id):

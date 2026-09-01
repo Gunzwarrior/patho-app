@@ -7,10 +7,12 @@ record from earlier rounds.
 
 ## Current status
 
-**No task is currently in progress.** The Editor UI design is frozen for
-implementation. The next task is **Stage 1: read-only Editor navigator,
-relationship/impact display, and real default preview**; no Editor write path
-is enabled at this stage.
+**No task is currently in progress.** Editor UI **Stage 1 is complete**:
+the unsafe Snippet writer is replaced by a read-only navigator for Presets,
+Blocks, Fields, and Snippets. It shows relationships, conservative
+pending-case impact (including saved per-case composition), and renders a
+Preset's resolved defaults through the real Workspace report pipeline. No
+Editor write path, schema migration, or content change is enabled.
 
 Tier 1 (foundation) is complete. Tier 2 content is now considered **stable
 enough to expose for self-editing**, with the usual safeguard that a real
@@ -29,6 +31,10 @@ only in the frozen stages defined in `EDITOR_UI_PROPOSAL.md`.
 - All golden fixtures regenerate byte-identically.
 - The real `pathology.db` checksum was unchanged across the final test run.
 - `py_compile`, `git diff --check`, and the Streamlit app boot check passed.
+- Stage 1 verification: `pytest -q` reports **105 passed**, including the
+  read-only Editor's database relationships, composed-case impact, default
+  rendering, and AppTest smoke coverage; `py_compile`, `git diff --check`,
+  and a Streamlit boot + HTTP 200 check passed.
 
 Most recent implementation commits:
 
