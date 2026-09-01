@@ -7,10 +7,17 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 2 is in progress (uncommitted).** Baseline verification at commit
-`12212cc`: `venv/bin/pytest -q` passed (105 tests) and the working tree was
-clean. The work is limited to the operational-safety foundation; Editor
-content-write controls remain disabled.
+**Editor UI Stage 2 is complete and committed** at `03f85af` (Add operational
+safety foundation). The final browser review passed, `venv/bin/pytest -q`
+passed with 129 tests, and the operational `pathology.db` checksum remained
+unchanged across the suite. The working tree was clean immediately after the
+commit.
+
+**Stage 3 — Safe direct editing is next and has not started.** Implement only
+the limited direct-edit scope and safeguards frozen in
+`EDITOR_UI_PROPOSAL.md` §3, §6, and Stage 3 of §9. Do not begin Stage 4
+operational-review tooling, Stage 5 model packages, or any Stage 6 structural
+editing while implementing Stage 3.
 
 **Stage 2 checkpoint 1 — backend safety: verified.** Additive/idempotent
 migration, validation history/backfill, immutable validated-case backend
@@ -48,10 +55,13 @@ consent is cleared, and Preset display labels remain frozen for the current
 case generation so a concurrent rename cannot remount the selector and wipe
 the form; the new label appears on the next case/reset.
 
-**Stage 2 final verification — ready for review, uncommitted.** `pytest -q`
+**Stage 2 final verification — reviewed and committed.** `pytest -q`
 passes with 129 tests; changed Python files compile; `git diff --check`
 passes; and Streamlit booted successfully with an HTTP 200 homepage check.
-No Editor content-write control was added.
+Thomas completed the browser review, including validated-case navigation,
+duplicate validated IDs, continuous fingerprint acknowledgement, and stable
+Preset selection across a live rename. No Editor content-write control was
+included in Stage 2.
 
 Editor UI **Stage 1 is complete**:
 the unsafe Snippet writer is replaced by a read-only navigator for Presets,
@@ -85,9 +95,9 @@ only in the frozen stages defined in `EDITOR_UI_PROPOSAL.md`.
 Most recent implementation commits:
 
 ```
-0997142 Add composed case blocks
-8270a53 Add case block composition controls
-384f43c Add case block composition plumbing
+03f85af Add operational safety foundation
+12212cc Add read-only editor navigator
+efe8d56 Freeze editor UI design
 ```
 
 Always verify this against a fresh `git log --oneline -20` and `git status`
@@ -98,9 +108,9 @@ not any later local work.
 
 `EDITOR_UI_PROPOSAL.md` is the frozen design baseline, including its
 validated-case protection, pending-case acknowledgement, recovery, test
-isolation, and staging requirements. Start at its read-only Stage 1. Do not
-enable content writes until Stage 2 is fully implemented and verified; each
-stage must leave the repository tested and self-consistent before the next.
+isolation, and staging requirements. Stages 1 and 2 are complete. Start at
+Stage 3 only, and leave the repository tested and self-consistent before any
+proposal to begin Stage 4.
 
 Not blockers for starting implementation: extending Quick Type beyond
 `dai`, extending field-consistency beyond the Appendix pilot, and future

@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-88 tests currently exist, running in well under a second.
+129 tests currently exist, running in a few seconds.
 
 ## Structure
 
@@ -58,6 +58,8 @@ patho-app/
     test_quicktype.py        # unit tests, quicktype.py (partial)
     test_consistency.py      # unit tests, consistency.py
     test_golden_output.py    # golden-fixture regression tests (partial)
+    test_workspace_ui.py     # AppTest coverage for Workspace state and safety gates
+    test_stage2_safety.py    # migration, lifecycle, fingerprint, and snapshot safety
     golden_helpers.py        # shared render-a-preset-at-defaults helper
     golden_fixtures/         # frozen known-good plain-text output
     regenerate_golden.py     # deliberate, human-reviewed fixture updates

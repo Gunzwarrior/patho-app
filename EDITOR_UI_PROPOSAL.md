@@ -1,6 +1,6 @@
 # EDITOR_UI_PROPOSAL.md — Tier 3 Editor UI: post-review design
 
-Status: **frozen for implementation; not implemented.**
+Status: **frozen design; Stages 1–2 complete; Stage 3 is next.**
 
 This is the approved design baseline. Implementation begins only at Stage 1
 and follows its stage ordering; do not reopen the architecture or expand the
@@ -392,15 +392,15 @@ starts. In particular, Stage 2’s validation, validation-history insertion,
 and case-status transitions are atomic, and Stage 3 content writes remain
 disabled until all Stage 2 safety requirements are implemented and verified.
 
-1. **Read-only navigator.** Replace the unsafe Snippet writer with browsing,
+1. **COMPLETE (`12212cc`) — Read-only navigator.** Replace the unsafe Snippet writer with browsing,
    use/impact display, and preview. This carries no migration or write risk.
-2. **Operational safety foundation.** Non-destructive migration; immutable
+2. **COMPLETE (`03f85af`) — Operational safety foundation.** Non-destructive migration; immutable
    validated-case view, history, and explicit unvalidation; pending content
    fingerprint/acknowledgement throughout an open session; stable-ID Preset
    selection before any Preset-name edit; `init_db.py` guard; per-connection
    foreign keys; fail-closed test DB isolation; ID-preserving, case-aware
    snapshot export/restore round trip.
-3. **Safe direct editing.** Transactional content revisions, strict
+3. **NEXT — Safe direct editing.** Transactional content revisions, strict
    candidate-state validation, affected-Preset/pending-context renders,
    compare-and-swap, safe revision revert, and direct edit forms for the
    limited §3 scope.
