@@ -7,7 +7,53 @@ record from earlier rounds.
 
 ## Current status
 
-**No task is currently in progress.** Editor UI **Stage 1 is complete**:
+**Stage 2 is in progress (uncommitted).** Baseline verification at commit
+`12212cc`: `venv/bin/pytest -q` passed (105 tests) and the working tree was
+clean. The work is limited to the operational-safety foundation; Editor
+content-write controls remain disabled.
+
+**Stage 2 checkpoint 1 — backend safety: verified.** Additive/idempotent
+migration, validation history/backfill, immutable validated-case backend
+rules and audited return-to-pending transition, per-connection foreign keys,
+fail-closed pytest DB redirection, deterministic case-aware snapshot
+export/restore, and fingerprint/revision persistence are covered by the
+isolated suite. `pytest -q` passed with 113 tests at this checkpoint.
+
+**Stage 2 checkpoint 2 — Workspace safety: verified.** Workspace now uses
+Preset IDs rather than display labels, opens validated cases as a saved,
+read-only artifact with the explicit audited return action only, and checks a
+pending case's relevant-content fingerprint on every rendering rerun. A
+changed draft needs acknowledgement for its current fingerprint before either
+save action is enabled. The combined suite passes with 116 tests. Final
+static and Streamlit boot checks remain before review.
+
+**Stage 2 review corrections — verified.** The adversarial review findings
+were fixed without expanding scope: both default DB names now fail closed
+under pytest; migration repairs earlier Stage 2 draft fingerprints/history
+once without masking later content changes; fingerprints exclude non-rendering
+Preset metadata; snapshot relationships are validated exactly; saved-Case
+protection compares candidate fingerprints and is rechecked under a locked
+apply; and Case history no longer duplicates validation lines. Regression
+coverage now includes audit rollback, all composed fingerprint shapes,
+same-session acknowledgement invalidation, malformed/case-altering restores,
+restore concurrency, and stable relationship IDs.
+
+**Stage 2 browser-review corrections — verified.** The frozen validated view
+now has an explicit New Case reset; validated case-number collisions show
+only the immutable-record error rather than an inapplicable pending-overwrite
+warning; and Workspace's deprecated full-width button arguments were updated
+without changing layout behavior. Follow-up browser findings are also fixed:
+a second same-session content change can be acknowledged again after stale
+consent is cleared, and Preset display labels remain frozen for the current
+case generation so a concurrent rename cannot remount the selector and wipe
+the form; the new label appears on the next case/reset.
+
+**Stage 2 final verification — ready for review, uncommitted.** `pytest -q`
+passes with 129 tests; changed Python files compile; `git diff --check`
+passes; and Streamlit booted successfully with an HTTP 200 homepage check.
+No Editor content-write control was added.
+
+Editor UI **Stage 1 is complete**:
 the unsafe Snippet writer is replaced by a read-only navigator for Presets,
 Blocks, Fields, and Snippets. It shows relationships, conservative
 pending-case impact (including saved per-case composition), and renders a

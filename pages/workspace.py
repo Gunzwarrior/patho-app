@@ -9,7 +9,8 @@ import composition
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
 CASE_SCOPED_EXACT_KEYS = (
     "_wildcard_preset_id", "_loaded_case_number", "_case_block_instances",
-    "_composition_field_restore",
+    "_composition_field_restore", "_validated_case", "_saved_content_fingerprint",
+    "_saved_rendered_html", "_acknowledged_content_fingerprint", "_preset_display_labels",
 )
 
 
@@ -244,9 +245,21 @@ if st.session_state.pop("_do_case_reopen", False):
             st.session_state[f"clin_info_{gen}"] = case["clinical_info"] or ""
             st.session_state["_loaded_case_number"] = case["case_number"]
 
-            preset_label = f"{preset['name']} ({preset['short_code']})"
-            st.session_state["preset_select"] = preset_label
-            st.session_state["_last_selected_label"] = preset_label
+            st.session_state["preset_select"] = preset["id"]
+            st.session_state["_last_selected_preset_id"] = preset["id"]
+
+            if case["status"] == "validated":
+                # A validated report is an artifact, not a live rendering.
+                # Keep only its saved HTML available until an explicit audited
+                # transition returns it to pending.
+                st.session_state["_validated_case"] = case
+                st.session_state["_reopen_success"] = f"📂 Case '{case['case_number']}' opened as a frozen validated record."
+                # The page stops before live Workspace widgets below; the
+                # remaining restoration is harmless state preparation if the
+                # case is explicitly returned to pending on a later rerun.
+
+            st.session_state["_saved_content_fingerprint"] = case.get("content_fingerprint")
+            st.session_state["_saved_rendered_html"] = case.get("rendered_html") or ""
 
             preset_blocks = db.get_preset_blocks(preset["id"])
             block_instances = case["structured_input"].get(
@@ -324,12 +337,11 @@ if st.session_state.pop("_do_quick_type_apply", False):
     if not _qt_preset:
         st.session_state["_quicktype_error"] = "⚠️ Quick Type code resolved to a preset that no longer exists."
     else:
-        _qt_preset_label = f"{_qt_preset['name']} ({_qt_preset['short_code']})"
-        st.session_state["preset_select"] = _qt_preset_label
+        st.session_state["preset_select"] = _qt_preset["id"]
         # Set alongside preset_select, same as the case-reopen block above --
         # prevents the preset-switch-change watcher further down from seeing
         # this as a fresh change and scheduling a second, unwanted reset.
-        st.session_state["_last_selected_label"] = _qt_preset_label
+        st.session_state["_last_selected_preset_id"] = _qt_preset["id"]
 
         _qt_summary_parts = [_qt_preset["short_code"]]
         _qt_preset_blocks = db.get_preset_blocks(_qt_preset["id"])
@@ -370,7 +382,7 @@ with st.sidebar:
                 label = pc["case_number"]
                 if pc["pending_reason"]:
                     label += f" — {pc['pending_reason']}"
-                if st.button(label, key=f"pending_quicklink_{pc['case_number']}_{form_gen}", use_container_width=True):
+                if st.button(label, key=f"pending_quicklink_{pc['case_number']}_{form_gen}", width="stretch"):
                     st.session_state["_reopen_case_number"] = pc["case_number"]
                     st.session_state["_do_case_reopen"] = True
                     st.rerun()
@@ -392,12 +404,75 @@ for _msg_key, _renderer in (
 
 st.title("🔬 Workspace")
 
+validated_case = st.session_state.get("_validated_case")
+if validated_case:
+    if st.button("➕ New Case", key=f"validated_new_case_{form_gen}", width="stretch"):
+        # The validated view stops before the Preset widget is instantiated,
+        # so Streamlit has already retired that widget's value. Seed both
+        # sides of the selection watcher explicitly to avoid an unnecessary
+        # second generation reset on the fresh Workspace.
+        st.session_state["preset_select"] = None
+        st.session_state["_last_selected_preset_id"] = None
+        st.session_state["_do_workspace_reset"] = True
+        st.rerun()
+    st.info("This validated case is frozen. Its saved report is shown exactly as validated; it is not re-rendered from current content.")
+    st.markdown(validated_case["rendered_html"] or "", unsafe_allow_html=True)
+    validation_history = db.get_case_validation_history(validated_case["case_number"])
+    status_history = db.get_case_status_history(validated_case["case_number"])
+    return_history = [
+        event for event in status_history if event["transition"] == "validated_to_pending"
+    ]
+    with st.expander("Case history"):
+        st.caption(
+            f"{len(validation_history)} immutable validation event(s) and "
+            f"{len(return_history)} audited return-to-pending event(s) preserved."
+        )
+        for event in validation_history:
+            st.write(f"Validated — {event['validated_at']}")
+        for event in return_history:
+            st.write(f"Returned to pending — {event['created_at']} — reason: {event['reason']}")
+    st.warning("Return to pending is an audited correction. The validated artifact above remains in history.")
+    return_reason = st.text_input("Reason for return to pending", key=f"return_pending_reason_{form_gen}")
+    return_confirmed = st.checkbox(
+        "I confirm this validated case must return to pending", key=f"return_pending_confirm_{form_gen}"
+    )
+    if st.button("↩️ Return to Pending", type="primary", disabled=not (return_confirmed and return_reason.strip())):
+        if db.return_case_to_pending(validated_case["case_number"], return_reason):
+            st.session_state["_reopen_case_number"] = validated_case["case_number"]
+            st.session_state["_do_case_reopen"] = True
+            st.session_state["_save_confirmation"] = "✅ Validated case returned to pending with an audit record."
+            st.rerun()
+        else:
+            st.error("❌ Could not return this case to pending.")
+    st.stop()
+
 c1, c2, c3 = st.columns([1, 2, 1])
 with c1: case_id = st.text_input("📁 Case ID", key=f"case_id_{form_gen}")
 with c2:
     presets = db.get_all_presets()
-    preset_labels = ["-- Select --"] + [f"{p['name']} ({p['short_code']})" for p in presets]
-    selected_label = st.selectbox("📋 Select Preset", preset_labels, key="preset_select")
+    presets_by_id = {preset["id"]: preset for preset in presets}
+    # Streamlit serialises selectbox display strings to the browser even when
+    # the Python-side value is the stable Preset ID. If a Preset is renamed in
+    # another tab while this form is open, changing those display strings can
+    # make the frontend retire its selected option on a later interaction.
+    # Freeze labels for this case generation; the next case/reset rebuilds the
+    # map and picks up the rename without disturbing work already in progress.
+    if "_preset_display_labels" not in st.session_state:
+        st.session_state["_preset_display_labels"] = {
+            preset["id"]: f"{preset['name']} ({preset['short_code']})"
+            for preset in presets
+        }
+    preset_display_labels = st.session_state["_preset_display_labels"]
+    for preset in presets:
+        preset_display_labels.setdefault(
+            preset["id"], f"{preset['name']} ({preset['short_code']})"
+        )
+    selected_preset_id = st.selectbox(
+        "📋 Select Preset", [None, *presets_by_id], key="preset_select",
+        format_func=lambda preset_id: "-- Select --" if preset_id is None else (
+            preset_display_labels[preset_id]
+        ),
+    )
 with c3:
     st.text_input(
         "⚡ Quick Type",
@@ -417,9 +492,11 @@ with c3:
 existing_case = db.get_case_by_number(case_id) if case_id.strip() else None
 is_legit_resave = existing_case and case_id == st.session_state.get("_loaded_case_number")
 duplicate_conflict = existing_case is not None and not is_legit_resave
+pending_duplicate_conflict = duplicate_conflict and existing_case["status"] == "pending"
+validated_duplicate_conflict = duplicate_conflict and existing_case["status"] == "validated"
 
 overwrite_confirmed = True
-if duplicate_conflict:
+if pending_duplicate_conflict:
     reason_note = f", {existing_case['pending_reason']}" if existing_case.get("pending_reason") else ""
     last_touched = existing_case.get("updated_at") or existing_case.get("created_at")
     st.warning(
@@ -430,6 +507,9 @@ if duplicate_conflict:
     overwrite_confirmed = st.checkbox(
         "I understand — overwrite the existing case anyway", key=f"overwrite_confirm_{form_gen}"
     )
+if validated_duplicate_conflict:
+    st.error("⚠️ This case is validated and cannot be overwritten. Reopen it to use the explicit Return to Pending action.")
+    overwrite_confirmed = False
 
 # Detect ANY change in preset selection (not just transitions to/from
 # "-- Select --") and schedule a reset for next run. This matters even
@@ -437,10 +517,13 @@ if duplicate_conflict:
 # etc0 -> etc5, both pointing at the Thyroid Cytology block), the field
 # widget keys don't change either — without this, the stale value from
 # the previous preset would silently persist.
-_previous_label = st.session_state.get("_last_selected_label")
-if selected_label != _previous_label:
-    st.session_state["_last_selected_label"] = selected_label
-    if _previous_label is not None:  # skip the harmless no-op reset on cold start
+if "_last_selected_preset_id" not in st.session_state:
+    st.session_state["_last_selected_preset_id"] = selected_preset_id
+_previous_preset_id = st.session_state.get("_last_selected_preset_id")
+if selected_preset_id != _previous_preset_id:
+    _had_previous_selection = "_last_selected_preset_id" in st.session_state
+    st.session_state["_last_selected_preset_id"] = selected_preset_id
+    if _had_previous_selection:  # skip the harmless no-op reset on cold start
         st.session_state["_do_preset_switch_reset"] = True
         st.rerun()
 
@@ -466,8 +549,8 @@ with st.expander("🔓 Reopen a saved case"):
 
 st.markdown("---")
 
-if selected_label != "-- Select --":
-    preset = presets[preset_labels.index(selected_label) - 1]
+if selected_preset_id is not None:
+    preset = presets_by_id[selected_preset_id]
     preset_blocks = db.get_preset_blocks(preset["id"])
     if "_case_block_instances" not in st.session_state:
         st.session_state["_case_block_instances"] = composition.derive_block_instances(preset_blocks)
@@ -810,7 +893,7 @@ if selected_label != "-- Select --":
 
     st.caption(
         "Pour revenir sur une validation par erreur : rouvrez le cas (barre latérale ou "
-        "ci-dessus) puis cliquez « Save as Pending »."
+        "ci-dessus) puis utilisez l'action auditée « Return to Pending »."
     )
 
     structured_input = {
@@ -844,6 +927,40 @@ if selected_label != "-- Select --":
         "final_title_edit": title,
     }
 
+    # A pending draft is intentionally live, but only with a case-specific
+    # acknowledgement when the relevant content changed since its save.  This
+    # is recomputed on every rendering rerun and again by save_case itself.
+    current_content_fingerprint = db.compute_case_content_fingerprint(
+        preset["id"], structured_input
+    )
+    saved_content_fingerprint = st.session_state.get("_saved_content_fingerprint")
+    acknowledged_fingerprint = st.session_state.get("_acknowledged_content_fingerprint")
+    content_acknowledgement_required = bool(
+        st.session_state.get("_loaded_case_number") and (
+            saved_content_fingerprint != current_content_fingerprint or
+            (acknowledged_fingerprint is not None and acknowledged_fingerprint != current_content_fingerprint)
+        )
+    )
+    content_acknowledged = True
+    if content_acknowledgement_required:
+        # A content edit in another tab during this open session invalidates
+        # this checkbox before it is instantiated, avoiding stale consent.
+        acknowledgement_key = f"content_change_ack_{form_gen}"
+        if acknowledged_fingerprint is not None and acknowledged_fingerprint != current_content_fingerprint:
+            st.session_state.pop(acknowledgement_key, None)
+            st.session_state.pop("_acknowledged_content_fingerprint", None)
+        st.warning("⚠️ Content changed since this draft was saved. Review the previous and current reports, then acknowledge this specific content version before saving.")
+        with st.expander("Compare saved draft with current rendering"):
+            st.caption("Saved draft")
+            st.markdown(st.session_state.get("_saved_rendered_html", ""), unsafe_allow_html=True)
+            st.caption("Current rendering")
+            st.markdown(final_html, unsafe_allow_html=True)
+        content_acknowledged = st.checkbox(
+            "I acknowledge the content change for this draft", key=acknowledgement_key
+        )
+        if content_acknowledged:
+            st.session_state["_acknowledged_content_fingerprint"] = current_content_fingerprint
+
     # Field-consistency warning: consolidated across every block in the
     # case (not just one), shown once each even if the identical message
     # fired from more than one block instance. Warn-and-confirm, same
@@ -863,10 +980,11 @@ if selected_label != "-- Select --":
     c_pending, c_validated, c_copy = st.columns(3)
 
     with c_pending:
-        if st.button("💾 Save as Pending", use_container_width=True, disabled=not (overwrite_confirmed and consistency_confirmed)):
+        if st.button("💾 Save as Pending", width="stretch", disabled=not (overwrite_confirmed and consistency_confirmed and content_acknowledged)):
             if case_id:
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
-                                 status="pending", pending_reason=pending_reason_value):
+                                 status="pending", pending_reason=pending_reason_value,
+                                 content_fingerprint=current_content_fingerprint):
                     st.session_state["_save_confirmation"] = (
                         f"✅ Case '{case_id}' saved as pending ({pending_reason_value}) — "
                         "workspace reset for the next case."
@@ -879,10 +997,11 @@ if selected_label != "-- Select --":
                 st.warning("⚠️ Please enter a Case ID before saving.")
 
     with c_validated:
-        if st.button("✅ Save as Validated", use_container_width=True, type="primary", disabled=not (overwrite_confirmed and consistency_confirmed)):
+        if st.button("✅ Save as Validated", width="stretch", type="primary", disabled=not (overwrite_confirmed and consistency_confirmed and content_acknowledged)):
             if case_id:
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
-                                 status="validated", pending_reason=None):
+                                 status="validated", pending_reason=None,
+                                 content_fingerprint=current_content_fingerprint):
                     st.session_state["_save_confirmation"] = (
                         f"✅ Case '{case_id}' saved as validated — workspace reset for the next case."
                     )

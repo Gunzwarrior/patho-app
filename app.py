@@ -1,6 +1,10 @@
 import streamlit as st
+import database
 
 st.set_page_config(page_title="PathoPilot", layout="wide", page_icon="🔬")
+# Idempotent and additive: operational deployments receive safety columns
+# without a destructive init_db rebuild.
+database.migrate_schema()
 
 with st.sidebar:
     st.title("🔬 PathoPilot")

@@ -26,10 +26,19 @@ on monkeypatching both globals in lockstep.
 """
 
 import shutil
+import tempfile
+from pathlib import Path
 import pytest
 
 import database
 import init_db
+
+# Fail closed before collection: a test which forgets both fixtures can only
+# reach this private, initially empty path, never the operational DB.
+_safe_root = Path(tempfile.mkdtemp(prefix="pathopilot_pytest_"))
+_safe_db = _safe_root / "isolated_pathology.db"
+database.DB_NAME = str(_safe_db)
+init_db.DB_NAME = str(_safe_db)
 
 
 @pytest.fixture(scope="session")

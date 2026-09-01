@@ -10,6 +10,8 @@ never migrated across a schema rebuild — this script is for development,
 not for a database holding real case history.
 """
 
+import argparse
+import os
 import sqlite3
 import seed_data
 
@@ -306,8 +308,18 @@ def setup_database(db_name=None):
 
     conn.commit()
     conn.close()
+    # The rebuild path creates a fresh schema, then applies the additive
+    # operational-safety migration so disposable databases match production.
+    import database
+    database.migrate_schema(db_name)
     print(f"✅ Database rebuilt on v2 schema. '{db_name}' is ready.")
 
 
 if __name__ == "__main__":
-    setup_database()
+    parser = argparse.ArgumentParser(description="Rebuild a disposable PathoPilot database.")
+    parser.add_argument("--db", default=DB_NAME, help="target database path (default: pathology.db)")
+    parser.add_argument("--rebuild", action="store_true", help="confirm destructive rebuild")
+    args = parser.parse_args()
+    if os.path.exists(args.db) and not args.rebuild:
+        parser.error(f"Refusing to overwrite existing database '{args.db}'. Use --rebuild only for a disposable/development DB.")
+    setup_database(args.db)
