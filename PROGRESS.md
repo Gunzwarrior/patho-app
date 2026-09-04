@@ -7,17 +7,21 @@ record from earlier rounds.
 
 ## Current status
 
-**Editor UI Stage 2 is complete and committed** at `03f85af` (Add operational
-safety foundation). The final browser review passed, `venv/bin/pytest -q`
+**Editor UI Stage 2 is complete at baseline commit `d620fdc`** (following the
+implementation commit `03f85af`). The final browser review passed, `venv/bin/pytest -q`
 passed with 129 tests, and the operational `pathology.db` checksum remained
 unchanged across the suite. The working tree was clean immediately after the
 commit.
 
-**Stage 3 — Safe direct editing is next and has not started.** Implement only
-the limited direct-edit scope and safeguards frozen in
-`EDITOR_UI_PROPOSAL.md` §3, §6, and Stage 3 of §9. Do not begin Stage 4
-operational-review tooling, Stage 5 model packages, or any Stage 6 structural
-editing while implementing Stage 3.
+**Stage 3 — Safe direct editing is complete and browser-reviewed.** Direct
+writes require an explicit initial manual
+snapshot acknowledgement, then use the narrow Block/Field/Snippet/Preset
+allowlists only. Each save has a candidate-state render on its own transaction
+connection, strict Jinja/snippet/default validation, optimistic concurrency,
+and one atomic Content_Revision/Content_Change audit record. Recent revisions
+have explicit conflict-safe reversion. The isolated suite passes with 151
+tests; `pathology.db` remained unchanged. Do not begin Stage 4 operational
+review tooling, Stage 5 model packages, or any Stage 6 structural editing.
 
 **Stage 2 checkpoint 1 — backend safety: verified.** Additive/idempotent
 migration, validation history/backfill, immutable validated-case backend
@@ -62,6 +66,48 @@ Thomas completed the browser review, including validated-case navigation,
 duplicate validated IDs, continuous fingerprint acknowledgement, and stable
 Preset selection across a live rename. No Editor content-write control was
 included in Stage 2.
+
+**Stage 3 checkpoint 1 — backend safety: verified.** `content_editing.py`
+uses strict table/column allowlists, full-state hashes, savepoint candidate
+validation through connection-scoped rendering helpers, default and pending
+case renders, discrete checkbox/select branches, and transaction rollback on
+either validation or audit failure. It also records/requires the one-time
+manual snapshot marker and implements conflict-safe revision revert.
+
+**Stage 3 checkpoint 2 — Editor controls: verified by AppTest.** Editor is
+read-only until the initial snapshot download/acknowledgement step. Once
+enabled it exposes only the approved forms and new-Snippet creation, preserves
+stable-ID selection, shows impact/default previews, and offers explicit safe
+revert controls. No structural configuration, deletion control, package
+import, or operational-review feature was added.
+
+**Stage 3 adversarial-review corrections — verified.** Editable Jinja now
+uses one sandboxed environment in validation and normal rendering, with no
+built-in globals and only literal `snippet()` calls. Candidate validation
+rejects blank Snippet creation, unsafe/cleared defaults, table-Block edits,
+and bad nondefault addendum branches. Field-addendum Snippet dependencies now
+drive both pending fingerprints and impact counts. The Editor provides
+rollback-only before/candidate Preset previews, generated revision identity,
+reversible creation-revert chains, and a reset-safe new-Snippet form. Direct
+editing can repair an invalid current template as long as the candidate state
+is valid.
+
+**Stage 3 browser-review corrections — verified.** The Editor now uses a
+persistent section selector, so ordinary Streamlit reruns no longer send Block,
+Snippet, or revision actions back to Presets. Loaded form snapshots also remain
+stable until selection or save, allowing the server-side compare-and-swap check
+to reject a genuinely stale form. A stale save stays on its current section,
+shows an explicit error, and reloads the current database values. AppTest covers
+section/entity persistence, stale two-session saves, Snippet creation, and
+confirmation/reversion navigation. Thomas completed the browser re-review:
+normal edits and previews, persistent navigation, stale-form refusal, Snippet
+create/revert/revert restoration, validation failures, scope boundaries, and
+Workspace regressions all behaved as intended.
+
+**Stage 3 final verification — browser-approved.** `venv/bin/pytest -q` passes
+with 151 tests; changed Python files compile; `git diff --check` passes; and an
+isolated Streamlit boot returned HTTP 200. Tests and the boot used temporary
+databases and did not modify the operational `pathology.db`.
 
 Editor UI **Stage 1 is complete**:
 the unsafe Snippet writer is replaced by a read-only navigator for Presets,

@@ -1,6 +1,6 @@
 # EDITOR_UI_PROPOSAL.md — Tier 3 Editor UI: post-review design
 
-Status: **frozen design; Stages 1–2 complete; Stage 3 is next.**
+Status: **frozen design; Stages 1–3 complete; Stage 3 browser review passed.**
 
 This is the approved design baseline. Implementation begins only at Stage 1
 and follows its stage ordering; do not reopen the architecture or expand the
@@ -400,7 +400,7 @@ disabled until all Stage 2 safety requirements are implemented and verified.
    selection before any Preset-name edit; `init_db.py` guard; per-connection
    foreign keys; fail-closed test DB isolation; ID-preserving, case-aware
    snapshot export/restore round trip.
-3. **NEXT — Safe direct editing.** Transactional content revisions, strict
+3. **COMPLETE — Safe direct editing.** Transactional content revisions, strict
    candidate-state validation, affected-Preset/pending-context renders,
    compare-and-swap, safe revision revert, and direct edit forms for the
    limited §3 scope.

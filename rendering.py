@@ -1,5 +1,6 @@
 import re
-from jinja2 import Template
+from jinja2 import StrictUndefined, Undefined
+from jinja2.sandbox import SandboxedEnvironment
 import database as db
 
 # Lightweight Markdown-style bold convention for Master Lock manual edits.
@@ -107,8 +108,11 @@ def build_context(block, field_values_override=None):
     # general, not per-field-name like fragment_text above, since any
     # decimal field can end up directly interpolated into a template.
     for field in block["fields"]:
-        if field["type"] == "decimal" and context.get(field["key"]) is not None:
-            context[f"{field['key']}_display"] = format_decimal_display(context[field["key"]])
+        if field["type"] == "decimal":
+            # Keep the companion defined even for an optional blank default:
+            # strict candidate validation must see the same legal context as
+            # the normal renderer, where None is a meaningful empty value.
+            context[f"{field['key']}_display"] = format_decimal_display(context.get(field["key"]))
 
     if block.get("site_label") is not None:
         context["site_label"] = block["site_label"]
@@ -116,7 +120,32 @@ def build_context(block, field_values_override=None):
     return context
 
 
-def render_context_fragments(block, field_values_override=None):
+def template_environment(strict=False):
+    """Return the locked-down environment used for every content template.
+
+    Stage 3 makes template source editable at runtime, so the ordinary Jinja
+    environment is no longer an acceptable renderer: it permits traversal of
+    Python attributes such as ``__class__`` and function ``__globals__``.
+    Keep the familiar non-strict missing-value behaviour in Workspace while
+    applying the sandbox in both normal and validation renders.
+    """
+    environment = SandboxedEnvironment(
+        undefined=StrictUndefined if strict else Undefined,
+    )
+    # Built-ins such as range(), dict(), cycler(), and namespace() are not
+    # part of PathoPilot's report context. Clearing them also lets static
+    # validation report their names as unknown rather than silently accepting
+    # a second, accidental template API.
+    environment.globals.clear()
+    return environment
+
+
+def render_template(source, context, snippet_resolver=None, strict=False):
+    renderer = template_environment(strict).from_string(source)
+    return renderer.render(snippet=snippet_resolver or snippet_lookup, **context).strip()
+
+
+def render_context_fragments(block, field_values_override=None, snippet_resolver=None, strict=False):
     """Renders this block's context_template, title_fragment_template, and
     conclusion_label_template (all optional) through the same
     build_context() as every other template. Returns (context_txt,
@@ -128,17 +157,17 @@ def render_context_fragments(block, field_values_override=None):
     context = build_context(block, field_values_override)
     context_txt = ""
     if block.get("context_template"):
-        context_txt = Template(block["context_template"]).render(snippet=snippet_lookup, **context).strip()
+        context_txt = render_template(block["context_template"], context, snippet_resolver, strict)
     title_txt = ""
     if block.get("title_fragment_template"):
-        title_txt = Template(block["title_fragment_template"]).render(snippet=snippet_lookup, **context).strip()
+        title_txt = render_template(block["title_fragment_template"], context, snippet_resolver, strict)
     conclusion_label_txt = ""
     if block.get("conclusion_label_template"):
-        conclusion_label_txt = Template(block["conclusion_label_template"]).render(snippet=snippet_lookup, **context).strip()
+        conclusion_label_txt = render_template(block["conclusion_label_template"], context, snippet_resolver, strict)
     return context_txt, title_txt, conclusion_label_txt
 
 
-def render_block(block, field_values_override=None, total_specimens=1):
+def render_block(block, field_values_override=None, total_specimens=1, snippet_resolver=None, strict=False):
     """
     Renders one block instance's microscopy and conclusion text.
 
@@ -164,12 +193,12 @@ def render_block(block, field_values_override=None, total_specimens=1):
     rendering path this function doesn't touch.
     """
     context = build_context(block, field_values_override)
-    conc_txt = Template(block["conclusion_template"]).render(snippet=snippet_lookup, **context).strip()
+    conc_txt = render_template(block["conclusion_template"], context, snippet_resolver, strict)
 
     macro_template = block.get("macro_template")
     if macro_template:
-        macro_txt = Template(macro_template).render(snippet=snippet_lookup, **context).strip()
-        micro_only_txt = Template(block["micro_template"]).render(snippet=snippet_lookup, **context).strip()
+        macro_txt = render_template(macro_template, context, snippet_resolver, strict)
+        micro_only_txt = render_template(block["micro_template"], context, snippet_resolver, strict)
         if total_specimens == 1:
             # 2 blank lines around each header, header hugs its own
             # content with no gap — confirmed paragraph-by-paragraph
@@ -186,7 +215,7 @@ def render_block(block, field_values_override=None, total_specimens=1):
             # sample: no "Examen..." labels appear anywhere in it.
             micro_txt = f"{macro_txt}\n\n{micro_only_txt}"
     else:
-        micro_txt = Template(block["micro_template"]).render(snippet=snippet_lookup, **context).strip()
+        micro_txt = render_template(block["micro_template"], context, snippet_resolver, strict)
 
     return micro_txt, conc_txt
 

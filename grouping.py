@@ -1,6 +1,10 @@
-from jinja2 import Template
 import database as db
-from rendering import build_context, coerce_field_value, snippet_lookup, render_context_fragments
+from rendering import (
+    build_context,
+    coerce_field_value,
+    render_context_fragments,
+    render_template,
+)
 
 # ---------------------------------------------------------------------------
 # Grouping engine
@@ -21,17 +25,21 @@ GROUP_SENTINEL = "\u241fSITE\u241f"  # a control-picture character: never
                                       # safe as a temporary placeholder.
 
 
-def render_conclusion_signature(block, field_values_override=None):
+def _render(source, context, snippet_resolver=None, strict=False):
+    return render_template(source, context, snippet_resolver, strict)
+
+
+def render_conclusion_signature(block, field_values_override=None, snippet_resolver=None, strict=False):
     """Renders this block's conclusion with site_label replaced by a fixed
     sentinel. Identical signatures between two blocks mean their conclusions
     agree on everything except which site they name."""
     context = build_context(block, field_values_override)
     if block.get("site_label") is not None:
         context["site_label"] = GROUP_SENTINEL
-    return Template(block["conclusion_template"]).render(snippet=snippet_lookup, **context).strip()
+    return _render(block["conclusion_template"], context, snippet_resolver, strict)
 
 
-def get_combined_label(run):
+def get_combined_label(run, label_lookup=None):
     """Looks up the registered French combined label for this run of blocks.
     Falls back to a plain comma-joined list of each block's own site_label
     (or name, if it has none) when no combo is registered — this is the
@@ -40,14 +48,14 @@ def get_combined_label(run):
     phrasing (e.g. "antrale et fundique") register it explicitly in
     Conclusion_Group_Labels rather than having it guessed."""
     block_keys = [entry["block"]["key"] for entry in run]
-    label = db.get_conclusion_group_label(block_keys)
+    label = (label_lookup or db.get_conclusion_group_label)(block_keys)
     if label:
         return label
     parts = [entry["block"].get("site_label") or entry["block"]["name"] for entry in run]
     return ", ".join(parts)
 
 
-def _merge_section(section_entries, index_offset):
+def _merge_section(section_entries, index_offset, snippet_resolver=None, label_lookup=None, strict=False):
     """
     Merges contiguous entries within ONE section (all already guaranteed to
     share the same conclusion_group) that also share an identical text
@@ -61,10 +69,10 @@ def _merge_section(section_entries, index_offset):
     i, n = 0, len(section_entries)
     while i < n:
         run = [section_entries[i]]
-        signature = render_conclusion_signature(section_entries[i]["block"], section_entries[i]["overrides"])
+        signature = render_conclusion_signature(section_entries[i]["block"], section_entries[i]["overrides"], snippet_resolver, strict)
         j = i + 1
         while j < n:
-            sig_j = render_conclusion_signature(section_entries[j]["block"], section_entries[j]["overrides"])
+            sig_j = render_conclusion_signature(section_entries[j]["block"], section_entries[j]["overrides"], snippet_resolver, strict)
             if sig_j != signature:
                 break
             run.append(section_entries[j])
@@ -84,10 +92,13 @@ def _merge_section(section_entries, index_offset):
             # read as sloppy. None for a block that doesn't set one (e.g.
             # Gastric Trio, Gallbladder, Appendix) — callers must treat
             # that as "no prefix," not a blank label.
-            _, _, conclusion_label = render_context_fragments(entry["block"], entry["overrides"])
+            _, _, conclusion_label = render_context_fragments(entry["block"], entry["overrides"], snippet_resolver, strict)
             results.append((numbers, entry["conc_txt"], conclusion_label or None))
         else:
-            combined_label = get_combined_label(run)
+            # Keep the historical one-argument helper call intact for its
+            # focused tests and ordinary rendering; candidate rendering
+            # supplies a connection-scoped lookup explicitly.
+            combined_label = get_combined_label(run) if label_lookup is None else get_combined_label(run, label_lookup)
             merged_text = signature.replace(GROUP_SENTINEL, combined_label)
             # A merged run already has its combined label folded into the
             # text itself (via the GROUP_SENTINEL replacement above) — a
@@ -119,7 +130,7 @@ def _partition_into_sections(entries):
     return sections
 
 
-def render_conclusion_plain(entries):
+def render_conclusion_plain(entries, snippet_resolver=None, label_lookup=None, strict=False):
     """
     entries: ordered list of {'block': block_dict, 'overrides': {...},
     'conc_txt': already-rendered text} — one per block instance, case order.
@@ -149,8 +160,8 @@ def render_conclusion_plain(entries):
     section_texts = []
     all_conflicts = []
     for section in sections:
-        merged = _merge_section(section["entries"], section["start"])
-        addenda, conflicts = compute_conclusion_addenda(section["entries"])
+        merged = _merge_section(section["entries"], section["start"], snippet_resolver, label_lookup, strict)
+        addenda, conflicts = compute_conclusion_addenda(section["entries"], snippet_resolver, strict)
         all_conflicts.extend(conflicts)
 
         lines = []
@@ -173,7 +184,7 @@ def render_conclusion_plain(entries):
     return "\n\n".join(section_texts), all_conflicts
 
 
-def compute_conclusion_addenda(entries):
+def compute_conclusion_addenda(entries, snippet_resolver=None, strict=False):
     """
     Scans every field used by any block in this case that has a
     conclusion_addendum_template set. If every block using that field
@@ -201,7 +212,7 @@ def compute_conclusion_addenda(entries):
     addendum_lines, conflicts = [], []
     for field_key, values in seen.items():
         if len(set(values)) == 1:
-            text = Template(templates[field_key]).render(value=values[0]).strip()
+            text = _render(templates[field_key], {"value": values[0]}, snippet_resolver, strict)
             addendum_lines.append(text)
         else:
             conflicts.append(labels[field_key])

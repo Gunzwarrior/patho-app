@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-129 tests currently exist, running in a few seconds.
+151 tests currently exist, running in a few seconds.
 
 ## Structure
 
@@ -60,6 +60,7 @@ patho-app/
     test_golden_output.py    # golden-fixture regression tests (partial)
     test_workspace_ui.py     # AppTest coverage for Workspace state and safety gates
     test_stage2_safety.py    # migration, lifecycle, fingerprint, and snapshot safety
+    test_stage3_editing.py   # direct-edit transactions, candidate validation, and reversion
     golden_helpers.py        # shared render-a-preset-at-defaults helper
     golden_fixtures/         # frozen known-good plain-text output
     regenerate_golden.py     # deliberate, human-reviewed fixture updates
@@ -215,6 +216,25 @@ the appropriate follow-on checks (`py_compile`, direct realistic cases,
 AppTest, and a manual full boot check). `PROGRESS.md` records each
 checkpoint as it lands. One-off exploratory checks still remain
 throwaway scripts when they do not belong in the permanent suite.
+
+**Stage 3 — safe direct editing: DONE (browser review passed).**
+`test_stage3_editing.py` covers the one-time snapshot prerequisite,
+allowlists, required-column/default coercion invariants, strict Jinja and
+snippet checks, same-connection candidate rendering, atomic audit rollback,
+stale hashes, safe/refused reverts, pending fingerprint invalidation, shared
+addenda/grouping/macro paths, and non-default checkbox/select branches.
+`test_editor.py` covers locked Editor state and the forms exposed after the
+initial snapshot acknowledgement, rollback-only candidate previews,
+new-Snippet form reset, persistent section/entity selection, confirmation and
+revert navigation, and stale two-session form rejection with visible reload.
+The backend suite additionally covers sandbox escape
+rejection, cleared/negative defaults, blank creation, Field-addendum Snippet
+fingerprints/impact, nondefault addendum branches, table-Block refusal,
+repairing invalid current content, identifiable revision details, and
+create/revert/revert restoration. All write tests use `mutable_db`. Thomas's
+browser review also passed the normal edit/preview flows, persistent section
+navigation, two-tab stale-write refusal, validation failures, Snippet
+create/revert/revert restoration, scope checks, and Workspace regressions.
 
 ## How this fits the mixed-model workflow
 

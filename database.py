@@ -2,9 +2,12 @@ import sqlite3
 import json
 import re
 import hashlib
+import os
 import pandas as pd
 
-DB_NAME = "pathology.db"
+# Allows an isolated app boot without ever migrating the operational file.
+# Normal interactive use remains exactly ``pathology.db``.
+DB_NAME = os.environ.get("PATHOPILOT_DB_NAME", "pathology.db")
 
 
 def get_db_connection():
@@ -77,6 +80,11 @@ def migrate_schema(db_name=None):
                 transition TEXT NOT NULL,
                 reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS Editor_Safety_State (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                initial_snapshot_hash TEXT,
+                initial_snapshot_at TIMESTAMP
             );
         """)
         revision = conn.execute("SELECT id FROM Content_Revisions ORDER BY id DESC LIMIT 1").fetchone()
@@ -174,6 +182,12 @@ def get_preset_by_id(preset_id):
     return dict(row) if row else None
 
 
+def get_preset_by_id_on_connection(conn, preset_id):
+    """Connection-scoped counterpart used by candidate-state validation."""
+    row = conn.execute("SELECT * FROM Presets WHERE id = ?", (preset_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def get_preset_blocks(preset_id):
     """
     Returns the ordered list of blocks for a preset. Each block dict is enriched
@@ -234,6 +248,59 @@ def get_preset_blocks(preset_id):
 
     conn.close()
     return blocks
+
+
+def get_preset_blocks_on_connection(conn, preset_id):
+    """Load resolved Preset Blocks without opening another database.
+
+    Candidate content validation must render rows visible in its own
+    transaction/savepoint; this deliberately mirrors get_preset_blocks() but
+    never silently falls back to the operational connection.
+    """
+    pb_rows = conn.execute(
+        """SELECT pb.block_id, pb.sort_order, pb.field_overrides, b.*
+           FROM Preset_Blocks pb JOIN Blocks b ON b.id = pb.block_id
+           WHERE pb.preset_id = ? ORDER BY pb.sort_order""", (preset_id,)
+    ).fetchall()
+    return [_resolved_block_on_connection(conn, dict(row), preset_id, row["sort_order"])
+            for row in pb_rows]
+
+
+def get_block_on_connection(conn, block_id, preset_id=None, instance_no=None):
+    """Load one Block with fields for a saved composed-case instance."""
+    row = conn.execute("SELECT b.id AS block_id, b.* FROM Blocks b WHERE b.id = ?", (block_id,)).fetchone()
+    if not row:
+        return None
+    return _resolved_block_on_connection(conn, dict(row), preset_id, instance_no)
+
+
+def _resolved_block_on_connection(conn, block, preset_id, instance_no):
+    overrides = {}
+    if preset_id is not None and instance_no is not None:
+        row = conn.execute(
+            """SELECT field_overrides FROM Preset_Blocks
+               WHERE preset_id = ? AND block_id = ? AND sort_order = ?""",
+            (preset_id, block["block_id"], instance_no),
+        ).fetchone()
+        overrides = json.loads(row["field_overrides"]) if row and row["field_overrides"] else {}
+    fields = conn.execute(
+        """SELECT bf.*, f.key AS field_key, f.label AS field_label, f.type AS field_type,
+                  f.options AS field_options, f.default_value AS field_default,
+                  f.conclusion_addendum_template AS field_addendum_template
+           FROM Block_Fields bf JOIN Fields f ON f.id = bf.field_id
+           WHERE bf.block_id = ? ORDER BY bf.sort_order""", (block["block_id"],)
+    ).fetchall()
+    block["fields"] = [{
+        "key": field["field_key"],
+        "label": field["label_override"] or field["field_label"],
+        "type": field["field_type"],
+        "options": json.loads(field["field_options"]) if field["field_options"] else None,
+        "value": overrides.get(field["field_key"], field["default_override"]
+                               if field["default_override"] is not None else field["field_default"]),
+        "conclusion_addendum_template": field["field_addendum_template"],
+        "context_section": bool(field["context_section"]),
+    } for field in fields]
+    return block
 
 
 def get_all_blocks():
@@ -332,7 +399,7 @@ def get_field_usage(field_id):
 
 
 def get_snippet_usage(shortcut):
-    """Returns Blocks whose templates call one Snippet shortcut exactly."""
+    """Return every Block/Field path whose rendering calls one Snippet."""
     conn = get_db_connection()
     rows = conn.execute("SELECT * FROM Blocks ORDER BY name, key").fetchall()
     snippet_call = re.compile(r"snippet\(\s*(['\"])" + re.escape(shortcut) + r"\1\s*\)")
@@ -340,18 +407,34 @@ def get_snippet_usage(shortcut):
         "macro_template", "micro_template", "conclusion_template", "context_template",
         "title_fragment_template", "conclusion_label_template",
     )
-    blocks = [
-        dict(row) for row in rows
+    direct_block_ids = {
+        row["id"] for row in rows
         if any(snippet_call.search(row[column] or "") for column in template_columns)
+    }
+    fields = [
+        dict(row) for row in conn.execute("SELECT * FROM Fields ORDER BY label, key")
+        if snippet_call.search(row["conclusion_addendum_template"] or "")
     ]
+    field_ids = {field["id"] for field in fields}
+    addendum_block_ids = set()
+    if field_ids:
+        placeholders = ", ".join("?" for _ in field_ids)
+        addendum_block_ids = {
+            row["block_id"] for row in conn.execute(
+                f"SELECT DISTINCT block_id FROM Block_Fields WHERE field_id IN ({placeholders})",
+                tuple(sorted(field_ids)),
+            )
+        }
+    block_ids = direct_block_ids | addendum_block_ids
+    blocks = [dict(row) for row in rows if row["id"] in block_ids]
     pending_rows = conn.execute(
         "SELECT preset_id, structured_input FROM Cases WHERE status = 'pending'"
     ).fetchall()
     pending_case_count = _pending_case_count_for_block_ids(
-        conn, {block["id"] for block in blocks}, pending_rows
+        conn, block_ids, pending_rows
     )
     conn.close()
-    return {"blocks": blocks, "pending_case_count": pending_case_count}
+    return {"blocks": blocks, "fields": fields, "pending_case_count": pending_case_count}
 
 
 def get_preset_pending_case_count(preset_id):
@@ -641,6 +724,9 @@ def compute_case_content_fingerprint(preset_id, structured_input, conn=None):
                    FROM Block_Fields bf JOIN Fields f ON f.id = bf.field_id
                    WHERE bf.block_id = ? ORDER BY bf.sort_order""", (block_id,)
             ).fetchall()
+            all_shortcuts.update(_snippet_shortcuts(
+                [row["conclusion_addendum_template"] for row in field_rows]
+            ))
             pb = conn.execute(
                 """SELECT field_overrides FROM Preset_Blocks
                    WHERE preset_id = ? AND block_id = ? AND sort_order = ?""",
