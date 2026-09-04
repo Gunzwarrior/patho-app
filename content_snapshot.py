@@ -111,6 +111,16 @@ def content_snapshot_json(snapshot):
     return _json(snapshot) + "\n"
 
 
+def validate_content_snapshot(snapshot):
+    """Reject an unsupported or structurally unsafe content snapshot.
+
+    This public, non-mutating entry point lets consumers validate an export
+    before choosing a target database.  Restore retains its own validation so
+    its safety behaviour is unchanged.
+    """
+    _validate_shape(snapshot)
+
+
 def _validate_shape(snapshot):
     if not isinstance(snapshot, dict) or snapshot.get("format") != "pathopilot-content-snapshot-v1":
         raise ValueError("Unsupported content snapshot format")

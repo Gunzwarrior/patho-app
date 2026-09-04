@@ -404,8 +404,16 @@ disabled until all Stage 2 safety requirements are implemented and verified.
    candidate-state validation, affected-Preset/pending-context renders,
    compare-and-swap, safe revision revert, and direct edit forms for the
    limited §3 scope.
-4. **Operational content review.** Snapshot-fed temporary rendering and
-   review artifact tooling, separate from routine `pytest` fixtures.
+4. **COMPLETE — Operational content
+   review.** `operational_review.py` accepts only an explicit
+   `pathopilot-content-snapshot-v1` snapshot, hashes canonical snapshot
+   content, restores it into a fresh temporary database, and renders every
+   Preset at resolved defaults through the same connection-aware preview path.
+   It emits deterministic complete-report JSON artifacts (title, clinical
+   information, micro, conclusion, conflicts, and HTML), separate from
+   pytest fixtures. Comparison reports added/removed/changed/unchanged
+   Presets; acceptance is an explicit atomic command bound to the reviewed
+   candidate artifact SHA-256. It never opens `pathology.db`.
 5. **Reviewed model change-package import.** Snapshot hash, dry-run, full
    validation, stale-state protection, impact output, and one explicit Apply
    transaction for additive/change-only packages.

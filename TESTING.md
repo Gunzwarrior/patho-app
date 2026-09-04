@@ -236,6 +236,16 @@ browser review also passed the normal edit/preview flows, persistent section
 navigation, two-tab stale-write refusal, validation failures, Snippet
 create/revert/revert restoration, scope checks, and Workspace regressions.
 
+**Stage 4 — operational content review: COMPLETE.**
+`test_operational_review.py` covers missing/malformed snapshot
+refusal, canonical snapshot hashing, byte-identical candidate generation,
+every-Preset rendering through the connection-aware Editor preview path,
+focused changed-report diffs, added/removed Presets, render-failure atomicity,
+explicit hash-bound acceptance, and a canary operational-DB tripwire. The
+tripwire blocks `database.get_db_connection()`, direct `sqlite3.connect()` to
+the canary, and any initializer call without an explicit temporary path.
+Candidate and accepted-artifact writes use temporary directories/files only.
+
 ## How this fits the mixed-model workflow
 
 `pytest` is the same command regardless of which tool or model is

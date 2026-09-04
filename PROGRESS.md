@@ -7,11 +7,9 @@ record from earlier rounds.
 
 ## Current status
 
-**Editor UI Stage 2 is complete at baseline commit `d620fdc`** (following the
-implementation commit `03f85af`). The final browser review passed, `venv/bin/pytest -q`
-passed with 129 tests, and the operational `pathology.db` checksum remained
-unchanged across the suite. The working tree was clean immediately after the
-commit.
+**Editor UI Stages 1–3 are complete at baseline commit `c19fe85`**
+(`Complete safe direct editing`). Stage 3 was browser-reviewed; its isolated
+suite passed with 151 tests and did not alter operational `pathology.db`.
 
 **Stage 3 — Safe direct editing is complete and browser-reviewed.** Direct
 writes require an explicit initial manual
@@ -19,9 +17,20 @@ snapshot acknowledgement, then use the narrow Block/Field/Snippet/Preset
 allowlists only. Each save has a candidate-state render on its own transaction
 connection, strict Jinja/snippet/default validation, optimistic concurrency,
 and one atomic Content_Revision/Content_Change audit record. Recent revisions
-have explicit conflict-safe reversion. The isolated suite passes with 151
-tests; `pathology.db` remained unchanged. Do not begin Stage 4 operational
-review tooling, Stage 5 model packages, or any Stage 6 structural editing.
+have explicit conflict-safe reversion.
+
+**Stage 4 — Operational content review is complete.** `operational_review.py` accepts only an explicitly supplied
+`pathopilot-content-snapshot-v1` file, displays/records its canonical content
+SHA-256, materializes it in a fresh temporary database, and renders every
+Preset's resolved defaults through the connection-aware production preview
+path. Its canonical JSON artifacts are separate from pytest goldens; compare
+reports added/removed/changed/unchanged Presets, and acceptance is a separate
+atomic action bound to the candidate hash Thomas compared. The focused suite
+has 5 tests; the full isolated suite has 156 tests. Tests tripwire both the
+default connector and a direct canary SQLite path, and neither tests nor the
+tool open `pathology.db`. Thomas manually exercised snapshot generation,
+candidate inspection, comparison, and explicit acceptance. Stage 5 package
+import and Stage 6 structural editing remain out of scope.
 
 **Stage 2 checkpoint 1 — backend safety: verified.** Additive/idempotent
 migration, validation history/backfill, immutable validated-case backend
@@ -141,9 +150,9 @@ only in the frozen stages defined in `EDITOR_UI_PROPOSAL.md`.
 Most recent implementation commits:
 
 ```
+c19fe85 Complete safe direct editing
+d620fdc Update documentation after Editor UI Stage 2 completion
 03f85af Add operational safety foundation
-12212cc Add read-only editor navigator
-efe8d56 Freeze editor UI design
 ```
 
 Always verify this against a fresh `git log --oneline -20` and `git status`
@@ -154,9 +163,8 @@ not any later local work.
 
 `EDITOR_UI_PROPOSAL.md` is the frozen design baseline, including its
 validated-case protection, pending-case acknowledgement, recovery, test
-isolation, and staging requirements. Stages 1 and 2 are complete. Start at
-Stage 3 only, and leave the repository tested and self-consistent before any
-proposal to begin Stage 4.
+isolation, and staging requirements. Stages 1–4 are complete. Do not begin
+Stage 5 or 6 without a new approved design.
 
 Not blockers for starting implementation: extending Quick Type beyond
 `dai`, extending field-consistency beyond the Appendix pilot, and future
