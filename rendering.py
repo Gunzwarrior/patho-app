@@ -65,6 +65,18 @@ def format_decimal_display(value):
     return str(value)
 
 
+def normalize_decimal_widget(raw):
+    """Match Workspace's blank/comma/invalid decimal text handling."""
+    text = str(raw).strip().replace(",", ".") if raw is not None else ""
+    if not text:
+        return None
+    try:
+        value = float(text)
+        return value if value >= 0 else None
+    except ValueError:
+        return None
+
+
 def coerce_field_value(field_type, raw_value):
     """Converts a stored/override string value into the right Python type
     for use inside a Jinja2 template context (checkboxes need real bools,

@@ -6,6 +6,8 @@ any target that would alter content a saved case still needs to reopen.
 """
 
 import copy
+import hashlib
+from contextlib import contextmanager
 import json
 import sqlite3
 import tempfile
@@ -49,7 +51,7 @@ RELATION_TABLES = {
 
 
 def _json(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def _rows(conn, sql, params=()):
@@ -60,7 +62,7 @@ def _base_rows(conn, table, key, columns):
     return _rows(conn, f"SELECT {', '.join(columns)} FROM {table} ORDER BY {key}")
 
 
-def _snapshot_from_connection(conn):
+def _read_snapshot_rows(conn):
     payload = {"format": "pathopilot-content-snapshot-v1", "tables": {}}
     tables = payload["tables"]
     for table, (key, columns) in BASE_TABLES.items():
@@ -95,6 +97,33 @@ def _snapshot_from_connection(conn):
     return payload
 
 
+@contextmanager
+def consistent_read(conn):
+    """Own a read transaction only when the caller does not already own one."""
+    owned = not conn.in_transaction
+    if owned:
+        conn.execute("BEGIN")
+    try:
+        yield conn
+    finally:
+        if owned:
+            conn.rollback()
+
+
+def snapshot_from_connection(conn):
+    """Capture the allowlisted content on one consistent connection boundary."""
+    with consistent_read(conn):
+        return _read_snapshot_rows(conn)
+
+
+# Retain the existing restore helper name for callers from earlier stages.
+_snapshot_from_connection = snapshot_from_connection
+
+
+def content_snapshot_hash(snapshot):
+    return hashlib.sha256(content_snapshot_json(snapshot).encode("utf-8")).hexdigest()
+
+
 def export_content_snapshot(db_name=None):
     """Return an exactly ordered, JSON-serialisable content snapshot."""
     conn = database.get_db_connection() if db_name is None else sqlite3.connect(db_name)
@@ -122,7 +151,7 @@ def validate_content_snapshot(snapshot):
 
 
 def _validate_shape(snapshot):
-    if not isinstance(snapshot, dict) or snapshot.get("format") != "pathopilot-content-snapshot-v1":
+    if not isinstance(snapshot, dict) or set(snapshot) != {"format", "tables"} or snapshot.get("format") != "pathopilot-content-snapshot-v1":
         raise ValueError("Unsupported content snapshot format")
     tables = snapshot.get("tables")
     expected = set(BASE_TABLES) | set(RELATION_TABLES)

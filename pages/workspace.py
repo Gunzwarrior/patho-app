@@ -1,10 +1,9 @@
 import streamlit as st
 import database as db
 import rendering
-import grouping
 import quicktype
-import consistency
 import composition
+import editor_preview
 
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
 CASE_SCOPED_EXACT_KEYS = (
@@ -93,14 +92,8 @@ def render_field_widget(field, widget_key, disabled):
         if is_fresh:
             kwargs["value"] = field["value"] or ""
         raw = st.text_input(field["label"], **kwargs)
-        stripped = raw.strip().replace(",", ".")  # tolerate "20,5" as well as "20.5"
-        if not stripped:
-            return None
-        try:
-            parsed = float(stripped)
-        except ValueError:
-            parsed = None
-        if parsed is not None and parsed >= 0:
+        parsed = rendering.normalize_decimal_widget(raw)
+        if parsed is not None or not raw.strip():
             return parsed
         # Invalid text, or a negative number (obviously wrong for a
         # physical size/volume — this is the guard min_value used to
@@ -662,20 +655,14 @@ if selected_preset_id is not None:
     disabled_title = not context_title_lock
     disabled_context = has_context_composition and total_specimens == 1 and not context_title_lock
 
+    auto_title, auto_context = editor_preview.automatic_context(
+        preset, blocks,
+        [block_ctx_overrides.get((b["block_id"], b["instance_no"]), {}) for b in blocks],
+        st.session_state.get(f"clin_info_{form_gen}", ""),
+    )
     if disabled_title:
-        auto_title = preset.get("default_title") or preset["name"]
-        if total_specimens == 1:
-            _, only_title_txt, _ = rendering.render_context_fragments(
-                blocks[0], block_ctx_overrides.get((blocks[0]["block_id"], blocks[0]["instance_no"]), {})
-            )
-            if only_title_txt:
-                auto_title = f"{auto_title} {only_title_txt}"
         st.session_state[f"final_title_edit_{form_gen}"] = auto_title
-
     if disabled_context:
-        auto_context, _, _ = rendering.render_context_fragments(
-            blocks[0], block_ctx_overrides.get((blocks[0]["block_id"], blocks[0]["instance_no"]), {})
-        )
         st.session_state[f"clin_info_{form_gen}"] = auto_context
 
     ctx_c1, ctx_c2 = st.columns([2, 1])
@@ -763,22 +750,12 @@ if selected_preset_id is not None:
         # own widgets, a Preset default, or a Quick Type code, since all
         # three are already folded into `overrides` by this point. See
         # consistency.py / PROGRESS.md for the full design reasoning.
-        all_consistency_warnings.extend(consistency.check_block(block, overrides))
-
-        micro_txt, conc_txt = rendering.render_block(block, overrides, total_specimens=total_specimens)
-        # With 2+ specimens, a block's own composed context (if it set
-        # context_template) becomes its numbered specimen header instead
-        # of the plain Block name — e.g. "1. Nodule lobaire gauche de
-        # 20 mm EUTIRADS 4" instead of "1. Cytologie thyroïdienne".
-        # Falls back to block["name"] when there's nothing composed,
-        # exactly today's behavior. With exactly 1 specimen,
-        # format_micro_plain suppresses the header entirely regardless of
-        # what's passed here, so no extra branch on total_specimens is
-        # needed — confirmed against CR_Sample.docx's single-nodule case,
-        # which has no header at all despite context_template being set.
-        header_context_txt, _, _ = rendering.render_context_fragments(block, overrides)
-        micro_blocks.append((header_context_txt or block["name"], micro_txt))
-        conclusion_entries.append({"block": block, "overrides": overrides, "conc_txt": conc_txt})
+        micro_entry, conclusion_entry, warnings = editor_preview.render_block_entry(
+            block, overrides, total_specimens,
+        )
+        all_consistency_warnings.extend(warnings)
+        micro_blocks.append(micro_entry)
+        conclusion_entries.append(conclusion_entry)
         st.divider()
 
     # --- Wildcard notes: for unpredictable additions (niveaux, IHC,
@@ -836,26 +813,17 @@ if selected_preset_id is not None:
                         st.session_state["wildcard_notes"].pop(note_idx)
                         st.rerun()
 
-    # Apply wildcard notes to their target block's micro text before
-    # formatting — plain continuation text, same as the rest of that
-    # block's own body (only the block's header line is forced bold).
-    for note in st.session_state.get("wildcard_notes", []):
-        idx = note["target_idx"]
-        if 0 <= idx < len(micro_blocks):
-            name, text = micro_blocks[idx]
-            micro_blocks[idx] = (name, text + "\n\n" + note["text"])
-
     st.subheader("2. Final Report (Review & Edit)", anchor=False)
     master_lock = st.toggle("🔒 Enable Manual Edit Mode", key=f"master_lock_{form_gen}")
 
-    grouped_conc_text, conflicts = grouping.render_conclusion_plain(conclusion_entries)
+    raw_compiled_micro, raw_compiled_conc, conflicts = editor_preview.compile_report_parts(
+        micro_blocks, conclusion_entries, st.session_state.get("wildcard_notes", []),
+    )
     if conflicts:
         st.warning(
             f"⚠️ {', '.join(conflicts)} differs between specimens — not auto-added to the "
             "conclusion. Add a summary line yourself via Manual Edit Mode below."
         )
-    raw_compiled_micro = rendering.format_micro_plain(micro_blocks)
-    raw_compiled_conc = grouped_conc_text
 
     if not master_lock:
         st.session_state[f"final_micro_edit_{form_gen}"] = raw_compiled_micro

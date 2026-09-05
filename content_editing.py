@@ -364,7 +364,8 @@ def _snippet_calls(parsed):
     for call in parsed.find_all(nodes.Call):
         if not isinstance(call.node, nodes.Name) or call.node.name != "snippet":
             raise ContentEditError("Templates may only call snippet('literal_shortcut').")
-        if len(call.args) != 1 or not isinstance(call.args[0], nodes.Const) or not isinstance(call.args[0].value, str):
+        if (len(call.args) != 1 or call.kwargs or call.dyn_args or call.dyn_kwargs
+                or not isinstance(call.args[0], nodes.Const) or not isinstance(call.args[0].value, str)):
             raise ContentEditError("snippet() must use exactly one literal shortcut.")
         calls.append(call.args[0].value)
     snippet_names = [name for name in parsed.find_all(nodes.Name) if name.name == "snippet"]
@@ -373,8 +374,8 @@ def _snippet_calls(parsed):
     return calls
 
 
-def _validate_candidate(conn, changed_table, changed_key):
-    """Validate only rows visible in the active candidate savepoint."""
+def validate_content_templates(conn):
+    """Validate rows, sandbox syntax and references on the supplied connection."""
     for row in conn.execute("SELECT * FROM Fields"):
         _validate_row("Fields", dict(row))
     for row in conn.execute("SELECT * FROM Snippets"):
@@ -415,6 +416,10 @@ def _validate_candidate(conn, changed_table, changed_key):
             unresolved = set(_snippet_calls(parsed)) - snippet_keys
             if unresolved:
                 raise ContentEditError(f"Field '{field['key']}' addendum references unresolved snippet(s): {', '.join(sorted(unresolved))}.")
+
+
+def _validate_candidate(conn, changed_table, changed_key):
+    validate_content_templates(conn)
     _validate_changed_item(conn, changed_table, changed_key)
     _validate_renders(conn)
 
@@ -481,32 +486,10 @@ def _validate_pending_cases(conn):
 
 
 def _render_pending_case(conn, preset_id, structured):
-    preset = database.get_preset_by_id_on_connection(conn, preset_id)
-    if not preset:
-        raise ContentEditError("its Preset is unavailable")
-    instances = structured.get("block_instances")
-    if instances is None:
-        blocks = database.get_preset_blocks_on_connection(conn, preset_id)
-        instances = [{"block_id": block["block_id"], "instance_no": block["sort_order"]} for block in blocks]
-    else:
-        blocks = []
-        for instance in instances:
-            block = database.get_block_on_connection(conn, instance["block_id"], preset_id, instance.get("instance_no"))
-            if not block:
-                raise ContentEditError(f"Block {instance['block_id']} is unavailable")
-            blocks.append(block)
-    resolver = lambda shortcut: editor_preview._snippet_from_connection(conn, shortcut)
-    label_lookup = lambda keys: editor_preview._label_from_connection(conn, keys)
-    entries, micro_blocks = [], []
-    for block, instance in zip(blocks, instances):
-        key = f"{block['key']}#{instance.get('instance_no')}"
-        overrides = (structured.get("blocks") or {}).get(key, {})
-        micro, conclusion = rendering.render_block(block, overrides, len(blocks), resolver, True)
-        header, _, _ = rendering.render_context_fragments(block, overrides, resolver, True)
-        micro_blocks.append((header or block["name"], micro))
-        entries.append({"block": block, "overrides": overrides, "conc_txt": conclusion})
-    grouping.render_conclusion_plain(entries, resolver, label_lookup, True)
-    return rendering.format_micro_plain(micro_blocks)
+    # Compatibility for Stage 3 callers; validation now checks the entire report.
+    return editor_preview.render_saved_case(conn, {
+        "preset_id": preset_id, "structured_input": structured,
+    })["micro_plain"]
 
 
 def recent_revisions(limit=12):
@@ -619,3 +602,27 @@ def _apply_revert(conn, change):
         f"UPDATE {table_name} SET {', '.join(f'{column} = ?' for column in columns)} WHERE {key_column} = ?",
         (*[before[column] for column in columns], entity_key),
     )
+
+
+def validate_standalone_content(conn):
+    """Strictly render all standalone Blocks and global Field addenda."""
+    resolver = lambda shortcut: editor_preview._snippet_from_connection(conn, shortcut)
+    label_lookup = lambda keys: editor_preview._label_from_connection(conn, keys)
+
+    # Orphan Blocks and Field addenda must not escape validation merely
+    # because no current Preset happens to reach them.
+    for row in conn.execute("SELECT id FROM Blocks ORDER BY key"):
+        block = database.get_block_on_connection(conn, row["id"])
+        micro, conclusion = rendering.render_block(
+            block, total_specimens=1, snippet_resolver=resolver, strict=True,
+        )
+        rendering.render_context_fragments(block, snippet_resolver=resolver, strict=True)
+        grouping.render_conclusion_plain(
+            [{"block": block, "overrides": {}, "conc_txt": conclusion}],
+            resolver, label_lookup, True,
+        )
+        rendering.format_micro_plain([(block["name"], micro)])
+    for field in conn.execute("SELECT key, type, default_value, conclusion_addendum_template FROM Fields ORDER BY key"):
+        if field["conclusion_addendum_template"]:
+            value = rendering.coerce_field_value(field["type"], field["default_value"])
+            rendering.render_template(field["conclusion_addendum_template"], {"value": value}, resolver, True)

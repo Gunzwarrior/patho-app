@@ -543,13 +543,17 @@ def get_consistency_rules(block_id):
     that's the common case, not an error; consistency.check_block()
     treats it as "nothing to check, no warnings.\""""
     conn = get_db_connection()
+    try:
+        return get_consistency_rules_on_connection(conn, block_id)
+    finally:
+        conn.close()
+
+
+def get_consistency_rules_on_connection(conn, block_id):
     rows = conn.execute(
         """SELECT field_a_key, field_a_values, field_b_key, field_b_values, message
-           FROM Field_Consistency_Rules
-           WHERE block_id = ?""",
-        (block_id,),
+           FROM Field_Consistency_Rules WHERE block_id = ?""", (block_id,),
     ).fetchall()
-    conn.close()
     return [
         {
             "field_a_key": r["field_a_key"],

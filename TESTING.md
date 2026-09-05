@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-151 tests currently exist, running in a few seconds.
+274 tests currently exist; the last full isolated run took 61.12 seconds.
 
 ## Structure
 
@@ -61,6 +61,8 @@ patho-app/
     test_workspace_ui.py     # AppTest coverage for Workspace state and safety gates
     test_stage2_safety.py    # migration, lifecycle, fingerprint, and snapshot safety
     test_stage3_editing.py   # direct-edit transactions, candidate validation, and reversion
+    test_operational_review.py # explicit-snapshot Stage 4 artifact review
+    test_stage5_packages.py  # strict AI contract and no-write candidate review
     golden_helpers.py        # shared render-a-preset-at-defaults helper
     golden_fixtures/         # frozen known-good plain-text output
     regenerate_golden.py     # deliberate, human-reviewed fixture updates
@@ -245,6 +247,64 @@ explicit hash-bound acceptance, and a canary operational-DB tripwire. The
 tripwire blocks `database.get_db_connection()`, direct `sqlite3.connect()` to
 the canary, and any initializer call without an explicit temporary path.
 Candidate and accepted-artifact writes use temporary directories/files only.
+
+**Stage 5 checkpoint 1 — no-write contract/review: COMPLETE (2026-09-05).**
+`tests/test_stage5_packages.py` contains 113 tests. They cover exact JSON
+envelopes/operations, UTF-8, duplicate keys, overflow/non-finite/bool-as-int,
+size/depth/count limits, fixed capped feedback, native Field/override types,
+normalization/no-ops, new graph ownership and positions, reserved names/context
+bindings, static/orphan content, nullable defaults, duplicate Blocks,
+Quick Type prefix warnings, and complete default/discrete/pending validation.
+Coverage includes invalid-base repair, grouping/consistency warnings,
+unchanged visible output with changed fingerprints, saved/live/candidate
+separation, both locks/empty text, malformed inputs and incomplete reports.
+
+Isolation tests enforce content-only export queries with SQLite authorization,
+patient/audit canaries, explicit connection use, one in-memory backup, closed
+connections on success/failure, source byte preservation and refusal of
+triggered Case writes. Two-connection WAL tests exercise coherent exports and
+backup under concurrent commits. Guard tests cover audited ABA, content row
+identity replacement, pending arrival/edit/deletion/status transitions, and
+pending-only versus content-stale retries. No Apply/inverse transaction tests
+are claimed yet: those belong to checkpoint 2.
+
+Five additional Workspace AppTests compare actual reopened title, clinical
+context, micro, conclusion and rendered HTML against the saved-case helper,
+including comma/blank decimal text, reordered duplicate and ad hoc instances,
+wildcards, independent locks and empty manual edits. HTML comparison accounts
+only for Streamlit's own outer whitespace cleanup. Existing Workspace reset,
+composition, saved-content acknowledgement, validated immutability and manual
+Editor/revert tests remain in the full suite.
+
+Verified commands/results:
+
+- Baseline `venv/bin/pytest -q`: **156 passed**.
+- Focused `venv/bin/pytest -q tests/test_stage5_packages.py tests/test_workspace_ui.py`:
+  **137 passed**.
+- Final `venv/bin/pytest -q`: **274 passed in 61.12 s**, including Stage 3/4,
+  Editor and unchanged golden fixtures.
+- `py_compile` for all changed Python files and `git diff --check`: passed.
+- Isolated Streamlit boot: HTTP 200 for `/`, `/workspace`, `/worklist`,
+  `/editor`, `/manager`; temporary seeded DB, server stopped and temporary
+  files removed afterward. Localhost sockets required sandbox escalation.
+- Operational DB file SHA-256 before/after:
+  `50978f4ae0cf96b5feffd4c079174d1b1cda45de4232f7dd936d59c5d526be0c`.
+  No SQLite connection to that DB, golden regeneration, seed edit, or accepted
+  operational artifact change occurred.
+
+For the named `seed_data.seed_all` fixture, canonical AI-context export size
+is **24,215 bytes**, including the generated v1 contract/example; snapshot-only
+size is **20,571 bytes**, SHA-256
+`e27caa6bd8dd6ff72c6f98cf8ff1cf0dd83f16b8bdd90d63885f706997e611df`.
+A test records the complete export size. These are UTF-8 bytes, not a token
+estimate or a free-plan capacity guarantee.
+
+Compatibility is deliberate: legacy thyroid select options may include
+`""`, and historical Preset decimal overrides may be strings. Tests preserve
+both while new packages require native typed values and newly created select
+options must be nonblank. Report display sanitization and import/apply UI stay
+in checkpoint 3. Numeric-range/combinatorial exhaustive analysis, hostile
+template resource quotas and real-browser visual review are not claimed.
 
 ## How this fits the mixed-model workflow
 

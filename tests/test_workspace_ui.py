@@ -386,3 +386,49 @@ class TestSaveAndSafetyGates:
         mutable_workspace.session_state["_do_workspace_reset"] = True
         mutable_workspace.run()
         assert mutable_workspace.session_state["_preset_display_labels"][preset_id] == "Appendice renommé (dai)"
+
+
+@pytest.mark.parametrize("code,master_lock,context_lock", [
+    ("dai", False, False), ("etc_bi", False, False),
+    ("etc0", True, False), ("etc0", False, True), ("etc_bi", True, True),
+])
+def test_saved_case_preview_matches_workspace_reopen(mutable_workspace, code, master_lock, context_lock):
+    """The offline candidate preview must reproduce actual Workspace text and HTML."""
+    import json
+    import editor_preview
+
+    app = mutable_workspace
+    preset_id = _preset_id(code)
+    blocks = db_module.get_preset_blocks(preset_id)
+    instances = composition.derive_block_instances(blocks)
+    if code == "etc_bi":
+        instances.reverse()
+        instances = composition.add_instance(instances, blocks[0]["block_id"])
+    structured = {
+        "block_instances": instances,
+        "blocks": {f"{blocks[0]['key']}#{i['instance_no']}": {"nodule_size_mm": size}
+                   for i, size in zip(instances, ["12,5", "", "30"])} if code.startswith("etc") else {},
+        "wildcard_notes": [{"target_idx": len(instances)-1, "text": "**NOTE** de contrôle", "target_name": "Spécimen", "note_type": "Autre"}],
+        "master_lock": master_lock, "context_title_lock": context_lock,
+        "final_micro_edit": "", "final_conc_edit": "Conclusion manuelle", "final_title_edit": "",
+    }
+    conn = db_module.get_db_connection()
+    fingerprint = db_module.compute_case_content_fingerprint(preset_id, structured, conn)
+    conn.execute(
+        """INSERT INTO Cases(case_number,preset_id,clinical_info,structured_input,rendered_html,status,content_fingerprint)
+           VALUES(?,?,?,?,?,'pending',?)""",
+        ("SYNTHETIC-PARITY", preset_id, "Contexte libre", json.dumps(structured), "Previously saved", fingerprint),
+    )
+    conn.commit()
+    case = dict(conn.execute("SELECT * FROM Cases WHERE case_number='SYNTHETIC-PARITY'").fetchone())
+    preview = editor_preview.render_saved_case(conn, case)
+    conn.close()
+    _reopen_case(app, "SYNTHETIC-PARITY")
+    generation = app.session_state["_form_generation"]
+    assert app.text_input(key=f"final_title_edit_{generation}").value == preview["title"]
+    assert app.text_input(key=f"clin_info_{generation}").value == preview["clinical_info"]
+    assert app.text_area(key=f"final_micro_edit_{generation}").value == preview["micro_plain"]
+    assert app.text_area(key=f"final_conc_edit_{generation}").value == preview["conclusion_plain"]
+    from streamlit.string_util import clean_text
+    assert any(widget.value == clean_text(preview["html"]) for widget in app.markdown)
+    assert app.session_state["_case_block_instances"] == instances

@@ -23,7 +23,7 @@ import database as db
 from rendering import build_context
 
 
-def check_block(block, field_values_override=None):
+def check_block(block, field_values_override=None, conn=None):
     """
     block: a block dict from database.get_preset_blocks(), including
     'fields' and 'block_id'.
@@ -38,7 +38,8 @@ def check_block(block, field_values_override=None):
     rules configured at all (get_consistency_rules returns [] and this
     function short-circuits before ever calling build_context).
     """
-    rules = db.get_consistency_rules(block["block_id"])
+    rules = (db.get_consistency_rules_on_connection(conn, block["block_id"])
+             if conn is not None else db.get_consistency_rules(block["block_id"]))
     if not rules:
         return []
 

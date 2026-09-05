@@ -7,9 +7,12 @@ record from earlier rounds.
 
 ## Current status
 
-**Roadmap revised after Stage 4 review; no Stage 5–7 implementation has
-started.** Thomas confirmed that PathoPilot must remain fully usable without a
-paid AI plan. Stage 5 is now an optional, token-economical AI context/change-
+**Stage 5 checkpoint 1 (no-write contract/review) is complete and verified;
+checkpoints 2–3 and Stages 6–7 remain unimplemented.** Checkpoint 1 is
+approved for commit; a browser regression checklist has been supplied.
+The approved roadmap remains `EDITOR_UI_PROPOSAL.md` and this file in commit
+`5dd1f44`; `STAGE5_IMPLEMENTATION_PLAN.md` records the reviewed scope.
+Thomas confirmed that PathoPilot must remain fully usable without a paid AI plan. Stage 5 is now an optional, token-economical AI context/change-
 package workflow; Stage 6 is a committed autonomous Content Studio for guided
 creation, relationship management, editing, archive, and safe deletion; Stage
 7 is a Quick Type Studio plus atomic two-column `(case ID, Quick Type)` bulk
@@ -19,6 +22,56 @@ pending draft depends on it and offers permanent deletion when no pending
 dependency remains and the complete candidate is valid. See
 `EDITOR_UI_PROPOSAL.md` §§1, 3, 4, 8–10. Each future stage still requires a
 bounded implementation proposal before coding.
+
+**Stage 5 checkpoint 1 — verified on 2026-09-05.**
+`change_packages.py` provides the compact content-only AI export, generated
+v1 contract/example, bounded strict parser, canonical package hashing, and
+separate fixed AI correction feedback. `content_changes.py` provides reusable
+create/update/link candidate operations, complete final-graph validation,
+one in-memory SQLite backup per review, exact physical change images,
+complete Preset and affected-pending reports, and an immutable server-held
+review. Its local guard binds revision identity, content row identities and
+the complete pending set; no guard or Case data enters AI exports.
+
+Snapshot exports now use one read transaction and the shared snapshot hash;
+Stage 4 artifacts and the existing manual snapshot gate retain the same byte
+and hash conventions. Connection-aware consistency checks and shared Workspace
+assembly preserve macro/micro layout, grouping/addenda, decimal widget strings,
+wildcard positions, instance-specific overrides, duplicate/ad hoc identities,
+both locks and empty manual edits. Candidate validation still renders automatic
+underlying content under locks and checks every pending Case. Invalid base
+reports remain local before-errors when the candidate repairs them. Orphan
+content and individual discrete branches are validated, with warnings retained.
+
+**Concrete compatibility correction:** the established thyroid Fields
+`nodule_site` and `nodule_eutirads` contain an empty select option, and
+`etc_bi` stores decimal overrides as strings. Existing values remain valid
+under the production resolver; nonblank new select options and native typed
+package values are enforced at the package boundary. Nothing rewrites those
+legacy values or seed content. Report display sanitization stays in checkpoint
+3 as specified by the plan's delivery sequence; no package report UI is exposed.
+
+**Verification:** the focused package/Workspace run passed **137 tests**;
+the final full isolated `venv/bin/pytest -q` passed **274 tests** (61.12 s),
+including Stage 2/3/4, Editor and golden regressions. Changed Python files
+compile; `git diff --check` passes. An isolated Streamlit server returned
+HTTP 200 for the homepage and all four page routes; localhost socket access
+required sandbox escalation. AppTest verifies saved-case/Workspace component
+and HTML parity, not real-browser appearance. The seeded AI-context export is
+**24,215 UTF-8 bytes** (including contract); its snapshot is **20,571 bytes**.
+Operational `pathology.db` was never opened through SQLite; its file SHA-256
+remained `50978f4ae0cf96b5feffd4c079174d1b1cda45de4232f7dd936d59c5d526be0c`.
+No golden regeneration, accepted-review changes, or seed changes. Before the
+checkpoint commit, the full suite passed again: **274 tests in 60.37 s**;
+compilation, whitespace checks and the operational checksum also passed.
+Browser appearance remains for Thomas to check; no new package UI exists yet.
+
+**Next boundary:** checkpoint 2 will build atomic Apply and guarded inverse
+review on these operations, physical change images, hashes, local guard,
+validation and immutable review result. Provenance migration, live package
+writes, audit insertion and inverse writes are absent. Existing manual editing
+and revision reversion remain available and regression-tested. Checkpoint 3
+owns import/review/confirmation UI and restricted report presentation.
 
 **Editor UI Stages 1–3 are complete at baseline commit `c19fe85`**
 (`Complete safe direct editing`). Stage 3 was browser-reviewed; its isolated
@@ -175,8 +228,8 @@ not any later local work.
 ## Editor UI implementation boundary
 
 `EDITOR_UI_PROPOSAL.md` preserves the frozen implemented safety baseline and
-now records the revised product roadmap. Stages 1–4 are complete; Stages 5–7
-are unimplemented. Do not begin a future stage until its bounded implementation
+now records the revised product roadmap. Stages 1–4 and Stage 5 checkpoint 1 are complete; Stage 5 checkpoints 2–3
+and Stages 6–7 are unimplemented. Do not begin a future stage until its bounded implementation
 proposal has been reviewed against the approved outcomes.
 
 Quick Type expansion is no longer an incidental non-blocker: it is the focus

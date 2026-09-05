@@ -1,4 +1,3 @@
-import hashlib
 import json
 
 import streamlit as st
@@ -118,8 +117,9 @@ def _show_candidate_preview(table, key, changes, expected_hash):
 
 
 def _snapshot_gate():
-    payload = content_snapshot.content_snapshot_json(content_snapshot.export_content_snapshot())
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    snapshot = content_snapshot.export_content_snapshot()
+    payload = content_snapshot.content_snapshot_json(snapshot)
+    digest = content_snapshot.content_snapshot_hash(snapshot)
     state = content_editing.initial_snapshot_status()
     if state["initial_snapshot_hash"]:
         st.caption(f"Initial manual snapshot recorded at {state['initial_snapshot_at']}. Optional exports remain on demand.")

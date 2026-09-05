@@ -15,12 +15,11 @@ from pathlib import Path
 import sqlite3
 import tempfile
 
+import content_editing
 import content_snapshot
 import database
 import editor_preview
-import grouping
 import init_db
-import rendering
 
 
 ARTIFACT_FORMAT = "pathopilot-operational-review-v1"
@@ -91,27 +90,7 @@ def _atomic_write(path, text):
 
 
 def _validate_all_materialized_content(conn):
-    """Strictly render every reachable Preset and every standalone template."""
-    resolver = lambda shortcut: editor_preview._snippet_from_connection(conn, shortcut)
-    label_lookup = lambda keys: editor_preview._label_from_connection(conn, keys)
-
-    # Orphan Blocks and Field addenda must not escape validation merely
-    # because no current Preset happens to reach them.
-    for row in conn.execute("SELECT id FROM Blocks ORDER BY key"):
-        block = database.get_block_on_connection(conn, row["id"])
-        micro, conclusion = rendering.render_block(
-            block, total_specimens=1, snippet_resolver=resolver, strict=True,
-        )
-        rendering.render_context_fragments(block, snippet_resolver=resolver, strict=True)
-        grouping.render_conclusion_plain(
-            [{"block": block, "overrides": {}, "conc_txt": conclusion}],
-            resolver, label_lookup, True,
-        )
-        rendering.format_micro_plain([(block["name"], micro)])
-    for field in conn.execute("SELECT key, type, default_value, conclusion_addendum_template FROM Fields ORDER BY key"):
-        if field["conclusion_addendum_template"]:
-            value = rendering.coerce_field_value(field["type"], field["default_value"])
-            rendering.render_template(field["conclusion_addendum_template"], {"value": value}, resolver, True)
+    content_editing.validate_standalone_content(conn)
 
 
 def _render_snapshot(snapshot):
@@ -153,9 +132,7 @@ def generate(snapshot_path, candidate_path):
     content_snapshot.validate_content_snapshot(snapshot)
     artifact = {
         "format": ARTIFACT_FORMAT,
-        "source_snapshot_sha256": hashlib.sha256(
-            content_snapshot.content_snapshot_json(snapshot).encode("utf-8")
-        ).hexdigest(),
+        "source_snapshot_sha256": content_snapshot.content_snapshot_hash(snapshot),
         "reports": _render_snapshot(snapshot),
     }
     # Rendering and serialisation finish before the existing candidate is
