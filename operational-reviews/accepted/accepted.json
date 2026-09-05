@@ -1,0 +1,87 @@
+{
+  "format": "pathopilot-operational-review-v1",
+  "reports": [
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**Endo-appendicite aiguë.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>APPENDICE</b></div><br><br>\n        <b>Examen macroscopique</b><br>Il s'agit d'un appendice mesurant 8 cm de longueur. Absence de fausse membrane.<br><br><br><b>Examen microscopique</b><br>La muqueuse appendiculaire est focalement ulcérée et abrite de rares foyers inflammatoires polymorphes avec des polynucléaires neutrophiles. La musculeuse et la séreuse sont sans particularité.<br>Absence de signe de malignité.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>Endo-appendicite aiguë.</b>\n    </div>\n    ",
+      "micro_plain": "**Examen macroscopique**\nIl s'agit d'un appendice mesurant 8 cm de longueur. Absence de fausse membrane.\n\n\n**Examen microscopique**\nLa muqueuse appendiculaire est focalement ulcérée et abrite de rares foyers inflammatoires polymorphes avec des polynucléaires neutrophiles. La musculeuse et la séreuse sont sans particularité.\nAbsence de signe de malignité.",
+      "short_code": "dai",
+      "title": "Appendice"
+    },
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**Matériel non satisfaisant pour le diagnostic (absence de matériel thyréocytaire).**\n**Classification de Bethesda : I – Non diagnostique.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>CYTOLOGIE THYROÏDIENNE</b></div><br><br>\n        <b>Examen macroscopique</b><br>Liquide clair de 5 mL.<br><br><br><b>Examen microscopique</b><br>Il existe sur un fond modérément hématique, de la colloïde, des macrophages et des éléments figurés du sang.<br>Absence de cellule thyréocytaire visible.<br>Absence de cellule suspecte de malignité.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>Matériel non satisfaisant pour le diagnostic (absence de matériel thyréocytaire).</b><br><b>Classification de Bethesda : I – Non diagnostique.</b>\n    </div>\n    ",
+      "micro_plain": "**Examen macroscopique**\nLiquide clair de 5 mL.\n\n\n**Examen microscopique**\nIl existe sur un fond modérément hématique, de la colloïde, des macrophages et des éléments figurés du sang.\nAbsence de cellule thyréocytaire visible.\nAbsence de cellule suspecte de malignité.",
+      "short_code": "etc0",
+      "title": "Cytologie thyroïdienne"
+    },
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**Matériel non satisfaisant pour le diagnostic (matériel thyréocytaire insuffisant).**\n**Classification de Bethesda : I – Non diagnostique.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>CYTOLOGIE THYROÏDIENNE</b></div><br><br>\n        <b>Examen macroscopique</b><br>Liquide clair de 5 mL.<br><br><br><b>Examen microscopique</b><br>Il existe sur un fond modérément hématique, de la colloïde, des macrophages et de très rares cellules thyroïdiennes régulières, groupées en petits amas.<br>Absence d'atypie cytonucléaire ou de formation papillaire.<br>Absence de cellule suspecte de malignité.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>Matériel non satisfaisant pour le diagnostic (matériel thyréocytaire insuffisant).</b><br><b>Classification de Bethesda : I – Non diagnostique.</b>\n    </div>\n    ",
+      "micro_plain": "**Examen macroscopique**\nLiquide clair de 5 mL.\n\n\n**Examen microscopique**\nIl existe sur un fond modérément hématique, de la colloïde, des macrophages et de très rares cellules thyroïdiennes régulières, groupées en petits amas.\nAbsence d'atypie cytonucléaire ou de formation papillaire.\nAbsence de cellule suspecte de malignité.",
+      "short_code": "etc1",
+      "title": "Cytologie thyroïdienne"
+    },
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**Matériel satisfaisant pour le diagnostic.**\n**Classification de Bethesda : II – Bénin, compatible avec un adénome vésiculaire.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>CYTOLOGIE THYROÏDIENNE</b></div><br><br>\n        <b>Examen macroscopique</b><br>Liquide clair de 5 mL.<br><br><br><b>Examen microscopique</b><br>Il existe sur un fond modérément hématique, de la colloïde, des macrophages et des cellules thyroïdiennes régulières, groupées en petits amas et vésicules.<br>Absence d'atypie cytonucléaire ou de formation papillaire.<br>Absence de cellule suspecte de malignité.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>Matériel satisfaisant pour le diagnostic.</b><br><b>Classification de Bethesda : II – Bénin, compatible avec un adénome vésiculaire.</b>\n    </div>\n    ",
+      "micro_plain": "**Examen macroscopique**\nLiquide clair de 5 mL.\n\n\n**Examen microscopique**\nIl existe sur un fond modérément hématique, de la colloïde, des macrophages et des cellules thyroïdiennes régulières, groupées en petits amas et vésicules.\nAbsence d'atypie cytonucléaire ou de formation papillaire.\nAbsence de cellule suspecte de malignité.",
+      "short_code": "etc2",
+      "title": "Cytologie thyroïdienne"
+    },
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**Matériel satisfaisant pour le diagnostic.**\n**Classification de Bethesda : III – Atypies de signification indéterminée.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>CYTOLOGIE THYROÏDIENNE</b></div><br><br>\n        <b>Examen macroscopique</b><br>Liquide clair de 5 mL.<br><br><br><b>Examen microscopique</b><br>Il existe sur un fond modérément hématique, de la colloïde, des macrophages et d'assez nombreuses cellules thyroïdiennes parfois augmentées de taille avec des noyaux irréguliers, groupées en amas.<br>Absence de tassement, d'incisure, d'inclusion nucléaire ou de formation papillaire.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>Matériel satisfaisant pour le diagnostic.</b><br><b>Classification de Bethesda : III – Atypies de signification indéterminée.</b>\n    </div>\n    ",
+      "micro_plain": "**Examen macroscopique**\nLiquide clair de 5 mL.\n\n\n**Examen microscopique**\nIl existe sur un fond modérément hématique, de la colloïde, des macrophages et d'assez nombreuses cellules thyroïdiennes parfois augmentées de taille avec des noyaux irréguliers, groupées en amas.\nAbsence de tassement, d'incisure, d'inclusion nucléaire ou de formation papillaire.",
+      "short_code": "etc3",
+      "title": "Cytologie thyroïdienne"
+    },
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**Matériel satisfaisant pour le diagnostic.**\n**Classification de Bethesda : V – Suspect de malignité.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>CYTOLOGIE THYROÏDIENNE</b></div><br><br>\n        <b>Examen macroscopique</b><br>Liquide clair de 5 mL.<br><br><br><b>Examen microscopique</b><br>Il existe sur un fond modérément hématique, de la colloïde, des macrophages et de nombreuses cellules thyroïdiennes aux noyaux augmentés de taille, irréguliers, tassés, incisurés, groupées en amas.<br>Absence d'inclusion nucléaire ou de formation papillaire.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>Matériel satisfaisant pour le diagnostic.</b><br><b>Classification de Bethesda : V – Suspect de malignité.</b>\n    </div>\n    ",
+      "micro_plain": "**Examen macroscopique**\nLiquide clair de 5 mL.\n\n\n**Examen microscopique**\nIl existe sur un fond modérément hématique, de la colloïde, des macrophages et de nombreuses cellules thyroïdiennes aux noyaux augmentés de taille, irréguliers, tassés, incisurés, groupées en amas.\nAbsence d'inclusion nucléaire ou de formation papillaire.",
+      "short_code": "etc5",
+      "title": "Cytologie thyroïdienne"
+    },
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**1. Nodule lobaire gauche : Matériel satisfaisant pour le diagnostic.**\n**Classification de Bethesda : II – Bénin, compatible avec un adénome vésiculaire.**\n**2. Nodule isthmique : Matériel non satisfaisant pour le diagnostic (matériel thyréocytaire insuffisant).**\n**Classification de Bethesda : I – Non diagnostique.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>CYTOLOGIE THYROÏDIENNE</b></div><br><br>\n        <b>1. Nodule lobaire gauche de 20 mm EUTIRADS 4</b><br>Liquide clair de 5 mL.<br><br>Il existe sur un fond modérément hématique, de la colloïde, des macrophages et des cellules thyroïdiennes régulières, groupées en petits amas et vésicules.<br>Absence d'atypie cytonucléaire ou de formation papillaire.<br>Absence de cellule suspecte de malignité.<br><br><b>2. Nodule isthmique de 15 mm EUTIRADS 3</b><br>Liquide clair de 5 mL.<br><br>Il existe sur un fond modérément hématique, de la colloïde, des macrophages et de très rares cellules thyroïdiennes régulières, groupées en petits amas.<br>Absence d'atypie cytonucléaire ou de formation papillaire.<br>Absence de cellule suspecte de malignité.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>1. Nodule lobaire gauche : Matériel satisfaisant pour le diagnostic.</b><br><b>Classification de Bethesda : II – Bénin, compatible avec un adénome vésiculaire.</b><br><b>2. Nodule isthmique : Matériel non satisfaisant pour le diagnostic (matériel thyréocytaire insuffisant).</b><br><b>Classification de Bethesda : I – Non diagnostique.</b>\n    </div>\n    ",
+      "micro_plain": "**1. Nodule lobaire gauche de 20 mm EUTIRADS 4**\nLiquide clair de 5 mL.\n\nIl existe sur un fond modérément hématique, de la colloïde, des macrophages et des cellules thyroïdiennes régulières, groupées en petits amas et vésicules.\nAbsence d'atypie cytonucléaire ou de formation papillaire.\nAbsence de cellule suspecte de malignité.\n\n**2. Nodule isthmique de 15 mm EUTIRADS 3**\nLiquide clair de 5 mL.\n\nIl existe sur un fond modérément hématique, de la colloïde, des macrophages et de très rares cellules thyroïdiennes régulières, groupées en petits amas.\nAbsence d'atypie cytonucléaire ou de formation papillaire.\nAbsence de cellule suspecte de malignité.",
+      "short_code": "etc_bi",
+      "title": "Cytologie thyroïdienne"
+    },
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**1. Muqueuse duodénale normale.**\n\n**2-3. Gastrite chronique interstitielle antro-fundique modérée, active, sans métaplasie intestinale ni atrophie glandulaire.**\n**Présence d'une infection à hélicobacter pylori.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>BIOPSIES GASTRODUODÉNALES</b></div><br><br>\n        <b>1. Duodenum</b><br>2 fragments biopsiques inclus en totalité.<br><br>Il s'agit d'une muqueuse duodénale dont les villosités sont de taille normale, tapissées par un épithélium régulier et bien différencié, sans hyperlymphocytose intraépithéliale. Le chorion est sans particularité.<br>Absence d'agent pathogène ou de signe de malignité.<br><br><b>2. Antrum</b><br>3 fragments biopsiques inclus en totalité.<br><br>Il s'agit d'une muqueuse antrale dont les cryptes sont régulières et bien différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un infiltrat inflammatoire polymorphe d'intensité modérée. Les glandes antrales sont en nombre normal.<br>Présence d'éléments ayant la morphologie d'Helicobacter pylori en HES.<br><br>Etude immunohistochimique :<br>- HP : positif<br><br><b>3. Fundus</b><br>Un fragment biopsique inclus en totalité.<br><br>Il s'agit d'une muqueuse fundique dont les cryptes sont régulières et bien différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un infiltrat inflammatoire polymorphe d'intensité modérée. Les glandes fundiques sont en nombre normal.<br>Présence d'éléments ayant la morphologie d'Helicobacter pylori en HES.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>1. Muqueuse duodénale normale.</b><br><br><b>2-3. Gastrite chronique interstitielle antro-fundique modérée, active, sans métaplasie intestinale ni atrophie glandulaire.</b><br><b>Présence d'une infection à hélicobacter pylori.</b>\n    </div>\n    ",
+      "micro_plain": "**1. Duodenum**\n2 fragments biopsiques inclus en totalité.\n\nIl s'agit d'une muqueuse duodénale dont les villosités sont de taille normale, tapissées par un épithélium régulier et bien différencié, sans hyperlymphocytose intraépithéliale. Le chorion est sans particularité.\nAbsence d'agent pathogène ou de signe de malignité.\n\n**2. Antrum**\n3 fragments biopsiques inclus en totalité.\n\nIl s'agit d'une muqueuse antrale dont les cryptes sont régulières et bien différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un infiltrat inflammatoire polymorphe d'intensité modérée. Les glandes antrales sont en nombre normal.\nPrésence d'éléments ayant la morphologie d'Helicobacter pylori en HES.\n\nEtude immunohistochimique :\n- HP : positif\n\n**3. Fundus**\nUn fragment biopsique inclus en totalité.\n\nIl s'agit d'une muqueuse fundique dont les cryptes sont régulières et bien différenciées, sans métaplasie intestinale. Le chorion interstitiel abrite un infiltrat inflammatoire polymorphe d'intensité modérée. Les glandes fundiques sont en nombre normal.\nPrésence d'éléments ayant la morphologie d'Helicobacter pylori en HES.",
+      "short_code": "gt",
+      "title": "Biopsies gastroduodénales"
+    },
+    {
+      "clinical_info": "",
+      "conclusion_plain": "**Cholécystite chronique.**",
+      "conflicts": [],
+      "html": "\n    <div style=\"font-family: 'Times New Roman', Times, serif; font-size: 11pt; padding: 15px; background-color: #fff; color: #000;\">\n        <div style=\"text-align: center;\"><b>VÉSICULE BILIAIRE</b></div><br><br>\n        <b>Examen macroscopique</b><br>Vésicule biliaire mesurant 8 cm de grand axe, reçue fermée. Absence de calcul à la coupe.<br><br><br><b>Examen microscopique</b><br>La muqueuse est faite de franges tapissées par un épithélium cylindrique, régulier et bien différencié. Le chorion abrite un infiltrat inflammatoire mononucléé. Cet infiltrat s'étend jusqu'à la musculeuse et la sous-séreuse.<br>Absence de signe de malignité.<br><br><br>\n        <b>CONCLUSION</b><br><br>\n        <b>Cholécystite chronique.</b>\n    </div>\n    ",
+      "micro_plain": "**Examen macroscopique**\nVésicule biliaire mesurant 8 cm de grand axe, reçue fermée. Absence de calcul à la coupe.\n\n\n**Examen microscopique**\nLa muqueuse est faite de franges tapissées par un épithélium cylindrique, régulier et bien différencié. Le chorion abrite un infiltrat inflammatoire mononucléé. Cet infiltrat s'étend jusqu'à la musculeuse et la sous-séreuse.\nAbsence de signe de malignité.",
+      "short_code": "vb",
+      "title": "Vésicule biliaire"
+    }
+  ],
+  "source_snapshot_sha256": "1944f21eed720a2fa3c72ce0bc7a79187b0c326b826a7968e7a071b2427cdb50"
+}
