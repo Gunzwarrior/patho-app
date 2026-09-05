@@ -7,6 +7,19 @@ record from earlier rounds.
 
 ## Current status
 
+**Roadmap revised after Stage 4 review; no Stage 5–7 implementation has
+started.** Thomas confirmed that PathoPilot must remain fully usable without a
+paid AI plan. Stage 5 is now an optional, token-economical AI context/change-
+package workflow; Stage 6 is a committed autonomous Content Studio for guided
+creation, relationship management, editing, archive, and safe deletion; Stage
+7 is a Quick Type Studio plus atomic two-column `(case ID, Quick Type)` bulk
+intake that creates pending Cases for review. Modifications continue to use the
+existing pending-content acknowledgement. Removal archives content when a
+pending draft depends on it and offers permanent deletion when no pending
+dependency remains and the complete candidate is valid. See
+`EDITOR_UI_PROPOSAL.md` §§1, 3, 4, 8–10. Each future stage still requires a
+bounded implementation proposal before coding.
+
 **Editor UI Stages 1–3 are complete at baseline commit `c19fe85`**
 (`Complete safe direct editing`). Stage 3 was browser-reviewed; its isolated
 suite passed with 151 tests and did not alter operational `pathology.db`.
@@ -29,8 +42,8 @@ atomic action bound to the candidate hash Thomas compared. The focused suite
 has 5 tests; the full isolated suite has 156 tests. Tests tripwire both the
 default connector and a direct canary SQLite path, and neither tests nor the
 tool open `pathology.db`. Thomas manually exercised snapshot generation,
-candidate inspection, comparison, and explicit acceptance. Stage 5 package
-import and Stage 6 structural editing remain out of scope.
+candidate inspection, comparison, and explicit acceptance. Stages 5–7 are
+approved roadmap outcomes but remain unimplemented.
 
 **Stage 2 checkpoint 1 — backend safety: verified.** Additive/idempotent
 migration, validation history/backfill, immutable validated-case backend
@@ -161,14 +174,15 @@ not any later local work.
 
 ## Editor UI implementation boundary
 
-`EDITOR_UI_PROPOSAL.md` is the frozen design baseline, including its
-validated-case protection, pending-case acknowledgement, recovery, test
-isolation, and staging requirements. Stages 1–4 are complete. Do not begin
-Stage 5 or 6 without a new approved design.
+`EDITOR_UI_PROPOSAL.md` preserves the frozen implemented safety baseline and
+now records the revised product roadmap. Stages 1–4 are complete; Stages 5–7
+are unimplemented. Do not begin a future stage until its bounded implementation
+proposal has been reviewed against the approved outcomes.
 
-Not blockers for starting implementation: extending Quick Type beyond
-`dai`, extending field-consistency beyond the Appendix pilot, and future
-case-type content such as breast.
+Quick Type expansion is no longer an incidental non-blocker: it is the focus
+of Stage 7, including authoring and bulk pending-case intake. Future case-type
+content such as breast may be created through either the optional Stage 5 AI
+workflow or the independent Stage 6 Content Studio once those stages exist.
 
 ## Where to find detail
 

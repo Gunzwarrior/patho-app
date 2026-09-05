@@ -1,10 +1,12 @@
 # EDITOR_UI_PROPOSAL.md — Tier 3 Editor UI: post-review design
 
-Status: **frozen design; Stages 1–3 complete; Stage 3 browser review passed.**
+Status: **Stages 1–4 complete. Their safety design remains frozen; Thomas
+approved a revised product roadmap for Stages 5–7 before Stage 5 began.**
 
-This is the approved design baseline. Implementation begins only at Stage 1
-and follows its stage ordering; do not reopen the architecture or expand the
-scope without a new proposal and review.
+This is the approved design baseline and forward roadmap. Stages 1–4 record
+the implemented safety foundation. Stages 5–7 record the product outcomes
+Thomas wants next; each still needs a bounded implementation proposal and
+review before code is written.
 
 Sol’s review identified real blockers in the previous write-capable stages.
 This revision accepts those findings where they are concrete, records
@@ -36,6 +38,28 @@ redesign.
    reproducible test baselines. Reviewing the current operational content is
    a separate, explicit operation against an exported snapshot—not something
    that silently uses stale `seed_data.py` content.
+6. **PathoPilot must remain fully usable without paid AI.** Manual self-service
+   is the primary product requirement. AI assistance is an optional faster
+   route for drafting a coordinated change from report examples and clinical
+   discussion; it must never be required to understand JSON, create content,
+   or maintain the application.
+7. **Ordinary changes do not block on pending cases.** A wording, default, or
+   configuration change may proceed after its normal impact preview. An
+   affected pending case continues to use the existing per-case content-change
+   warning and acknowledgement when reopened. If removing content would make a
+   pending draft unreopenable, the normal removal action archives it instead.
+   Permanent deletion is available when no pending case depends on the target
+   and the complete candidate state remains valid.
+8. **Quick Type is the preferred high-speed path.** One configurable base
+   Preset plus memorable modifiers is preferable to proliferating Presets such
+   as `etc2`, `etc3`, and `etc5`. Quick Type authoring and safe bulk creation
+   of pending cases from `(case ID, Quick Type)` rows are explicit roadmap
+   outcomes, not speculative extras.
+9. **AI context must be economical and private.** The AI export contains only
+   the compact content/configuration context and authoring instructions needed
+   to make a proposal—never Cases, case IDs, patient information, or audit
+   history. The model returns a small operation set bound to the exported
+   snapshot hash; it does not echo the complete snapshot in its answer.
 
 ---
 
@@ -65,7 +89,7 @@ deferred from direct editing rather than being treated as harmless wording.
 
 ---
 
-## 3. First direct-edit scope
+## 3. First direct-edit scope (implemented Stage 3 boundary)
 
 ### Goal
 
@@ -102,13 +126,28 @@ The editor shows, but does not directly edit:
 This is a deliberate first boundary between everyday content correction and
 shape/configuration changes that can invalidate pending cases.
 
-### Model-assisted creation remains a companion workflow
+### Model-assisted creation remains an optional companion workflow
 
 A later stage adds a reviewed **content change package**. A model can draft a
-new Field/Block/Preset and their bindings from a current exported snapshot.
-The Editor validates a dry run and shows the complete change before Thomas
-explicitly applies it. It is the route for a coherent new preset when that is
-faster than building it by hand; it is never a silent model database writer.
+new Field/Block/Preset and their bindings after receiving report examples,
+Thomas's clinical requirements, and a compact export of what PathoPilot already
+uses. The ordinary conversation remains about the expected report; Field keys,
+relationship rows, and package syntax are plumbing for the model and the app,
+not information Thomas must supply.
+
+The Editor validates a dry run and shows the complete human-readable operation
+list and production-rendered result before Thomas explicitly applies it. It is
+the route for a coherent new Preset when that is faster than building it by
+hand; it is never a silent model database writer and never the only way to
+create content.
+
+The AI-context download includes the exact package instructions plus a
+canonical snapshot hash. A returned package contains that hash, a summary, and
+the proposed operations, but not a duplicate of the full source snapshot. This
+keeps model output small enough for constrained/free plans where practical.
+PathoPilot rechecks the live snapshot hash and materialises the candidate from
+its own live state. Free-plan limits still cannot be guaranteed, so the export
+format should remain compact and allow a future relevant-content subset.
 
 Initial packages are additive/change-only. They cannot delete data, alter
 Field key/type/options, touch Cases, or change ordering/configuration fields
@@ -184,6 +223,25 @@ This covers added, removed, duplicated, and reordered composed Blocks as well
 as ordinary Preset cases. Unrelated content elsewhere in the DB does not
 invalidate a pending case. The implementation must test each of those
 composition scenarios.
+
+### Modification, archive, and deletion semantics
+
+- A validated Case always opens its complete frozen `rendered_html`; later
+  content edits, archival, or deletion do not re-render its report.
+- A pending Case remains an editable live draft. Relevant modifications are
+  allowed, then detected by its fingerprint and handled by the existing
+  before/new-output comparison and per-case acknowledgement.
+- Archive is the safe fallback when removal would break a pending draft. An
+  archived item disappears from new-case and ordinary authoring choices but
+  remains resolvable for existing pending Cases.
+- Permanent deletion is offered when no pending Case depends on the content
+  and the proposed deletion—including relationship cleanup—produces a valid
+  candidate state. Historical validated artifacts must not keep operational
+  content alive merely because they retain metadata references; the Stage 6
+  design must specify the safe migration/detachment mechanism.
+- The UI must explain what will be modified, archived, detached, or deleted,
+  list affected pending Cases, render the relevant before/after impact, and
+  apply the complete approved change atomically with audit history.
 
 ---
 
@@ -333,6 +391,14 @@ revert safety, ID-preserving snapshot round trip, and package dry run/apply
 against a candidate state. These remain stable despite ordinary clinical
 prose changes.
 
+The future-stage suites must additionally prove dependency-aware archive and
+deletion, validated-history independence, complete manual create/duplicate/
+relationship workflows, Quick Type configuration validation and rollback,
+variant-Preset migration, and atomic bulk intake. A malformed row, duplicate
+case ID, stale content revision, failed render, or audit failure must leave a
+bulk fixture with no newly created Cases. Tests and previews use synthetic
+case IDs only and never place Case data in an AI-context artifact.
+
 ### Two output-baseline workflows
 
 The phrase “golden files” previously blurred two jobs:
@@ -360,7 +426,7 @@ which snapshot it came from.
 
 ## 8. UI flow
 
-The existing `Editor` page replaces its unsafe direct Snippet-add form.
+The implemented Stage 3 Editor replaced its unsafe direct Snippet-add form:
 
 ```
 Presets
@@ -371,7 +437,7 @@ Fields (all, for shared Fields)
 Snippets
 Recent revisions
 Export content snapshot
-Import change package (later stage)
+Import change package (Stage 5)
 ```
 
 Selecting an item opens one focused edit form. It displays where the item is
@@ -382,6 +448,27 @@ generation-suffixed-key plus reset/rerun pattern for changing targets.
 The initial preview uses resolved defaults. A richer choose-values preview is
 not required: a blank Workspace case remains the efficient way to explore
 unusual combinations.
+
+The forward UI grows in two product-facing steps:
+
+```
+Stage 6 — Content Studio
+  New / duplicate / edit / archive / delete Presets
+  New / duplicate / edit / archive / delete Blocks
+  New / edit / archive / delete Fields and Snippets
+  Block–Field and Preset–Block relationships, order, defaults, and overrides
+  Complete candidate preview and pending-case impact
+
+Stage 7 — Quick Type and batch intake
+  Quick Type rule editor per base Preset
+  Parse/test examples before saving a rule set
+  Paste or upload: case ID | Quick Type
+  Validate and preview every row
+  Create all rows as pending Cases for individual review
+```
+
+JSON remains an interchange/debugging detail. Neither Content Studio nor the
+Quick Type editor requires Thomas to read or write it.
 
 ---
 
@@ -414,14 +501,52 @@ disabled until all Stage 2 safety requirements are implemented and verified.
    pytest fixtures. Comparison reports added/removed/changed/unchanged
    Presets; acceptance is an explicit atomic command bound to the reviewed
    candidate artifact SHA-256. It never opens `pathology.db`.
-5. **Reviewed model change-package import.** Snapshot hash, dry-run, full
-   validation, stale-state protection, impact output, and one explicit Apply
-   transaction for additive/change-only packages.
-6. **After real use only.** Consider direct relationship/configuration
-   editing, option additions, Quick Type/consistency authoring, richer
-   preview scenarios, and broader change packages. Deletes, Field-key/type
-   changes, select-option rename/removal, ordering, table Blocks, and
-   pending-case migration require their own proposal.
+5. **Optional reviewed AI change-package import.** Add a compact **Download
+   context for AI** artifact containing the canonical content/configuration
+   snapshot, its hash, and the exact authoring contract, but no Case or patient
+   data. Thomas may continue to provide example reports and discuss what is
+   clinically important; the model translates the agreed result into a small
+   hash-bound summary and operation set without echoing the source snapshot.
+   Import performs a no-write dry run, full candidate validation, stale-state
+   protection, readable operation/impact output, complete rendered Preset
+   previews, affected-pending-case before/after review, and one separately
+   confirmed atomic Apply. Errors are concise and copyable back to an AI.
+   Initial packages remain additive/change-only: package deletion and advanced
+   configuration are not required here. No AI account or in-app AI connection
+   is introduced, and every backend primitive should be reusable by Stage 6.
+6. **Autonomous Content Studio.** Make every ordinary PathoPilot content task
+   possible through guided forms without AI or JSON: create, duplicate, edit,
+   archive, and safely delete Presets and non-table Blocks; create, edit,
+   archive, and safely delete Fields and Snippets; manage `Block_Fields` and
+   `Preset_Blocks`, ordering, defaults, overrides, `site_label`,
+   `conclusion_group`, and group labels. A modification uses the established
+   impact preview and lets each affected pending Case acknowledge the new
+   fingerprint when reopened. A destructive action archives when a pending
+   Case still needs the target and offers permanent deletion when no pending
+   dependency remains and the whole candidate is valid. Field type/option
+   migration, table-Block row authoring, and any other genuinely exceptional
+   structure may use explicit advanced checkpoints within the Stage 6 design;
+   they may not turn AI into a requirement for maintaining content the app
+   already supports.
+7. **Quick Type Studio and bulk pending-case creation.** Make Quick Type the
+   core speed path rather than representing common modifier combinations as
+   many Presets. Provide guided create/edit/delete/reorder controls for each
+   base Preset's `Quick_Type_Tokens`: lookup mappings, measurement tokens,
+   Block targets, order, and digit-width guards, with collision, ambiguity,
+   Field/type, and complete example-parse validation before save. Include
+   authoring for the applicable consistency rules and a deliberate migration
+   path from variant Presets such as `etc0`–`etc5` to one base `etc` grammar.
+   These operations use the same candidate/revision service from Stages 5–6,
+   so they are available through guided forms and may also be proposed by an
+   optional AI package without making AI necessary.
+   Add a paste/upload intake with exactly two logical columns—case ID and
+   Quick Type. Parse and render every row against one consistent content
+   revision, report duplicate/existing IDs and all row errors before writing,
+   show a compact decoded-value/report review, and create the batch atomically
+   as **pending** Cases only. Each generated Case stores the normal structured
+   input, rendered HTML, content fingerprint, and revision reference, then
+   appears in the ordinary pending-case review workflow. A bad row means no
+   partial batch, and bulk intake never validates cases automatically.
 
 ---
 
@@ -430,10 +555,16 @@ disabled until all Stage 2 safety requirements are implemented and verified.
 - No automatic snapshot on every save, automatic Git commit, or automatic
   golden-fixture regeneration.
 - No rewriting `seed_data.py` from the live DB.
+- No paid AI plan, AI account, network connection, or JSON authoring required
+  for ordinary use or content maintenance.
+- No Cases, case IDs, patient data, or audit history in an AI-context export.
 - No model writes without a visible validated dry run and explicit Apply.
 - No normal editing of validated cases, and no duplicate-case overwrite of a
   validated record.
 - No multi-user conflict system; compare-and-swap is protection against
   accidental stale tabs/imports, not a collaboration product.
-- No direct editing of structural/configuration fields deferred in §3.
-- No data deletion or schema rebuild from Editor.
+- No silent hard deletion of content required by a pending Case; archive keeps
+  the draft reopenable until permanent deletion becomes safe.
+- No automatic validation of bulk-created Cases; the batch stops at pending
+  so Thomas reviews each report through the normal workflow.
+- No schema rebuild from Editor.
