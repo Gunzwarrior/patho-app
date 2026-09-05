@@ -7,3 +7,7 @@ pathology.db
 
 # OS generated files
 .DS_Store
+
+# Generated operational-review working files
+operational-reviews/candidates/
+operational-reviews/snapshots/*-test.json
