@@ -4,6 +4,7 @@ import re
 import hashlib
 import os
 import pandas as pd
+import template_analysis
 
 # Allows an isolated app boot without ever migrating the operational file.
 # Normal interactive use remains exactly ``pathology.db``.
@@ -87,6 +88,11 @@ def migrate_schema(db_name=None):
                 initial_snapshot_at TIMESTAMP
             );
         """)
+        # Stage 5 provenance is additive; legacy revisions keep NULL values.
+        revision_columns = _table_columns(conn, "Content_Revisions")
+        for column in ("package_hash", "base_snapshot_hash", "result_snapshot_hash"):
+            if column not in revision_columns:
+                conn.execute(f"ALTER TABLE Content_Revisions ADD COLUMN {column} TEXT")
         revision = conn.execute("SELECT id FROM Content_Revisions ORDER BY id DESC LIMIT 1").fetchone()
         if not revision:
             conn.execute(
@@ -682,8 +688,7 @@ _TEMPLATE_COLUMNS = (
 
 
 def _snippet_shortcuts(templates):
-    pattern = re.compile(r"snippet\s*\(\s*(['\"])([^'\"]+)\1\s*\)")
-    return sorted({match.group(2) for template in templates for match in pattern.finditer(template or "")})
+    return template_analysis.snippet_shortcuts(templates)
 
 
 def compute_case_content_fingerprint(preset_id, structured_input, conn=None):

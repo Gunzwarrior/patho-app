@@ -9,6 +9,17 @@ import grouping
 import rendering
 
 
+def widget_values(block, overrides=None):
+    """Resolve values exactly as freshly mounted Workspace widgets expose them."""
+    overrides = overrides or {}
+    return {
+        field["key"]: rendering.normalize_widget_value(
+            field, overrides.get(field["key"], field["value"]),
+        )
+        for field in block["fields"]
+    }
+
+
 def render_preset_defaults(preset_id, conn=None, strict=False):
     """Return the complete default report and its plain-text components."""
     if conn is None:
@@ -30,6 +41,7 @@ def render_report(conn, preset, blocks, overrides, *, clinical_info="", structur
     if len(blocks) != len(overrides):
         raise ValueError("Incomplete report values.")
     structured = structured or {}
+    overrides = [widget_values(block, values) for block, values in zip(blocks, overrides)]
     resolver = lambda shortcut: _snippet_from_connection(conn, shortcut)
     labels = lambda keys: _label_from_connection(conn, keys)
     micro_blocks, entries, warnings = [], [], []
@@ -62,6 +74,7 @@ def render_report(conn, preset, blocks, overrides, *, clinical_info="", structur
 
 def render_block_entry(block, values, total, conn=None, strict=False):
     """Workspace and previews share header, body, conclusion and rule evaluation."""
+    values = widget_values(block, values)
     resolver = None if conn is None else lambda key: _snippet_from_connection(conn, key)
     micro, conclusion = rendering.render_block(block, values, total, resolver, strict)
     header, _, _ = rendering.render_context_fragments(block, values, resolver, strict)

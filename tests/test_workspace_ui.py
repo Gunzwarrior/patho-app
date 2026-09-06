@@ -6,8 +6,11 @@ only read the fixture database.
 """
 
 import pytest
+import content_changes
+import content_editing
 import database as db_module
 import composition
+from test_stage5_packages import graph, run
 from streamlit.testing.v1 import AppTest
 
 
@@ -52,6 +55,115 @@ def _reopen_case(app, case_number):
     app.session_state["_do_case_reopen"] = True
     app.run()
     assert not app.exception
+
+
+def test_package_decimal_zero_preview_matches_fresh_workspace(mutable_db):
+    operations = graph()
+    operations[-1]["values"]["field_overrides"]["synthetic_size"] = 0
+    review = run(mutable_db, operations)
+    expected = next(
+        preset for preset in review.presets if preset["code"] == "synthetic_preset"
+    )["after"]["report"]
+    content_editing.record_initial_snapshot("a" * 64)
+    content_changes.apply_review(review, db_name=mutable_db)
+
+    app = AppTest.from_file("pages/workspace.py").run()
+    preset_id = _preset_id("synthetic_preset")
+    block = db_module.get_preset_blocks(preset_id)[0]
+    _select_preset(app, preset_id)
+    generation = app.session_state["_form_generation"]
+
+    assert not app.exception
+    assert app.text_input(
+        key=f"field_{block['block_id']}_{block['sort_order']}_synthetic_size_{generation}"
+    ).value == "0"
+    assert app.text_input(key=f"clin_info_{generation}").value == expected["clinical_info"] == "Taille 0"
+    assert app.text_area(key=f"final_micro_edit_{generation}").value == expected["micro_plain"]
+
+
+@pytest.mark.parametrize("action", ["compose_up_1", "compose_down_0", "compose_remove_1", "compose_add"])
+def test_reopened_composition_keeps_its_layout_position_after_first_edit(mutable_workspace, action):
+    """A disappearing reopen notice must not remount the unkeyed expander.
+
+    AppTest checks the render-tree position; actual open/closed state belongs
+    to the browser in the installed Streamlit version.
+    """
+    app = mutable_workspace
+    _select_preset(app, _preset_id("etc_bi"))
+    generation = app.session_state["_form_generation"]
+    app.text_input(key=f"case_id_{generation}").set_value("COMPOSITION-REOPEN").run()
+    _button_by_label(app, "💾 Save as Pending").click().run()
+
+    def position():
+        return next(index for index, element in app.main.children.items()
+                    if element.type == "expander" and element.label == "🧩 Compose specimens")
+
+    # Each reopen previously reintroduced the banner and the first-edit reset.
+    for _ in range(2):
+        _reopen_case(app, "COMPOSITION-REOPEN")
+        assert any("reopened" in message.value for message in app.success)
+        before = position()
+        app.button(key=action).click().run()
+        assert not app.exception
+        assert not any("reopened" in message.value for message in app.success)
+        assert position() == before
+        app.run()
+        assert position() == before
+
+
+def test_wildcard_targets_duplicate_instance_and_follows_composition(mutable_workspace):
+    app = mutable_workspace
+    _select_preset(app, _preset_id("etc_bi"))
+    generation = app.session_state["_form_generation"]
+    app.text_input(key=f"case_id_{generation}").set_value("WILDCARD-DUPLICATE").run()
+    instances = app.session_state["_case_block_instances"]
+    second = (instances[1]["block_id"], instances[1]["instance_no"])
+    target = app.selectbox(key=f"wildcard_target_instance_{generation}")
+    assert target.options[0] != target.options[1]
+    target.set_value(second).run()
+    app.text_area(key="wildcard_text").set_value("NOTE SECOND SPECIMEN").run()
+    app.button(key="wildcard_add").click().run()
+    assert not app.exception
+    assert app.session_state["wildcard_notes"][0]["target_idx"] == 1
+    micro = app.text_area(key=f"final_micro_edit_{generation}").value
+    assert micro.index("NOTE SECOND SPECIMEN") > micro.index("**2.")
+    assert micro.count("NOTE SECOND SPECIMEN") == 1
+
+    app.button(key="compose_up_1").click().run()
+    assert app.session_state["wildcard_notes"][0]["target_idx"] == 0
+    micro = app.text_area(key=f"final_micro_edit_{generation}").value
+    assert micro.index("NOTE SECOND SPECIMEN") < micro.index("**2.")
+    _button_by_label(app, "💾 Save as Pending").click().run()
+    saved = db_module.get_case_by_number("WILDCARD-DUPLICATE")
+    assert saved["structured_input"]["wildcard_notes"][0]["target_idx"] == 0
+    _reopen_case(app, "WILDCARD-DUPLICATE")
+    generation = app.session_state["_form_generation"]
+    micro = app.text_area(key=f"final_micro_edit_{generation}").value
+    assert micro.index("NOTE SECOND SPECIMEN") < micro.index("**2.")
+    app.button(key="compose_remove_0").click().run()
+    assert not app.exception
+    assert app.session_state["wildcard_notes"] == []
+    assert "NOTE SECOND SPECIMEN" not in app.text_area(key=f"final_micro_edit_{generation}").value
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("", "Liquide clair."), ("0", "Liquide clair de 0 mL."),
+    ("2,5", "Liquide clair de 2.5 mL."),
+])
+def test_thyroid_liquid_volume_workspace_and_reopen(mutable_workspace, value, expected):
+    app = mutable_workspace
+    _select_preset(app, _preset_id("etc0"))
+    generation = app.session_state["_form_generation"]
+    app.text_input(key=f"case_id_{generation}").set_value("THYROID-VOLUME").run()
+    volume = next(widget for widget in app.text_input if "liquid_volume_ml" in (widget.key or ""))
+    volume.set_value(value).run()
+    micro = app.text_area(key=f"final_micro_edit_{generation}").value
+    assert expected in micro
+    assert "None" not in micro
+    _button_by_label(app, "💾 Save as Pending").click().run()
+    _reopen_case(app, "THYROID-VOLUME")
+    generation = app.session_state["_form_generation"]
+    assert expected in app.text_area(key=f"final_micro_edit_{generation}").value
 
 
 class TestPresetSwitchReset:

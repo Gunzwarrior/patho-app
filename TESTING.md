@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-274 tests currently exist; the last full isolated run took 61.12 seconds.
+338 tests currently exist; the last full isolated run passed in 212.04 seconds.
 
 ## Structure
 
@@ -63,6 +63,7 @@ patho-app/
     test_stage3_editing.py   # direct-edit transactions, candidate validation, and reversion
     test_operational_review.py # explicit-snapshot Stage 4 artifact review
     test_stage5_packages.py  # strict AI contract and no-write candidate review
+    test_stage5_transactions.py # atomic Apply, stale guards and audited inverses
     golden_helpers.py        # shared render-a-preset-at-defaults helper
     golden_fixtures/         # frozen known-good plain-text output
     regenerate_golden.py     # deliberate, human-reviewed fixture updates
@@ -265,8 +266,8 @@ connections on success/failure, source byte preservation and refusal of
 triggered Case writes. Two-connection WAL tests exercise coherent exports and
 backup under concurrent commits. Guard tests cover audited ABA, content row
 identity replacement, pending arrival/edit/deletion/status transitions, and
-pending-only versus content-stale retries. No Apply/inverse transaction tests
-are claimed yet: those belong to checkpoint 2.
+pending-only versus content-stale retries. Apply/inverse transaction coverage
+is recorded separately under Stage 5 checkpoint 2 below.
 
 Five additional Workspace AppTests compare actual reopened title, clinical
 context, micro, conclusion and rendered HTML against the saved-case helper,
@@ -305,6 +306,84 @@ both while new packages require native typed values and newly created select
 options must be nonblank. Report display sanitization and import/apply UI stay
 in checkpoint 3. Numeric-range/combinatorial exhaustive analysis, hostile
 template resource quotas and real-browser visual review are not claimed.
+
+## Stage 5 checkpoint 2 — atomic Apply and reviewed inverse
+
+`tests/test_stage5_transactions.py` adds 52 synthetic DB tests. Its focused run
+passed **52 tests in 129.90 s**. The final full isolated run passed
+**330 tests in 192.35 s**, with compilation, whitespace and isolated five-route
+Streamlit boot checks passing. The operational DB checksum remained unchanged
+during that verification. The subsequently authorized library correction is
+recorded in PROGRESS.md as revision 25; tests never open the operational DB.
+
+Coverage includes the additive/idempotent nullable provenance migration;
+initial-snapshot gating; one locked content/audit commit; exact physical audit
+images and preserved IDs; internal operations without an AI envelope; complete
+inverse review and original-ID restoration, including revert-of-revert and
+legacy audit rows. The existing manual-revert endpoint refuses reviewed
+revisions, preventing it from bypassing inverse review.
+
+Stale tests exercise content changes, audited ABA, identity replacement, pending
+arrival/edit/clinical-text/saved-HTML changes, deletion, validation/unvalidation,
+changed audit data, duplicate Apply and replaced/fabricated review objects.
+Real independent SQLite connections verify lock contention and exclusion of a
+concurrent content writer during Apply. Failed writes after each materialization
+phase, validation/hash/image checks, audit inserts and commit roll back content,
+Cases/history and audit together. SQLite authorizers deny helper/trigger writes
+outside the allowed phase and nested commits. A separate exact-row comparison
+rejects mutations absent from the audit list, including during dry-run preparation.
+
+Inverse tests cover later edits, relationships and template dependencies;
+pending Preset/ad hoc/Field/Snippet/relationship dependencies even where fallback
+rendering would succeed; validated-Preset foreign-key refusal; malformed audit
+images and duplicate targets; reused original IDs; unrelated later work; and
+rollback after inverse validation failure. Update-only inverses review pending
+impact without acknowledging or rewriting saved cases. A stale-fingerprint
+save after package Apply is refused by the existing Case backend.
+
+The raw upload-size boundary is checked once: normalized defaults may enlarge
+an accepted envelope beyond 1 MiB without making its later Apply invalid.
+Tests use isolated databases; golden fixtures and accepted review artifacts are unchanged.
+No import/Apply UI or HTML-presentation change is claimed; those remain in
+checkpoint 3. Browser appearance still requires Thomas's review.
+
+The independent checkpoint 1–2 review added four regressions. They cover Jinja
+literal-concatenation Snippet calls across pending fingerprints, impact and
+inverse refusal; nullable text defaults taking the same branch in candidate
+validation as a fresh Workspace widget; and native decimal zero surviving a
+package Apply and fresh Workspace selection. The focused package/transaction/
+Workspace run passed 201 tests. Stage 3/4 plus the defect cases passed 26 tests,
+and the final isolated suite passed **338 tests in 212.04 s**. Changed Python
+files compiled, `git diff --check` passed, and an isolated Streamlit boot
+returned HTTP 200 for all five routes.
+
+## Browser defect regressions — 2026-09-06
+
+Four new Workspace AppTests cover selecting the second identical specimen for a
+wildcard note, reordering it, saving/reopening and removing its target; and
+thyroid liquid volume blank/zero/comma-decimal through save/reopen. A blank
+volume renders `Liquide clair.` with no unit or inferred explanation. The
+seed-template correction changes the documented AI export size to 24,263 bytes
+(snapshot 20,619); existing default golden outputs remain unchanged. The
+focused Workspace/package/golden run passed **164 tests in 56.43 s**.
+
+Thomas confirmed the previous browser checks for Appendix/Gallbladder, decimal
+entry, duplicate/grouped reports, manual lock, Editor previews and frozen
+validated reports. He subsequently confirmed correct wildcard duplicate
+targeting, save/reopen and deletion. The authorized thyroid correction was
+applied to the current library as revision 25 through the audited Editor save;
+reseeding the operational DB is never the update mechanism.
+
+Four additional AppTests reproduce the first-action-after-reopen composition
+reset: the disappearing notice shifted the unkeyed expander's render-tree
+position. They failed before the fix and passed afterward (2.33 s), covering
+move up/down, removal and addition over repeated reopen cycles. Notices now
+use one persistent container. AppTest verifies stable layout positions, not
+browser-held open state. Thomas subsequently browser-confirmed that the
+section stays open and the live thyroid correction works.
+The final full isolated suite passed **334 tests in 193.58 s**; compilation,
+whitespace checks and isolated five-route app boot passed. The operational DB
+checksum stayed unchanged at its post-correction value during verification.
 
 ## How this fits the mixed-model workflow
 

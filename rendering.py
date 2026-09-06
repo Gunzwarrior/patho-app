@@ -1,3 +1,4 @@
+import json
 import re
 from jinja2 import StrictUndefined, Undefined
 from jinja2.sandbox import SandboxedEnvironment
@@ -75,6 +76,25 @@ def normalize_decimal_widget(raw):
         return value if value >= 0 else None
     except ValueError:
         return None
+
+
+def normalize_widget_value(field, value):
+    """Return the value a fresh Workspace widget exposes for a resolved default."""
+    kind = field["type"]
+    if kind == "text":
+        return value or ""
+    if kind == "decimal":
+        return normalize_decimal_widget(value)
+    if kind == "number":
+        return int(value)
+    if kind == "select":
+        options = field.get("options") or []
+        if isinstance(options, str):
+            options = json.loads(options)
+        return value if value in options else options[0]
+    if kind == "checkbox":
+        return coerce_field_value(kind, value)
+    return value
 
 
 def coerce_field_value(field_type, raw_value):

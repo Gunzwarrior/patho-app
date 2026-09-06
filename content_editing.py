@@ -6,12 +6,12 @@ import math
 import re
 import sqlite3
 
-from jinja2 import meta, nodes
+from jinja2 import meta
 
 import database
 import editor_preview
-import grouping
 import rendering
+import template_analysis
 
 
 EDITABLE = {
@@ -360,18 +360,14 @@ def _template_variables(source):
 
 
 def _snippet_calls(parsed):
-    calls = []
-    for call in parsed.find_all(nodes.Call):
-        if not isinstance(call.node, nodes.Name) or call.node.name != "snippet":
+    try:
+        return template_analysis.snippet_calls(parsed)
+    except template_analysis.SnippetCallError as error:
+        if error.kind == "call":
             raise ContentEditError("Templates may only call snippet('literal_shortcut').")
-        if (len(call.args) != 1 or call.kwargs or call.dyn_args or call.dyn_kwargs
-                or not isinstance(call.args[0], nodes.Const) or not isinstance(call.args[0].value, str)):
+        if error.kind == "arguments":
             raise ContentEditError("snippet() must use exactly one literal shortcut.")
-        calls.append(call.args[0].value)
-    snippet_names = [name for name in parsed.find_all(nodes.Name) if name.name == "snippet"]
-    if len(snippet_names) != len(calls):
         raise ContentEditError("snippet may only be used as snippet('literal_shortcut').")
-    return calls
 
 
 def validate_content_templates(conn):
@@ -432,19 +428,9 @@ def _validate_changed_item(conn, changed_table, changed_key):
     if not row:
         raise ContentEditError("The changed Block is unavailable.")
     block = database.get_block_on_connection(conn, row["id"])
-    resolver = lambda shortcut: editor_preview._snippet_from_connection(conn, shortcut)
-    label_lookup = lambda keys: editor_preview._label_from_connection(conn, keys)
-    micro, conclusion = rendering.render_block(
-        block, total_specimens=1, snippet_resolver=resolver, strict=True,
+    editor_preview.render_report(
+        conn, {"name": block["name"]}, [block], [{}], strict=True,
     )
-    rendering.render_context_fragments(
-        block, snippet_resolver=resolver, strict=True,
-    )
-    grouping.render_conclusion_plain(
-        [{"block": block, "overrides": {}, "conc_txt": conclusion}],
-        resolver, label_lookup, True,
-    )
-    rendering.format_micro_plain([(block["name"], micro)])
 
 
 def _validate_renders(conn):
@@ -456,8 +442,6 @@ def _validate_renders(conn):
 
 
 def _validate_discrete_branches(conn):
-    resolver = lambda shortcut: editor_preview._snippet_from_connection(conn, shortcut)
-    label_lookup = lambda keys: editor_preview._label_from_connection(conn, keys)
     for field in conn.execute("SELECT * FROM Fields WHERE type IN ('checkbox', 'select')"):
         values = ([False, True] if field["type"] == "checkbox" else json.loads(field["options"] or "[]"))
         blocks = conn.execute("SELECT block_id FROM Block_Fields WHERE field_id = ?", (field["id"],)).fetchall()
@@ -465,15 +449,8 @@ def _validate_discrete_branches(conn):
             block = database.get_block_on_connection(conn, block_ref["block_id"])
             for value in values:
                 overrides = {field["key"]: value}
-                _micro, conclusion = rendering.render_block(
-                    block, overrides, snippet_resolver=resolver, strict=True,
-                )
-                rendering.render_context_fragments(
-                    block, overrides, snippet_resolver=resolver, strict=True,
-                )
-                grouping.render_conclusion_plain(
-                    [{"block": block, "overrides": overrides, "conc_txt": conclusion}],
-                    resolver, label_lookup, True,
+                editor_preview.render_report(
+                    conn, {"name": block["name"]}, [block], [overrides], strict=True,
                 )
 
 
@@ -536,6 +513,12 @@ def revert_revision(revision_id):
     try:
         conn.execute("BEGIN IMMEDIATE")
         _require_initial_snapshot(conn)
+        # Reviewed multi-row changes must not bypass their inverse review via
+        # the legacy one-click manual-revision endpoint. The new service reads
+        # both legacy and package row images independently of revision origin.
+        revision = conn.execute("SELECT result_snapshot_hash FROM Content_Revisions WHERE id=?", (revision_id,)).fetchone()
+        if revision and revision["result_snapshot_hash"] is not None:
+            raise ContentEditError("Prepare and confirm an inverse review before reverting this revision.")
         changes = conn.execute("SELECT * FROM Content_Changes WHERE revision_id = ? ORDER BY id", (revision_id,)).fetchall()
         if not changes:
             raise ContentEditError("That revision has no reversible content changes.")
@@ -606,23 +589,15 @@ def _apply_revert(conn, change):
 
 def validate_standalone_content(conn):
     """Strictly render all standalone Blocks and global Field addenda."""
-    resolver = lambda shortcut: editor_preview._snippet_from_connection(conn, shortcut)
-    label_lookup = lambda keys: editor_preview._label_from_connection(conn, keys)
-
     # Orphan Blocks and Field addenda must not escape validation merely
     # because no current Preset happens to reach them.
     for row in conn.execute("SELECT id FROM Blocks ORDER BY key"):
         block = database.get_block_on_connection(conn, row["id"])
-        micro, conclusion = rendering.render_block(
-            block, total_specimens=1, snippet_resolver=resolver, strict=True,
+        editor_preview.render_report(
+            conn, {"name": block["name"]}, [block], [{}], strict=True,
         )
-        rendering.render_context_fragments(block, snippet_resolver=resolver, strict=True)
-        grouping.render_conclusion_plain(
-            [{"block": block, "overrides": {}, "conc_txt": conclusion}],
-            resolver, label_lookup, True,
-        )
-        rendering.format_micro_plain([(block["name"], micro)])
-    for field in conn.execute("SELECT key, type, default_value, conclusion_addendum_template FROM Fields ORDER BY key"):
+    resolver = lambda shortcut: editor_preview._snippet_from_connection(conn, shortcut)
+    for field in conn.execute("SELECT * FROM Fields ORDER BY key"):
         if field["conclusion_addendum_template"]:
-            value = rendering.coerce_field_value(field["type"], field["default_value"])
+            value = rendering.normalize_widget_value(dict(field), field["default_value"])
             rendering.render_template(field["conclusion_addendum_template"], {"value": value}, resolver, True)

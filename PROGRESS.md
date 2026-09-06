@@ -7,11 +7,16 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 5 checkpoint 1 (no-write contract/review) is complete and verified;
-checkpoints 2–3 and Stages 6–7 remain unimplemented.** Checkpoint 1 is
-approved for commit; a browser regression checklist has been supplied.
-The approved roadmap remains `EDITOR_UI_PROPOSAL.md` and this file in commit
-`5dd1f44`; `STAGE5_IMPLEMENTATION_PLAN.md` records the reviewed scope.
+**Stage 5 checkpoints 1–2 are complete. Checkpoint 1 is `220cd2e`; checkpoint
+2 is included in the current checkpoint commit.** Thomas authorized the checkpoint 1 commit and continuation with
+checkpoint 2. Thomas browser-checked Appendix/Gallbladder, thyroid decimals,
+duplication/grouping, manual lock, Editor previews and frozen validated reports.
+Thomas also browser-confirmed the wildcard fix: correct duplicate targeting,
+save/reopen persistence and removal. He reported the first composition action
+after reopen closing the section. Thomas has now confirmed that the section
+fix and the authorized live thyroid correction also work in his browser. Checkpoint 3 and Stages 6–7 remain
+unimplemented. Authority remains the roadmap in `5dd1f44` and the reviewed
+`STAGE5_IMPLEMENTATION_PLAN.md`.
 Thomas confirmed that PathoPilot must remain fully usable without a paid AI plan. Stage 5 is now an optional, token-economical AI context/change-
 package workflow; Stage 6 is a committed autonomous Content Studio for guided
 creation, relationship management, editing, archive, and safe deletion; Stage
@@ -66,12 +71,76 @@ checkpoint commit, the full suite passed again: **274 tests in 60.37 s**;
 compilation, whitespace checks and the operational checksum also passed.
 Browser appearance remains for Thomas to check; no new package UI exists yet.
 
-**Next boundary:** checkpoint 2 will build atomic Apply and guarded inverse
-review on these operations, physical change images, hashes, local guard,
-validation and immutable review result. Provenance migration, live package
-writes, audit insertion and inverse writes are absent. Existing manual editing
-and revision reversion remain available and regression-tested. Checkpoint 3
-owns import/review/confirmation UI and restricted report presentation.
+**Checkpoint 2 — verified on 2026-09-06; committed.** Atomic Apply and reviewed inverse preparation
+are implemented in `content_changes.py`, with three additive nullable revision
+provenance columns. The backend binds issued immutable reviews to locked live
+state, checks exact changed-row/audit images, restricts writes by transaction
+phase, and preserves original IDs through inverses. Existing manual reverts
+remain supported; the legacy endpoint refuses new reviewed revisions so it
+cannot bypass inverse confirmation. The initial transaction suite passed
+41 tests, and the existing package/Stage 2/Stage 3 selection passed 146 tests.
+The expanded transaction suite passed 52 tests (129.90 s). The focused
+package/Workspace/golden regression passed 164 tests (56.43 s), including
+the four new browser-defect regressions. The final full isolated suite passed
+**330 tests in 192.35 s**. All changed Python files compile; `git diff --check`
+passes. An isolated Streamlit server returned HTTP 200 for `/`, `/workspace`,
+`/worklist`, `/editor` and `/manager`. Tests and boot never opened operational
+`pathology.db` through SQLite. During this round its SHA-256 remained
+`9622dd14e544e266941f26e28342efc53dd88102aca5e7b4d09991bc6782efa4`;
+this differs from checkpoint 1's earlier checksum after Thomas's browser use.
+No operational content correction had been applied at that verification point.
+
+**Browser defects reported on 2026-09-06:** Workspace wildcard selection now
+uses `(block_id, instance_no)` with numbered specimen labels, preserving the
+existing saved-note schema. AppTest verifies the second duplicate, reorder,
+save/reopen and target removal. The thyroid macro now conditionally includes
+`de … mL` only for a supplied volume: blank gives `Liquide clair.`, while zero
+and comma-decimal input remain visible. Three AppTests verify each value through
+save/reopen. This explicit requested wording correction also updates bootstrap
+seed content; default golden reports are unchanged. The compact seeded export
+is now **24,263 bytes**, snapshot **20,619 bytes** (+48 template bytes).
+Thomas explicitly authorized the current-library correction on 2026-09-06.
+It was applied through `content_editing.save_edit` as **revision 25**, with the
+existing initial-snapshot gate, exact old-template match and optimistic row
+hash. Readback confirmed only `Blocks.thyroid_cytology.macro_template` changed;
+the connection authorizer denied Case/history and other unrelated writes.
+The operational file hash changed intentionally from
+`363470bbb63257f364978830a614c3f2177e75001fcdff321e77bcdac4296eb2` to
+`1831ffe96373cd46174086f36f41623f5a75e06552672b59222a992414320dcb`.
+No automatic content migration, reseeding or saved-report rewrite was used.
+Existing pending drafts retain the normal content-change acknowledgement;
+validated artifacts remain frozen.
+
+**Follow-up composition fix — 2026-09-06:** the one-shot reopen notice disappeared
+on the first interaction and shifted the unkeyed composition expander from
+render-tree position 5 to 4, remounting it closed. All one-shot notices now
+occupy a single persistent container, preserving following layout positions
+without new session flags or changing the expander default. Four AppTests
+(move up/down, remove, add; each with repeated reopen) failed on the original
+code and passed after the fix (2.33 s). This verifies stable layout positions;
+Thomas subsequently confirmed the browser behavior works. Final isolated
+regression passed **334 tests in 193.58 s**. Changed Python files compile;
+`git diff --check` and isolated app boot on all five routes pass. The operational
+checksum stayed at the post-correction hash throughout these tests. Checkpoint
+2 and these browser fixes are included in the current checkpoint commit.
+
+**Independent checkpoint 1–2 review corrections — 2026-09-06:** three
+confirmed review findings are resolved. Snippet dependencies now use shared
+Jinja AST analysis, so every accepted literal call syntax participates in
+Preset impact, pending fingerprints and inverse dependency refusal. Candidate,
+standalone and Stage 3 validation now render resolved defaults as freshly
+mounted Workspace widgets expose them; nullable text therefore cannot hide an
+active branch behind SQL `NULL`. Workspace decimal initialization preserves
+native numeric zero from package/Preset overrides. Focused defect and Stage
+3/4 compatibility checks passed 26 tests; the package/transaction/Workspace
+selection passed 201 tests; the final isolated suite passed **338 tests in
+212.04 s**. Changed Python files compile and `git diff --check` passes. All
+five routes returned HTTP 200 from an isolated Streamlit boot. All database
+reproductions, tests and boot checks used temporary isolated files;
+operational `pathology.db` was not opened.
+
+**Next boundary:** checkpoint 3 owns export/import/review/confirmation UI and
+restricted HTML report presentation. No package Apply control has been added.
 
 **Editor UI Stages 1–3 are complete at baseline commit `c19fe85`**
 (`Complete safe direct editing`). Stage 3 was browser-reviewed; its isolated
@@ -213,9 +282,10 @@ only in the frozen stages defined in `EDITOR_UI_PROPOSAL.md`.
   rendering, and AppTest smoke coverage; `py_compile`, `git diff --check`,
   and a Streamlit boot + HTTP 200 check passed.
 
-Most recent implementation commits:
+Selected implementation commits:
 
 ```
+220cd2e Add no-write package review
 c19fe85 Complete safe direct editing
 d620fdc Update documentation after Editor UI Stage 2 completion
 03f85af Add operational safety foundation
@@ -228,8 +298,8 @@ not any later local work.
 ## Editor UI implementation boundary
 
 `EDITOR_UI_PROPOSAL.md` preserves the frozen implemented safety baseline and
-now records the revised product roadmap. Stages 1–4 and Stage 5 checkpoint 1 are complete; Stage 5 checkpoints 2–3
-and Stages 6–7 are unimplemented. Do not begin a future stage until its bounded implementation
+now records the revised product roadmap. Stages 1–4 and Stage 5 checkpoints 1–2
+are complete; Stage 5 checkpoint 3 and Stages 6–7 are unimplemented. Do not begin a future stage until its bounded implementation
 proposal has been reviewed against the approved outcomes.
 
 Quick Type expansion is no longer an incidental non-blocker: it is the focus

@@ -110,7 +110,7 @@ def test_context_privacy_allowlisted_queries_and_contract_example(mutable_db, mo
     example["base_snapshot_sha256"] = payload["snapshot_sha256"]
     assert packages.dry_run(raw(example), mutable_db).candidate_snapshot_hash
     # Named fixture measurement is documented; this fixture's content is unchanged by Cases/audit.
-    assert len(exported) == 24215  # seed_data.seed_all content + generated v1 contract
+    assert len(exported) == 24263  # seed_data.seed_all content + generated v1 contract
     assert len(exported) == len(packages.export_ai_context(mutable_db))
 
 
@@ -133,8 +133,6 @@ def test_graph_shuffle_complete_reports_and_no_source_writes(mutable_db, monkeyp
     assert "Phrase. normal." in output["micro_plain"] and "Aspect normal." in output["conclusion_plain"]
     assert "<b>" in output["html"]
     assert not Path(mutable_db + "-journal").exists()
-    assert not hasattr(changes, "apply_review")
-    assert not hasattr(changes, "revert_review")
 
 
 def test_review_is_deeply_immutable_and_does_not_expose_reports_in_repr(mutable_db):
@@ -590,6 +588,50 @@ def test_updated_field_or_snippet_validates_unreferenced_block(mutable_db):
     conn.close()
     with pytest.raises(packages.PackageError):
         run(mutable_db, [{"op": "update", "table": "Fields", "key": "fragments", "set": {"default_value": 9}}])
+
+
+def test_nullable_text_defaults_validate_the_fresh_workspace_value(db):
+    operations = [
+        {"op": "create", "table": "Fields", "key": "nullable_text",
+         "values": {"label": "Optional text", "type": "text", "default_value": None}},
+        {"op": "create", "table": "Blocks", "key": "nullable_text_block",
+         "values": {"name": "Nullable text", "macro_template": (
+             "{% if nullable_text is none %}Not mounted{% else %}{{ 1 / 0 }}{% endif %}"
+         ), "micro_template": "Micro", "conclusion_template": "Conclusion"}},
+        {"op": "create", "table": "Presets", "key": "nullable_text_preset",
+         "values": {"name": "Nullable text"}},
+        {"op": "link", "table": "Block_Fields",
+         "key": {"block_key": "nullable_text_block", "field_key": "nullable_text"},
+         "values": {"sort_order": 0}},
+        {"op": "link", "table": "Preset_Blocks",
+         "key": {"preset_code": "nullable_text_preset", "block_key": "nullable_text_block", "sort_order": 0},
+         "values": {}},
+    ]
+    with pytest.raises(packages.PackageError) as error:
+        run(db, operations)
+    assert error.value.ai_feedback()["errors"][0]["code"] == "candidate"
+
+
+def test_jinja_literal_snippet_dependency_changes_pending_fingerprint(mutable_db):
+    conn = connection(mutable_db)
+    conn.execute(
+        "UPDATE Blocks SET micro_template=? WHERE key='appendice'",
+        ("{{ snippet('absence_' 'malignite') }}",),
+    )
+    conn.commit()
+    conn.close()
+    case = save_synthetic_case(mutable_db)
+
+    result = run(mutable_db, [{
+        "op": "update", "table": "Snippets", "key": "absence_malignite",
+        "set": {"expansion": "Nouvelle phrase."},
+    }])
+
+    assert database._snippet_shortcuts(["{{ snippet('absence_' 'malignite') }}"]) == ["absence_malignite"]
+    assert len(result.pending_cases) == 1
+    assert result.pending_cases[0]["before"]["fingerprint"] == case["content_fingerprint"]
+    assert result.pending_cases[0]["after"]["fingerprint"] != case["content_fingerprint"]
+    assert "Nouvelle phrase." in result.pending_cases[0]["after"]["report"]["micro_plain"]
 
 
 def test_affected_preset_with_unchanged_output_and_snippet_metadata(db):

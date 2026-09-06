@@ -1,9 +1,6 @@
-"""Reusable no-write candidate operations and immutable local review.
+"""Reviewed candidates, atomic content changes, and dependency-safe inverses."""
 
-Only the caller-supplied candidate connection is mutated. There is deliberately
-no live Apply, inverse writer, migration, or provenance persistence here.
-"""
-
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import json
 import re
@@ -17,6 +14,22 @@ import editor_preview
 import rendering
 
 
+_REVIEW_ISSUER = object()
+CONTENT_TABLES = {*content_snapshot.BASE_TABLES, "Block_Fields", "Preset_Blocks"}
+
+
+class ChangeError(content_editing.ContentEditError):
+    """Fixed public rejection; optional details remain in the local session."""
+
+    def __init__(self, message, *, local=None):
+        self.local = local
+        super().__init__(message)
+
+
+class StaleReviewError(ChangeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ReviewResult:
     """Immutable server-held result; JSON-backed properties return fresh copies.
@@ -27,8 +40,9 @@ class ReviewResult:
     package_hash: str | None
     base_snapshot_hash: str
     candidate_snapshot_hash: str
-    local_guard: str
+    local_guard: str = field(repr=False)
     _payload_json: str = field(repr=False)
+    _issuer: object = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def data(self):
@@ -51,6 +65,57 @@ class ReviewResult:
         return self.data["pending_cases"]
 
 
+def _issued_review(*args):
+    review = ReviewResult(*args)
+    object.__setattr__(review, "_issuer", _REVIEW_ISSUER)
+    return review
+
+
+@contextmanager
+def _access_scope(conn, writable=(), *, insert_only=False):
+    """Prevent triggers/helper regressions from writing outside this phase.
+
+    Transaction control belongs to the caller, never a nested helper. Changing
+    authorizers also invalidates SQLite's statement cache between phases.
+    """
+    def authorize(action, table, column, db_name, trigger):
+        if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE):
+            if trigger or db_name != "main" or table not in writable:
+                return sqlite3.SQLITE_DENY
+            if insert_only and action != sqlite3.SQLITE_INSERT and table != "sqlite_sequence":
+                return sqlite3.SQLITE_DENY
+        elif action not in (sqlite3.SQLITE_READ, sqlite3.SQLITE_SELECT,
+                            sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_PRAGMA,
+                            sqlite3.SQLITE_RECURSIVE):
+            return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_PRAGMA and (column is not None or table not in {"foreign_keys", "foreign_key_check"}):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    conn.set_authorizer(authorize)
+    try:
+        yield
+    finally:
+        conn.set_authorizer(None)
+
+
+@contextmanager
+def _candidate_copy(db_name):
+    candidate = sqlite3.connect(":memory:")
+    try:
+        source = database.get_db_connection() if db_name is None else sqlite3.connect(db_name)
+        try:
+            source.backup(candidate)
+        finally:
+            source.close()
+        candidate.row_factory = sqlite3.Row
+        candidate.execute("PRAGMA foreign_keys=ON")
+        candidate.execute("PRAGMA temp_store=MEMORY")
+        candidate.execute("BEGIN")
+        yield candidate
+    finally:
+        candidate.close()
+
+
 def local_review_guard(conn):
     """Bind content identities, audited ABA, and the complete current pending set."""
     identities = {
@@ -70,6 +135,31 @@ def local_review_guard(conn):
 
 def _rows(conn, table):
     return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
+
+
+def _content_rows(conn):
+    return {table: {
+        tuple(row[c] for c in (("id",) if table in content_snapshot.BASE_TABLES else _RELATION_COLUMNS[table])): row
+        for row in _rows(conn, table)
+    } for table in CONTENT_TABLES}
+
+
+def _assert_exact_changes(conn, before, changes):
+    """Every persisted change must have exactly one matching audit image."""
+    expected = {table: dict(rows) for table, rows in before.items()}
+    for change in changes:
+        table = change["table"]
+        columns = ("id",) if table in content_snapshot.BASE_TABLES else _RELATION_COLUMNS[table]
+        old, new = change["before"], change["after"]
+        key = tuple((old or new)[c] for c in columns)
+        if expected[table].get(key) != old:
+            raise ChangeError("Candidate changes do not match their before-images.")
+        if new is None:
+            del expected[table][key]
+        else:
+            expected[table][key] = new
+    if _content_rows(conn) != expected:
+        raise ChangeError("Candidate writes do not match the reviewed change list.")
 
 
 def _fetch(conn, table, key):
@@ -337,7 +427,7 @@ def validate_candidate_content(conn, operations):
     # defaults; Block-only defaults can miss interactions with Preset overrides.
     for field in _rows(conn, "Fields"):
         if field["conclusion_addendum_template"]:
-            values = [rendering.coerce_field_value(field["type"], field["default_value"])]
+            values = [rendering.normalize_widget_value(field, field["default_value"])]
             if field["type"] == "select":
                 values.extend(json.loads(field["options"] or "[]"))
             elif field["type"] == "checkbox":
@@ -427,6 +517,8 @@ def _standalone_previews(conn, operations):
         if table not in ("Fields", "Blocks", "Snippets"):
             continue
         row = _fetch(conn, table, key)
+        if row is None:
+            continue
         used = (row["id"] in used_blocks if table == "Blocks" else
                 row["id"] in used_fields if table == "Fields" else key in used_snippets)
         if used:
@@ -438,7 +530,7 @@ def _standalone_previews(conn, operations):
         elif table == "Snippets":
             preview["expansion"] = row["expansion"]
         else:
-            preview["default_value"] = rendering.coerce_field_value(row["type"], row["default_value"])
+            preview["default_value"] = rendering.normalize_widget_value(row, row["default_value"])
             preview["label_text"] = row["label"]
             preview["addendum"] = (
                 rendering.render_template(row["conclusion_addendum_template"], {"value": preview["default_value"]}, resolver, True)
@@ -455,11 +547,18 @@ def _dependent_presets(conn, operations):
         if table == "Presets":
             affected.add(key)
             continue
+        if table == "Preset_Blocks":
+            affected.add(key["preset_code"])
+            continue
         block_ids = set()
-        if table == "Blocks":
-            block_ids.add(_fetch(conn, table, key)["id"])
+        if table in ("Blocks", "Block_Fields"):
+            block = _fetch(conn, "Blocks", key if table == "Blocks" else key["block_key"])
+            if block:
+                block_ids.add(block["id"])
         elif table == "Fields":
             field_row = _fetch(conn, table, key)
+            if field_row is None:
+                continue
             block_ids.update(r[0] for r in conn.execute(
                 "SELECT block_id FROM Block_Fields WHERE field_id=?", (field_row["id"],),
             ))
@@ -488,43 +587,37 @@ def _prefix_warnings(conn, operations):
             if (a in new or b in new) and (a.startswith(b) or b.startswith(a))]
 
 
-def review_candidate(operations, base_hash, *, package_hash=None, summary="", db_name=None):
-    """One SQLite backup, one private memory candidate, no live write transaction."""
-    operations = _checked_operations(operations)
-    candidate = sqlite3.connect(":memory:")
-    try:
-        source = database.get_db_connection() if db_name is None else sqlite3.connect(db_name)
-        try:
-            source.backup(candidate)
-        finally:
-            source.close()
-        candidate.row_factory = sqlite3.Row
-        candidate.execute("PRAGMA foreign_keys=ON")
-        candidate.execute("PRAGMA temp_store=MEMORY")
-        base = content_snapshot.snapshot_from_connection(candidate)
-        if content_snapshot.content_snapshot_hash(base) != base_hash:
-            raise contract.PackageError("stale")
-        guard = local_review_guard(candidate)
+def _review_on_connection(candidate, operations, base_hash, *, package_hash=None,
+                          summary="", inverse=None):
+    base = content_snapshot.snapshot_from_connection(candidate)
+    if content_snapshot.content_snapshot_hash(base) != base_hash:
+        raise contract.PackageError("stale")
+    guard = local_review_guard(candidate)
+    with _access_scope(candidate):
+        before_rows = _content_rows(candidate)
         before_presets, before_pending = _capture(candidate)
-        def content_only(action, table, column, db_name, trigger):
-            if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE):
-                if trigger or table not in {*content_snapshot.BASE_TABLES, "Block_Fields", "Preset_Blocks", "sqlite_sequence"}:
-                    return sqlite3.SQLITE_DENY
-            return sqlite3.SQLITE_OK
-        candidate.set_authorizer(content_only)
-        try:
-            changes = materialize_operations(candidate, operations)
-        finally:
-            candidate.set_authorizer(None)
-        try:
-            branch_warnings = validate_candidate_content(candidate, operations)
-        except contract.PackageError:
-            raise
-        except Exception as error:
-            raise contract.PackageError("candidate", local=str(error)) from None
-        after_presets, after_pending = _capture(candidate, candidate=True)
-        presets = []
         dependent = _dependent_presets(candidate, operations)
+        try:
+            before_standalone = _standalone_previews(candidate, operations)
+        except Exception as error:
+            before_standalone = [{"error": str(error)}]
+    with _access_scope(candidate, CONTENT_TABLES | {"sqlite_sequence"}):
+        if inverse is None:
+            changes = materialize_operations(candidate, operations)
+        else:
+            changes = _materialize_inverse(candidate, inverse["changes"])
+    try:
+        with _access_scope(candidate):
+            _assert_exact_changes(candidate, before_rows, changes)
+            branch_warnings = validate_candidate_content(candidate, operations)
+            after_presets, after_pending = _capture(candidate, candidate=True)
+    except contract.PackageError:
+        raise
+    except Exception as error:
+        raise contract.PackageError("candidate", local=str(error)) from None
+    with _access_scope(candidate):
+        presets = []
+        dependent.update(_dependent_presets(candidate, operations))
         unaffected = 0
         for code in sorted(set(before_presets) | set(after_presets)):
             before, after = before_presets.get(code), after_presets.get(code)
@@ -532,12 +625,12 @@ def review_candidate(operations, base_hash, *, package_hash=None, summary="", db
             if not affected:
                 unaffected += 1
             presets.append({"code": code, "affected": affected,
-                            "added": before is None,
+                            "added": before is None, "removed": after is None,
                             "output_changed": (before or {}).get("report") != (after or {}).get("report"),
                             "before": before, "after": after})
         pending = [
             {"id": case_id, "case_number": after["case_number"],
-             "before_label": "Current before this package", "after_label": "Candidate after this package",
+             "before_label": "Current before this change", "after_label": "Candidate after this change",
              "saved_label": "Last saved report", "saved_html": after["saved_html"],
              "already_stale": before_pending[case_id].get("already_stale"),
              "before": before_pending[case_id], "after": after}
@@ -551,15 +644,363 @@ def review_candidate(operations, base_hash, *, package_hash=None, summary="", db
             "validated_pending_count": len(after_pending),
             "warnings": _prefix_warnings(candidate, operations), "branch_warnings": branch_warnings,
             "standalone": _standalone_previews(candidate, operations),
+            "before_standalone": before_standalone,
+            "inverse_revision_id": inverse["revision_id"] if inverse else None,
+            "inverse_source_hash": inverse["source_hash"] if inverse else None,
         }
-        return ReviewResult(
+        return _issued_review(
             package_hash, base_hash,
             content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate)),
             guard, contract.canonical_json(payload),
         )
+
+
+def review_candidate(operations, base_hash, *, package_hash=None, summary="", db_name=None):
+    """One SQLite backup, one private memory candidate, no live write transaction."""
+    operations = _checked_operations(operations)
+    try:
+        with _candidate_copy(db_name) as candidate:
+            return _review_on_connection(candidate, operations, base_hash,
+                                         package_hash=package_hash, summary=summary)
     except contract.PackageError:
         raise
     except Exception as error:
         raise contract.PackageError("candidate", local=str(error)) from None
+
+
+_RELATION_COLUMNS = {
+    "Block_Fields": ("block_id", "field_id"),
+    "Preset_Blocks": ("preset_id", "block_id", "sort_order"),
+}
+_RELATION_IMAGES = {
+    "Block_Fields": {"block_id", "field_id", "sort_order", "label_override", "default_override", "context_section"},
+    "Preset_Blocks": {"preset_id", "block_id", "sort_order", "field_overrides"},
+}
+
+
+def _audit_key(table, key):
+    return contract.canonical_json(key).strip() if table in _RELATION_COLUMNS else key
+
+
+def _physical_target(conn, table, key):
+    if table in content_snapshot.BASE_TABLES:
+        return (content_snapshot.BASE_TABLES[table][0],), (key,)
+    if table == "Block_Fields":
+        endpoints = (("Blocks", key["block_key"]), ("Fields", key["field_key"]))
+    else:
+        endpoints = (("Presets", key["preset_code"]), ("Blocks", key["block_key"]))
+    rows = [_fetch(conn, name, stable_key) for name, stable_key in endpoints]
+    if any(row is None for row in rows):
+        return _RELATION_COLUMNS[table], None
+    values = tuple(row["id"] for row in rows)
+    if table == "Preset_Blocks":
+        values += (key["sort_order"],)
+    return _RELATION_COLUMNS[table], values
+
+
+def _fetch_change(conn, change):
+    columns, values = _physical_target(conn, change["table"], change["key"])
+    if values is None:
+        return None
+    where = " AND ".join(f"{column}=?" for column in columns)
+    row = conn.execute(f"SELECT * FROM {change['table']} WHERE {where}", values).fetchone()
+    return dict(row) if row else None
+
+
+def _read_audit(conn, revision_id):
+    """Decode legacy and multi-row audits by exact row shape, never by origin."""
+    if type(revision_id) is not int or revision_id <= 0:
+        raise ChangeError("That revision has no reversible content changes.")
+    revision = conn.execute("SELECT * FROM Content_Revisions WHERE id=?", (revision_id,)).fetchone()
+    records = [dict(r) for r in conn.execute(
+        "SELECT * FROM Content_Changes WHERE revision_id=? ORDER BY id", (revision_id,),
+    )]
+    if revision is None or not records:
+        raise ChangeError("That revision has no reversible content changes.")
+    result, targets = [], set()
+    try:
+        for record in records:
+            table = record["table_name"]
+            if table not in CONTENT_TABLES or record["operation"] not in {"create", "update", "link", "revert"}:
+                raise ValueError("Unsupported audit operation.")
+            key = json.loads(record["entity_key"]) if table in _RELATION_COLUMNS else record["entity_key"]
+            if table in _RELATION_COLUMNS:
+                if (not isinstance(key, dict) or set(key) != set(contract.LINK[table]["key"])
+                        or any(not isinstance(v, str) or not v for k, v in key.items() if k != "sort_order")
+                        or (table == "Preset_Blocks" and type(key["sort_order"]) is not int)):
+                    raise ValueError("Invalid audit identity.")
+            elif not isinstance(key, str) or not key:
+                raise ValueError("Invalid audit identity.")
+            target = (table, _audit_key(table, key))
+            if target in targets:
+                raise ValueError("Duplicate audit identity.")
+            targets.add(target)
+            images = []
+            for side in ("before", "after"):
+                raw = record[side + "_json"]
+                image = json.loads(raw) if raw is not None else None
+                expected_columns = (set(content_snapshot.BASE_TABLES[table][1]) | {"id"}
+                                    if table in content_snapshot.BASE_TABLES else _RELATION_IMAGES[table])
+                if image is not None:
+                    if not isinstance(image, dict) or set(image) != expected_columns:
+                        raise ValueError("Invalid audit image.")
+                    ids = [c for c in image if c == "id" or c.endswith("_id")]
+                    if any(type(image[c]) is not int or image[c] <= 0 for c in ids):
+                        raise ValueError("Invalid audit row ID.")
+                    if table in content_snapshot.BASE_TABLES and image[content_snapshot.BASE_TABLES[table][0]] != key:
+                        raise ValueError("Invalid audit stable key.")
+                    if table == "Preset_Blocks" and image["sort_order"] != key["sort_order"]:
+                        raise ValueError("Invalid audit position.")
+                    if table == "Blocks" and image["is_table"]:
+                        raise ValueError("Table Blocks cannot be reverted here.")
+                if record[side + "_hash"] != (content_editing.row_hash(image) if image is not None else None):
+                    raise ValueError("Invalid audit hash.")
+                images.append(image)
+            before, after = images
+            if before == after:
+                raise ValueError("Empty audit change.")
+            if before is not None and after is not None:
+                columns = ("id",) if table in content_snapshot.BASE_TABLES else _RELATION_COLUMNS[table]
+                if any(before[c] != after[c] for c in columns):
+                    raise ValueError("Audit identity changed.")
+            result.append({"table": table, "key": key, "operation": "revert", "before": after, "after": before})
+        # Resolve endpoint keys against both current content and recorded base
+        # images, so an inverse can restore its own deleted endpoints by ID.
+        recorded_ids = {}
+        for change in result:
+            if change["table"] in content_snapshot.BASE_TABLES:
+                image = change["before"] or change["after"]
+                recorded_ids[(change["table"], change["key"])] = image["id"]
+        for change in result:
+            table, key = change["table"], change["key"]
+            if table not in _RELATION_COLUMNS:
+                continue
+            endpoints = (("block_id", "Blocks", key["block_key"]),
+                         ("field_id", "Fields", key["field_key"])) if table == "Block_Fields" else (
+                             ("preset_id", "Presets", key["preset_code"]), ("block_id", "Blocks", key["block_key"]))
+            for column, endpoint, stable_key in endpoints:
+                current = _fetch(conn, endpoint, stable_key)
+                expected_id = recorded_ids.get((endpoint, stable_key), current["id"] if current else None)
+                for image in (change["before"], change["after"]):
+                    if image is not None and image[column] != expected_id:
+                        raise ValueError("Audit endpoint identity is unavailable.")
+    except (ValueError, TypeError, KeyError) as error:
+        raise ChangeError("Revert refused: invalid or unavailable audit data.", local=str(error)) from None
+    return {"revision_id": revision_id, "source_hash": contract.digest({"revision": dict(revision), "changes": records}),
+            "changes": result}
+
+
+def _inverse_operations(changes):
+    # Descriptors for shared graph/impact validation only; the public package
+    # materializer never accepts remove/restore or physical audit row images.
+    operations = []
+    for change in changes:
+        if change["after"] is None:
+            operation = "remove"
+        elif change["before"] is None:
+            operation = "link" if change["table"] in _RELATION_COLUMNS else "create"
+        else:
+            operation = "update"
+        operations.append({"op": operation, "table": change["table"], "key": change["key"]})
+    return operations
+
+
+def _check_inverse_targets(conn, changes):
+    for change in changes:
+        if _fetch_change(conn, change) != change["before"]:
+            raise ChangeError("Revert refused: later content changes or identities conflict with this revision.")
+        if change["before"] is None and change["table"] in content_snapshot.BASE_TABLES:
+            if conn.execute(f"SELECT 1 FROM {change['table']} WHERE id=?", (change["after"]["id"],)).fetchone():
+                raise ChangeError("Revert refused: an original row ID has been reused.")
+
+
+def _check_pending_removals(conn, changes):
+    removals = [c for c in changes if c["after"] is None]
+    if not removals:
+        return
+    for case in conn.execute("SELECT id, preset_id, structured_input FROM Cases WHERE status='pending'"):
+        try:
+            structured = json.loads(case["structured_input"] or "{}")
+            instances = structured.get("block_instances")
+            if instances is None:
+                instances = [dict(r) for r in conn.execute(
+                    "SELECT block_id, sort_order AS instance_no FROM Preset_Blocks WHERE preset_id=?",
+                    (case["preset_id"],),
+                )]
+            block_ids = {i["block_id"] for i in instances}
+            links = [dict(r) for block_id in block_ids for r in conn.execute(
+                "SELECT * FROM Block_Fields WHERE block_id=?", (block_id,),
+            )]
+            field_ids = {r["field_id"] for r in links}
+            templates = [row[c] for block_id in block_ids for row in conn.execute(
+                "SELECT * FROM Blocks WHERE id=?", (block_id,),
+            ) for c in content_editing.BLOCK_TEMPLATE_COLUMNS]
+            templates.extend(row[0] for field_id in field_ids for row in conn.execute(
+                "SELECT conclusion_addendum_template FROM Fields WHERE id=?", (field_id,),
+            ))
+            snippets = database._snippet_shortcuts(templates)
+            for change in removals:
+                table, row = change["table"], change["before"]
+                needed = (
+                    (table == "Presets" and row["id"] == case["preset_id"])
+                    or (table == "Blocks" and row["id"] in block_ids)
+                    or (table == "Fields" and row["id"] in field_ids)
+                    or (table == "Snippets" and change["key"] in snippets)
+                    or (table == "Block_Fields" and row["block_id"] in block_ids)
+                    or (table == "Preset_Blocks" and row["preset_id"] == case["preset_id"] and any(
+                        i["block_id"] == row["block_id"] and i.get("instance_no") == row["sort_order"] for i in instances))
+                )
+                if needed:
+                    raise ChangeError("Revert refused: a pending case depends on content being removed.",
+                                      local={"case_id": case["id"], "table": table})
+        except ChangeError:
+            raise
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise ChangeError("Revert refused: a pending case cannot be checked safely.", local={"case_id": case["id"]}) from None
+    for change in removals:
+        if change["table"] == "Presets" and conn.execute(
+            "SELECT 1 FROM Cases WHERE preset_id=? LIMIT 1", (change["before"]["id"],),
+        ).fetchone():
+            raise ChangeError("Revert refused: a saved case still references this Preset. Historical-reference changes are deferred.")
+
+
+def _materialize_inverse(conn, changes):
+    _check_inverse_targets(conn, changes)
+    _check_pending_removals(conn, changes)
+    # Immediate foreign keys require endpoints before links on recreation and
+    # links before endpoints on deletion. Templates are checked only at the end.
+    def order(change):
+        relation = change["table"] in _RELATION_COLUMNS
+        removing = change["after"] is None
+        phase = (0 if not relation else 3) if not removing else (1 if relation else 4)
+        return phase, change["table"], _audit_key(change["table"], change["key"])
+    for change in sorted(changes, key=order):
+        table, before, after = change["table"], change["before"], change["after"]
+        if before is None:
+            _insert(conn, table, after)
+        else:
+            columns, values = _physical_target(conn, table, change["key"])
+            where = " AND ".join(f"{column}=?" for column in columns)
+            if after is None:
+                conn.execute(f"DELETE FROM {table} WHERE {where}", values)
+            else:
+                editable = [c for c in after if c not in columns and c != "id"]
+                conn.execute(f"UPDATE {table} SET {', '.join(c + '=?' for c in editable)} WHERE {where}",
+                             (*[after[c] for c in editable], *values))
+    if any(_fetch_change(conn, change) != change["after"] for change in changes):
+        raise ChangeError("Revert refused: restored rows do not match their audit images.")
+    return changes
+
+
+def review_inverse(revision_id, *, db_name=None):
+    """Prepare a no-write inverse with current before/after report impact."""
+    try:
+        with _candidate_copy(db_name) as candidate:
+            inverse = _read_audit(candidate, revision_id)
+            base_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
+            return _review_on_connection(candidate, _inverse_operations(inverse["changes"]), base_hash,
+                                         summary=f"Reverted revision {revision_id}", inverse=inverse)
+    except (ChangeError, contract.PackageError):
+        raise
+    except Exception as error:
+        raise ChangeError("Revert refused: dependencies or candidate validation prevent reversal.", local=str(error)) from None
+
+
+def _record_changes(conn, review, changes):
+    inverse_id = review.data["inverse_revision_id"]
+    origin = "revision_revert" if inverse_id is not None else "package_import" if review.package_hash else "content_edit"
+    revision_id = conn.execute(
+        """INSERT INTO Content_Revisions(origin,summary,package_hash,base_snapshot_hash,result_snapshot_hash)
+           VALUES (?,?,?,?,?)""",
+        (origin, review.data["summary"], review.package_hash, review.base_snapshot_hash, review.candidate_snapshot_hash),
+    ).lastrowid
+    for change in changes:
+        before, after = change["before"], change["after"]
+        conn.execute(
+            """INSERT INTO Content_Changes
+               (revision_id,table_name,entity_key,operation,before_json,after_json,before_hash,after_hash)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (revision_id, change["table"], _audit_key(change["table"], change["key"]), change["operation"],
+             contract.canonical_json(before).strip() if before is not None else None,
+             contract.canonical_json(after).strip() if after is not None else None,
+             content_editing.row_hash(before) if before is not None else None,
+             content_editing.row_hash(after) if after is not None else None),
+        )
+    return revision_id
+
+
+def _checked_review_operations(review):
+    operations = _checked_operations(review.operations)
+    if operations != review.operations:
+        raise ChangeError("This review is invalid. Run a new review.")
+    if review.package_hash is not None:
+        envelope = {"format": contract.FORMAT, "base_snapshot_sha256": review.base_snapshot_hash,
+                    "summary": review.data["summary"], "operations": operations}
+        summary = envelope["summary"]
+        if not isinstance(summary, str) or not summary.strip() or summary != summary.strip() or len(summary) > 500:
+            raise ChangeError("This package summary is invalid. Run a new review.")
+        # The raw upload limit was checked before issuing the review. Added
+        # normalized defaults may legitimately make the canonical envelope
+        # larger; do not apply a second raw-upload limit to that representation.
+        if contract.digest(contract.package_envelope(envelope)) != review.package_hash:
+            raise ChangeError("This package no longer matches its review. Run a new review.")
+    return operations
+
+
+def apply_review(review, *, db_name=None):
+    """Recheck an issued review under one lock, then commit content and audit once."""
+    if not isinstance(review, ReviewResult) or review._issuer is not _REVIEW_ISSUER:
+        raise ChangeError("A successful current review is required before Apply.")
+    conn = None
+    try:
+        conn = database.get_db_connection() if db_name is None else sqlite3.connect(db_name)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("BEGIN IMMEDIATE")
+        content_editing._require_initial_snapshot(conn)
+        with _access_scope(conn):
+            before_rows = _content_rows(conn)
+            current_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(conn))
+            if current_hash != review.base_snapshot_hash:
+                raise StaleReviewError("Content changed since review. Export fresh context or prepare a new inverse review.")
+            if local_review_guard(conn) != review.local_guard:
+                raise StaleReviewError("Local state changed since review. Run a new dry run before Apply.")
+            inverse_id = review.data["inverse_revision_id"]
+            inverse = _read_audit(conn, inverse_id) if inverse_id is not None else None
+            if inverse is not None:
+                if inverse["source_hash"] != review.data["inverse_source_hash"] or inverse["changes"] != review.changes:
+                    raise StaleReviewError("The revision audit changed since review. Prepare a new inverse review.")
+                operations = _inverse_operations(inverse["changes"])
+            else:
+                operations = _checked_review_operations(review)
+        with _access_scope(conn, CONTENT_TABLES | {"sqlite_sequence"}):
+            applied = (materialize_operations(conn, operations) if inverse is None else
+                       _materialize_inverse(conn, inverse["changes"]))
+        with _access_scope(conn):
+            _assert_exact_changes(conn, before_rows, applied)
+            validate_candidate_content(conn, operations)
+            _capture(conn, candidate=True)
+            result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(conn))
+            if result_hash != review.candidate_snapshot_hash or applied != review.changes:
+                raise ChangeError("The candidate differs from the reviewed result. Run a new review.")
+        with _access_scope(conn, {"Content_Revisions", "Content_Changes", "sqlite_sequence"}, insert_only=True):
+            revision_id = _record_changes(conn, review, applied)
+        conn.commit()
+        return revision_id
+    except (ChangeError, contract.PackageError, content_editing.ContentEditError):
+        if conn is not None:
+            conn.rollback()
+        raise
+    except sqlite3.OperationalError as error:
+        if conn is not None:
+            conn.rollback()
+        if "locked" in str(error).lower() or "busy" in str(error).lower():
+            raise ChangeError("Database is busy. Retry Apply; if state changed, run a new review.") from None
+        raise ChangeError("Apply failed. No content or audit changes were saved.", local=str(error)) from None
+    except Exception as error:
+        if conn is not None:
+            conn.rollback()
+        raise ChangeError("Apply failed. No content or audit changes were saved.", local=str(error)) from None
     finally:
-        candidate.close()
+        if conn is not None:
+            conn.close()

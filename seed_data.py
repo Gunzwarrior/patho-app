@@ -530,7 +530,7 @@ def seed_thyroid_cytology(cursor):
     # presets are always single-specimen) is decided in rendering.
     # render_block from specimen count, not baked into this text.
     cytology_macro = (
-        "Liquide {{liquid_color}} de {{liquid_volume_ml_display}} mL."
+        "Liquide {{liquid_color}}{% if liquid_volume_ml is not none %} de {{liquid_volume_ml_display}} mL{% endif %}."
         "{% if spread_slides_sent %} Lames étalées reçues.{% endif %}"
     )
     thyroid_micro = (

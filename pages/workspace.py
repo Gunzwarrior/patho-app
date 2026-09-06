@@ -90,7 +90,7 @@ def render_field_widget(field, widget_key, disabled):
         # accepted by the person: loses the +/- stepper buttons.
         kwargs = {"key": widget_key, "disabled": disabled, "placeholder": "ex: 20"}
         if is_fresh:
-            kwargs["value"] = field["value"] or ""
+            kwargs["value"] = "" if field["value"] is None else str(field["value"])
         raw = st.text_input(field["label"], **kwargs)
         parsed = rendering.normalize_decimal_widget(raw)
         if parsed is not None or not raw.strip():
@@ -385,15 +385,19 @@ with st.sidebar:
 # One-shot messages: shown once here, before anything else renders, then
 # cleared. st.toast() does NOT survive a rerun called right after it
 # (confirmed open Streamlit issue), so these use session_state instead.
-for _msg_key, _renderer in (
-    ("_save_confirmation", st.success),
-    ("_reopen_success", st.success),
-    ("_reopen_error", st.error),
-    ("_quicktype_success", st.success),
-    ("_quicktype_error", st.error),
-):
-    if _msg_key in st.session_state:
-        _renderer(st.session_state.pop(_msg_key))
+# Keep one layout slot even after the notice disappears. Otherwise the first
+# interaction after reopen shifts every following element, remounting the
+# unkeyed composition expander and losing its browser-held open state.
+with st.container():
+    for _msg_key, _renderer in (
+        ("_save_confirmation", st.success),
+        ("_reopen_success", st.success),
+        ("_reopen_error", st.error),
+        ("_quicktype_success", st.success),
+        ("_quicktype_error", st.error),
+    ):
+        if _msg_key in st.session_state:
+            _renderer(st.session_state.pop(_msg_key))
 
 st.title("🔬 Workspace")
 
@@ -771,10 +775,17 @@ if selected_preset_id is not None:
     with st.expander("➕ Niveaux / IHC / Colorations (cas particuliers)"):
         st.caption("Pour tout ce qui est imprévisible — attache une note à n'importe quel spécimen de ce cas.")
 
-        block_names = [b["name"] for b in blocks]
+        target_instances = [(b["block_id"], b["instance_no"]) for b in blocks]
+        target_labels = {
+            identity: f"{idx + 1}. {blocks[idx]['name']}"
+            for idx, identity in enumerate(target_instances)
+        }
         wc1, wc2 = st.columns(2)
         with wc1:
-            target_name = st.selectbox("Spécimen", block_names, key="wildcard_target", disabled=master_lock_active)
+            target_instance = st.selectbox(
+                "Spécimen", target_instances, format_func=target_labels.get,
+                key=f"wildcard_target_instance_{form_gen}", disabled=master_lock_active,
+            )
         with wc2:
             note_type = st.selectbox(
                 "Type", ["Niveaux", "Immunohistochimie", "Coloration", "Autre"],
@@ -791,9 +802,10 @@ if selected_preset_id is not None:
 
         if st.button("➕ Ajouter", key="wildcard_add", disabled=master_lock_active):
             if note_text.strip():
+                target_idx = target_instances.index(target_instance)
                 st.session_state.setdefault("wildcard_notes", []).append({
-                    "target_idx": block_names.index(target_name),
-                    "target_name": target_name,
+                    "target_idx": target_idx,
+                    "target_name": blocks[target_idx]["name"],
                     "note_type": note_type,
                     "text": note_text.strip(),
                 })
@@ -807,7 +819,7 @@ if selected_preset_id is not None:
             for note_idx, note in enumerate(notes):
                 nc1, nc2 = st.columns([6, 1])
                 with nc1:
-                    st.markdown(f"- **{note['target_name']}** ({note['note_type']}) : {note['text']}")
+                    st.markdown(f"- **{note['target_idx'] + 1}. {note['target_name']}** ({note['note_type']}) : {note['text']}")
                 with nc2:
                     if st.button("🗑️", key=f"wildcard_del_{note_idx}", disabled=master_lock_active):
                         st.session_state["wildcard_notes"].pop(note_idx)
