@@ -7,15 +7,18 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 5 checkpoints 1–2 are complete. Checkpoint 1 is `220cd2e`; checkpoint
-2 is included in the current checkpoint commit.** Thomas authorized the checkpoint 1 commit and continuation with
+**Stage 5 checkpoints 1–2 are committed, and checkpoint 3 is complete,
+fully tested, and browser-approved for this commit. Checkpoint 1 is `220cd2e`;
+checkpoint 2 is `5868ad9`.** Thomas authorized the checkpoint 1 commit and continuation with
 checkpoint 2. Thomas browser-checked Appendix/Gallbladder, thyroid decimals,
 duplication/grouping, manual lock, Editor previews and frozen validated reports.
 Thomas also browser-confirmed the wildcard fix: correct duplicate targeting,
 save/reopen persistence and removal. He reported the first composition action
 after reopen closing the section. Thomas has now confirmed that the section
-fix and the authorized live thyroid correction also work in his browser. Checkpoint 3 and Stages 6–7 remain
-unimplemented. Authority remains the roadmap in `5dd1f44` and the reviewed
+fix and the authorized live thyroid correction also work in his browser.
+Thomas completed the checkpoint 3 browser review on 2026-09-08 and approved
+the functionality and commit. Stages 6–7 remain. Authority remains
+the roadmap in `5dd1f44` and the reviewed
 `STAGE5_IMPLEMENTATION_PLAN.md`.
 Thomas confirmed that PathoPilot must remain fully usable without a paid AI plan. Stage 5 is now an optional, token-economical AI context/change-
 package workflow; Stage 6 is a committed autonomous Content Studio for guided
@@ -139,8 +142,47 @@ five routes returned HTTP 200 from an isolated Streamlit boot. All database
 reproductions, tests and boot checks used temporary isolated files;
 operational `pathology.db` was not opened.
 
-**Next boundary:** checkpoint 3 owns export/import/review/confirmation UI and
-restricted HTML report presentation. No package Apply control has been added.
+**Stage 5 checkpoint 3 — implemented and verified on 2026-09-07; browser
+review passed on 2026-09-08.** Editor now has one persistent **AI package**
+section. It exposes the measured content-only AI-context download with separate
+snapshot/download hashes, exact UTF-8 byte size, privacy/economy wording, and an
+explicit distinction from the recovery snapshot. Upload, dry run, exact-review
+confirmation, and Apply are separate actions. Session-local generation-bound
+state detects byte changes including same-name replacement, clears stale consent,
+never treats browser operations as proof of review, and retains the backend
+recovery and stale-state gates.
+
+Successful reviews show the complete normalized operation list, exact physical
+before/after values, template diffs, warnings, selectable full Preset previews,
+standalone content, and affected pending-Case current/candidate/saved reports.
+Fixed allowlisted AI feedback is separate from local session-only error/report
+details. Successful Apply reports the revision ID, clears loaded manual forms,
+keeps the AI-package section selected, and points to Recent revisions. Reviewed
+revision inverses there have separate Prepare, confirmation, and Apply actions;
+legacy manual reverts retain their existing flow.
+
+`report_presentation.py` is the single display-only restricted HTML boundary.
+It preserves PathoPilot's report typography, emphasis, spacing, lists, and table
+formatting while removing scripts/active resource elements, event attributes,
+external-resource URL attributes, and unsafe CSS. Editor package/default previews
+and every Workspace report display use it. Canonical rendering, validated/saved
+artifacts, and database report HTML are unchanged.
+
+Checkpoint 3 AppTests cover section/result persistence, upload removal and
+same-name replacement, failed dry run, recovery gating, full readable reports,
+safe feedback, pending local reports, two-session staleness, failed/successful
+Apply, form clearing, inverse navigation, and restricted HTML in Editor and
+Workspace. The focused run passed **56 tests in 34.68 s**. The final full
+isolated suite passed **351 tests in 233.02 s**. All changed Python files compile;
+`git diff --check` passes; and an isolated temporary-database Streamlit boot
+returned HTTP 200 for `/`, `/workspace`, `/worklist`, `/editor`, and `/manager`.
+The operational `pathology.db` was not opened; its file SHA-256 remained
+`436259e755802b08be659fa2fac589f209b0b40603b14905261d217bfc1acb93`
+across final verification. No golden fixture, accepted operational-review
+artifact, or seed content was changed.
+
+**Next boundary:** checkpoint 3 is approved for commit. Do not begin Stage 6 or
+Stage 7 without the next bounded authorization.
 
 **Editor UI Stages 1–3 are complete at baseline commit `c19fe85`**
 (`Complete safe direct editing`). Stage 3 was browser-reviewed; its isolated
@@ -299,7 +341,8 @@ not any later local work.
 
 `EDITOR_UI_PROPOSAL.md` preserves the frozen implemented safety baseline and
 now records the revised product roadmap. Stages 1–4 and Stage 5 checkpoints 1–2
-are complete; Stage 5 checkpoint 3 and Stages 6–7 are unimplemented. Do not begin a future stage until its bounded implementation
+are committed; checkpoint 3 is tested and browser-approved for this commit.
+Stages 6–7 are unimplemented. Do not begin a future stage until its bounded implementation
 proposal has been reviewed against the approved outcomes.
 
 Quick Type expansion is no longer an incidental non-blocker: it is the focus

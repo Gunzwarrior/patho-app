@@ -473,7 +473,9 @@ def recent_revisions(limit=12):
     conn = database.get_db_connection()
     try:
         rows = conn.execute(
-            """SELECT r.id, r.created_at, r.origin, r.summary, COUNT(c.id) AS changes
+            """SELECT r.id, r.created_at, r.origin, r.summary,
+                      r.package_hash, r.base_snapshot_hash, r.result_snapshot_hash,
+                      COUNT(c.id) AS changes
                FROM Content_Revisions r LEFT JOIN Content_Changes c ON c.revision_id = r.id
                GROUP BY r.id ORDER BY r.id DESC LIMIT ?""", (limit,)
         ).fetchall()

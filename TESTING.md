@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-338 tests currently exist; the last full isolated run passed in 212.04 seconds.
+351 tests currently exist; the last full isolated run passed in 233.02 seconds.
 
 ## Structure
 
@@ -64,6 +64,7 @@ patho-app/
     test_operational_review.py # explicit-snapshot Stage 4 artifact review
     test_stage5_packages.py  # strict AI contract and no-write candidate review
     test_stage5_transactions.py # atomic Apply, stale guards and audited inverses
+    test_stage5_ui.py        # package Editor flow and restricted report HTML
     golden_helpers.py        # shared render-a-preset-at-defaults helper
     golden_fixtures/         # frozen known-good plain-text output
     regenerate_golden.py     # deliberate, human-reviewed fixture updates
@@ -346,6 +347,45 @@ an accepted envelope beyond 1 MiB without making its later Apply invalid.
 Tests use isolated databases; golden fixtures and accepted review artifacts are unchanged.
 No import/Apply UI or HTML-presentation change is claimed; those remain in
 checkpoint 3. Browser appearance still requires Thomas's review.
+
+## Stage 5 checkpoint 3 — Editor integration and restricted presentation
+
+`tests/test_stage5_ui.py` adds 13 checkpoint-specific tests. Together with the
+existing Editor and Workspace AppTests, the focused checkpoint run passed
+**56 tests in 34.68 s**. Coverage includes the persistent AI-package section and
+measured private export wording; explicit upload/dry-run/review/confirm/Apply;
+ordinary review persistence; upload removal and same-filename byte replacement;
+failed dry run and failed/stale Apply confirmation reset; recovery gating;
+complete readable operation, change, Preset, standalone, and pending-Case
+presentation; fixed AI-safe feedback; successful revision/form reset; two
+independent AppTest sessions; and separately prepared/confirmed/applied inverses.
+
+The new display-only `report_presentation.restricted_report_html` boundary is
+tested with active elements, event attributes, external resource URLs, unsafe
+CSS, and allowed report formatting. AppTests verify its use in both Editor and
+Workspace and verify that the canonical candidate HTML and saved validated
+artifact remain byte-for-byte unchanged in memory/database. The five pre-existing
+saved-case/Workspace parity tests now compare against this presentation string,
+while report parts and canonical HTML retain their original assertions.
+
+Final checkpoint results:
+
+- Focused `venv/bin/pytest -q tests/test_stage5_ui.py tests/test_editor.py tests/test_workspace_ui.py`:
+  **56 passed in 34.68 s**.
+- Full isolated `venv/bin/pytest -q`: **351 passed in 233.02 s**.
+- `py_compile` for every changed Python file and `git diff --check`: passed.
+- Isolated Streamlit boot with a synthetic temporary database: HTTP 200 for
+  `/`, `/workspace`, `/worklist`, `/editor`, and `/manager`; the server and
+  temporary database were removed afterward.
+- Operational `pathology.db` was not opened and its file SHA-256 remained
+  `436259e755802b08be659fa2fac589f209b0b40603b14905261d217bfc1acb93`
+  across final verification. Golden fixtures, accepted operational-review
+  artifacts, and seed content were not changed.
+
+AppTest establishes server/session behavior and emitted restricted HTML, not
+real-browser layout, file-download behavior, or frontend remount behavior.
+Thomas completed the checkpoint 3 browser review on 2026-09-08; it passed, and
+he approved the functionality and this commit.
 
 The independent checkpoint 1–2 review added four regressions. They cover Jinja
 literal-concatenation Snippet calls across pending fingerprints, impact and

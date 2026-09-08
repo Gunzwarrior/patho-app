@@ -4,6 +4,7 @@ import rendering
 import quicktype
 import composition
 import editor_preview
+from report_presentation import restricted_report_html
 
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
 CASE_SCOPED_EXACT_KEYS = (
@@ -413,7 +414,7 @@ if validated_case:
         st.session_state["_do_workspace_reset"] = True
         st.rerun()
     st.info("This validated case is frozen. Its saved report is shown exactly as validated; it is not re-rendered from current content.")
-    st.markdown(validated_case["rendered_html"] or "", unsafe_allow_html=True)
+    st.markdown(restricted_report_html(validated_case["rendered_html"]), unsafe_allow_html=True)
     validation_history = db.get_case_validation_history(validated_case["case_number"])
     status_history = db.get_case_status_history(validated_case["case_number"])
     return_history = [
@@ -856,7 +857,7 @@ if selected_preset_id is not None:
         rendering.text_to_html(final_micro),
         rendering.text_to_html(final_conc),
     )
-    st.markdown(final_html, unsafe_allow_html=True)
+    st.markdown(restricted_report_html(final_html), unsafe_allow_html=True)
 
     st.divider()
 
@@ -932,9 +933,12 @@ if selected_preset_id is not None:
         st.warning("⚠️ Content changed since this draft was saved. Review the previous and current reports, then acknowledge this specific content version before saving.")
         with st.expander("Compare saved draft with current rendering"):
             st.caption("Saved draft")
-            st.markdown(st.session_state.get("_saved_rendered_html", ""), unsafe_allow_html=True)
+            st.markdown(
+                restricted_report_html(st.session_state.get("_saved_rendered_html", "")),
+                unsafe_allow_html=True,
+            )
             st.caption("Current rendering")
-            st.markdown(final_html, unsafe_allow_html=True)
+            st.markdown(restricted_report_html(final_html), unsafe_allow_html=True)
         content_acknowledged = st.checkbox(
             "I acknowledge the content change for this draft", key=acknowledgement_key
         )

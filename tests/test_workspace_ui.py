@@ -542,5 +542,6 @@ def test_saved_case_preview_matches_workspace_reopen(mutable_workspace, code, ma
     assert app.text_area(key=f"final_micro_edit_{generation}").value == preview["micro_plain"]
     assert app.text_area(key=f"final_conc_edit_{generation}").value == preview["conclusion_plain"]
     from streamlit.string_util import clean_text
-    assert any(widget.value == clean_text(preview["html"]) for widget in app.markdown)
+    from report_presentation import restricted_report_html
+    assert any(widget.value == clean_text(restricted_report_html(preview["html"])) for widget in app.markdown)
     assert app.session_state["_case_block_instances"] == instances

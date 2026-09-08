@@ -1,11 +1,16 @@
 import json
+import difflib
+import hashlib
 
 import streamlit as st
 
 import content_editing
+import content_changes
 import content_snapshot
+import change_packages
 import database as db
 from editor_preview import render_preset_defaults
+from report_presentation import restricted_report_html
 
 
 def _preset_label(preset):
@@ -37,7 +42,7 @@ def _show_preview(preset_id):
     st.caption("Resolved stored defaults, rendered through the same report pipeline as Workspace.")
     if preview["conflicts"]:
         st.warning(f"{', '.join(preview['conflicts'])} differs between default Blocks and is not auto-added to the conclusion.")
-    st.markdown(preview["html"], unsafe_allow_html=True)
+    st.markdown(restricted_report_html(preview["html"]), unsafe_allow_html=True)
     with st.expander("Plain-text rendering"):
         st.code(f"MICROSCOPY\n{preview['micro_plain']}\n\nCONCLUSION\n{preview['conclusion_plain']}")
 
@@ -135,6 +140,314 @@ def _snapshot_gate():
     return False
 
 
+def _scalar_text(value):
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
+
+
+def _show_mapping(values, prefix=""):
+    """Show every value by path without making the user inspect raw JSON."""
+    for key, value in values.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            st.markdown(f"**{path}**")
+            if value:
+                _show_mapping(value, path)
+            else:
+                st.code("{}", language=None)
+        elif isinstance(value, list):
+            st.markdown(f"**{path}**")
+            if value:
+                for index, item in enumerate(value):
+                    if isinstance(item, dict):
+                        _show_mapping(item, f"{path}[{index}]")
+                    else:
+                        st.code(f"[{index}] {_scalar_text(item)}", language=None)
+            else:
+                st.code("[]", language=None)
+        else:
+            st.markdown(f"**{path}**")
+            st.code(_scalar_text(value), language=None)
+
+
+def _show_report(report, heading):
+    st.markdown(f"**{heading}**")
+    if not report:
+        st.caption("Not present.")
+        return
+    if report.get("error"):
+        st.error(report["error"])
+        return
+    report = report.get("report", report)
+    for label, key in (
+        ("Title", "title"), ("Clinical information", "clinical_info"),
+        ("Microscopy", "micro_plain"), ("Conclusion", "conclusion_plain"),
+    ):
+        st.caption(label)
+        st.code(report.get(key, ""), language=None)
+    if report.get("locks"):
+        st.caption("Locks: " + ", ".join(report["locks"]))
+    for warning in report.get("warnings", []):
+        st.warning(warning)
+    for conflict in report.get("conflicts", []):
+        st.warning(conflict)
+    st.caption("Restricted report presentation")
+    st.markdown(restricted_report_html(report.get("html", "")), unsafe_allow_html=True)
+
+
+def _show_operations(review):
+    st.subheader(f"Normalized operations ({len(review.operations)})", anchor=False)
+    for position, operation in enumerate(review.operations, 1):
+        key = operation["key"]
+        identity = key if isinstance(key, str) else ", ".join(f"{k}={v}" for k, v in key.items())
+        with st.expander(f"{position}. {operation['op']} {operation['table']} — {identity}"):
+            if "index" in operation:
+                st.caption(f"Original uploaded operation index: {operation['index']}")
+            else:
+                st.caption("Backend-derived inverse operation")
+            values = operation.get("set", operation.get("values", {}))
+            if values:
+                _show_mapping(values)
+
+
+def _show_changes(review):
+    st.subheader(f"Exact database changes ({len(review.changes)})", anchor=False)
+    for position, change in enumerate(review.changes, 1):
+        key = change["key"]
+        identity = key if isinstance(key, str) else ", ".join(f"{k}={v}" for k, v in key.items())
+        with st.expander(f"{position}. {change['table']} — {identity}"):
+            before, after = change.get("before"), change.get("after")
+            before_col, after_col = st.columns(2)
+            with before_col:
+                st.markdown("**Before**")
+                if before is not None:
+                    _show_mapping(before)
+                else:
+                    st.code("Not present", language=None)
+            with after_col:
+                st.markdown("**After**")
+                if after is not None:
+                    _show_mapping(after)
+                else:
+                    st.code("Not present", language=None)
+            for column in sorted(set(before or {}) | set(after or {})):
+                old, new = (before or {}).get(column), (after or {}).get(column)
+                if old == new or not ("template" in column or isinstance(old, str) and "\n" in old
+                                      or isinstance(new, str) and "\n" in new):
+                    continue
+                diff = "\n".join(difflib.unified_diff(
+                    (old or "").splitlines(), (new or "").splitlines(),
+                    fromfile=f"before/{column}", tofile=f"after/{column}", lineterm="",
+                ))
+                st.caption(f"Readable diff — {column}")
+                st.code(diff or "(value changed)", language="diff")
+
+
+def _show_review_reports(review, key_prefix):
+    data = review.data
+    affected = [item for item in data["presets"] if item["affected"]]
+    st.subheader("Preset reports", anchor=False)
+    st.caption(
+        f"{len(affected)} affected · {data['unaffected_presets']} unaffected · "
+        f"{data['validated_pending_count']} pending Cases validated"
+    )
+    if affected:
+        selected_code = st.selectbox(
+            "Affected Preset", [item["code"] for item in affected],
+            key=f"{key_prefix}_preset_report",
+        )
+        selected = next(item for item in affected if item["code"] == selected_code)
+        st.caption(
+            f"Added: {'yes' if selected['added'] else 'no'} · removed: "
+            f"{'yes' if selected['removed'] else 'no'} · output changed: "
+            f"{'yes' if selected['output_changed'] else 'no'}"
+        )
+        before_col, after_col = st.columns(2)
+        with before_col:
+            _show_report(selected.get("before"), "Current before this change")
+        with after_col:
+            _show_report(selected.get("after"), "Candidate after this change")
+    else:
+        st.caption("No Preset is affected.")
+
+    standalone = data.get("standalone", [])
+    st.subheader(f"Standalone content ({len(standalone)})", anchor=False)
+    for item in standalone:
+        with st.expander(f"{item.get('table', 'Content')}.{item.get('key', 'unknown')} — {item.get('label', '')}"):
+            if item.get("report"):
+                _show_report(item["report"], "Candidate standalone report")
+            else:
+                _show_mapping({k: v for k, v in item.items() if k not in {"table", "key", "label"}})
+
+    pending = data["pending_cases"]
+    st.subheader(f"Affected pending Cases ({len(pending)})", anchor=False)
+    st.caption("Case identifiers and reports below stay only in this browser session and are never AI feedback.")
+    if pending:
+        selected_id = st.selectbox(
+            "Pending Case", [item["id"] for item in pending],
+            format_func=lambda ident: next(item["case_number"] for item in pending if item["id"] == ident),
+            key=f"{key_prefix}_pending_report",
+        )
+        selected = next(item for item in pending if item["id"] == selected_id)
+        if selected.get("already_stale"):
+            st.warning("This draft was already stale before this package.")
+        before_col, after_col = st.columns(2)
+        with before_col:
+            _show_report(selected["before"], selected["before_label"])
+        with after_col:
+            _show_report(selected["after"], selected["after_label"])
+        with st.expander(selected["saved_label"]):
+            st.markdown(restricted_report_html(selected.get("saved_html", "")), unsafe_allow_html=True)
+    else:
+        st.caption("No pending Case is affected.")
+
+
+def _show_full_review(review, key_prefix):
+    data = review.data
+    st.success("Dry run succeeded. Nothing saved.")
+    st.caption("Package summary")
+    st.code(data["summary"], language=None)
+    for warning in data.get("warnings", []):
+        st.warning(warning)
+    for warning in data.get("branch_warnings", []):
+        with st.expander("Candidate branch warning"):
+            _show_mapping(warning)
+    _show_operations(review)
+    _show_changes(review)
+    _show_review_reports(review, key_prefix)
+    with st.expander("Content hashes"):
+        st.code(
+            f"Base SHA-256: {review.base_snapshot_hash}\n"
+            f"Candidate SHA-256: {review.candidate_snapshot_hash}\n"
+            f"Package SHA-256: {review.package_hash or 'not applicable'}",
+            language=None,
+        )
+
+
+def _clear_ai_review(*, clear_feedback=True):
+    for key in ("_editor_ai_review", "_editor_ai_review_upload_sha", "_editor_ai_confirmed_review"):
+        st.session_state.pop(key, None)
+    if clear_feedback:
+        st.session_state.pop("_editor_ai_feedback", None)
+        st.session_state.pop("_editor_ai_local_error", None)
+
+
+def _clear_confirmation_widgets(prefix):
+    for key in list(st.session_state):
+        if key.startswith(prefix) and key.endswith("_confirm"):
+            st.session_state.pop(key, None)
+
+
+def _show_package_error():
+    feedback = st.session_state.get("_editor_ai_feedback")
+    if not feedback:
+        return
+    st.error("Dry run failed. Nothing saved; any earlier successful review and confirmation were cleared.")
+    st.subheader("Structured validation errors", anchor=False)
+    st.dataframe(feedback["errors"], use_container_width=True, hide_index=True)
+    if feedback.get("omitted_errors"):
+        st.caption(f"{feedback['omitted_errors']} additional error(s) omitted by the fixed safety cap.")
+    st.subheader("Copyable AI feedback", anchor=False)
+    st.caption("This fixed allowlisted feedback excludes Case identifiers, reports, uploaded values, and raw exceptions.")
+    st.code(change_packages.canonical_json(feedback).strip(), language="json")
+    local = st.session_state.get("_editor_ai_local_error")
+    if local is not None:
+        with st.expander("Local details — session only; do not copy to AI"):
+            st.error(str(local))
+
+
+def _ai_package_section(writes_enabled):
+    payload = change_packages.export_ai_context()
+    context = json.loads(payload)
+    st.header("AI package", anchor=False)
+    st.info(
+        "Optional workflow: PathoPilot makes no network request and requires no AI account. "
+        "You may download the file and use any external assistant, or ignore this section entirely."
+    )
+    st.warning(
+        "Contains reusable content/configuration, not Case records. Review content for patient details before "
+        "sharing; de-identify any examples you supply separately. Free-plan capacity is not guaranteed: byte "
+        "size is not a token estimate."
+    )
+    st.caption(
+        "This content-only AI context is not a recovery snapshot and cannot be restored. The separate recovery "
+        "snapshot above remains the prerequisite for Apply."
+    )
+    st.code(
+        f"Content snapshot SHA-256 (copy into the package): {context['snapshot_sha256']}\n"
+        f"Exact download SHA-256: {hashlib.sha256(payload).hexdigest()}\n"
+        f"Exact download size: {len(payload):,} UTF-8 bytes",
+        language=None,
+    )
+    st.download_button(
+        "Download content-only AI context", payload, "pathopilot-ai-context.json",
+        "application/json", key="editor_ai_context_download",
+    )
+
+    generation = st.session_state.get("_editor_ai_generation", 0)
+    upload_key = f"editor_ai_upload_{generation}"
+    uploaded = st.file_uploader("Upload one AI change-package JSON file", type=["json"], key=upload_key)
+    uploaded_bytes = uploaded.getvalue() if uploaded is not None else None
+    signature = hashlib.sha256(uploaded_bytes).hexdigest() if uploaded_bytes is not None else None
+    previous = st.session_state.get("_editor_ai_upload_signature", "__first_run__")
+    if previous != signature:
+        st.session_state["_editor_ai_upload_signature"] = signature
+        _clear_confirmation_widgets("editor_ai_review_")
+        _clear_ai_review()
+    run_key = f"editor_ai_dry_run_{generation}"
+    if st.button("Run dry run", key=run_key, disabled=uploaded_bytes is None):
+        _clear_confirmation_widgets("editor_ai_review_")
+        _clear_ai_review()
+        st.session_state["_editor_ai_review_generation"] = (
+            st.session_state.get("_editor_ai_review_generation", 0) + 1
+        )
+        try:
+            review = change_packages.dry_run(uploaded_bytes)
+        except change_packages.PackageError as error:
+            st.session_state["_editor_ai_feedback"] = error.ai_feedback()
+            st.session_state["_editor_ai_local_error"] = error.local
+        else:
+            st.session_state["_editor_ai_review"] = review
+            st.session_state["_editor_ai_review_upload_sha"] = signature
+
+    _show_package_error()
+    review = st.session_state.get("_editor_ai_review")
+    if review is None or st.session_state.get("_editor_ai_review_upload_sha") != signature:
+        return
+    review_generation = st.session_state.get("_editor_ai_review_generation", 0)
+    prefix = f"editor_ai_review_{generation}_{review_generation}"
+    _show_full_review(review, prefix)
+    confirmed = st.checkbox(
+        "I confirm this exact reviewed candidate and its local pending-Case impact",
+        key=f"{prefix}_confirm",
+    )
+    if not writes_enabled:
+        st.warning("Apply is locked until the separate recovery snapshot gate above is complete.")
+    if st.button("Apply reviewed package", key=f"{prefix}_apply", disabled=not (confirmed and writes_enabled)):
+        try:
+            revision_id = content_changes.apply_review(review)
+        except content_changes.StaleReviewError as error:
+            _clear_ai_review(clear_feedback=False)
+            st.session_state["_editor_ai_clear_confirmation"] = True
+            st.session_state["_editor_error"] = f"Not applied: {error} Run a new dry run."
+        except (content_changes.ChangeError, change_packages.PackageError, content_editing.ContentEditError) as error:
+            st.session_state["_editor_ai_clear_confirmation"] = True
+            st.session_state["_editor_error"] = f"Not applied: {error}"
+        else:
+            _clear_loaded_entities()
+            _clear_ai_review()
+            st.session_state["_editor_ai_reset_widgets"] = True
+            st.session_state["_editor_message"] = (
+                f"Applied as content revision {revision_id}. Review it under Recent revisions."
+            )
+        st.rerun()
+
+
 def _edit_block(block):
     entity = _loaded_entity("Blocks", block["key"])
     token = entity["row_hash"][:12]
@@ -212,27 +525,101 @@ def _revisions():
         return
     st.dataframe(revisions, use_container_width=True, hide_index=True)
     for revision in revisions:
-        if revision["origin"] not in {"manual_edit", "revision_revert"} or not revision["changes"]:
+        if not revision["changes"]:
             continue
         identity = revision["summary"] or revision["details"]
         with st.expander(f"Revision {revision['id']}: {identity}"):
             st.caption(revision["details"])
-            acknowledged = st.checkbox("I understand this is refused if later work conflicts", key=f"editor_revert_confirm_{revision['id']}")
-            if st.button("Revert safely", key=f"editor_revert_{revision['id']}", disabled=not acknowledged):
+            if revision.get("result_snapshot_hash") is None:
+                if revision["origin"] not in {"manual_edit", "revision_revert"}:
+                    continue
+                acknowledged = st.checkbox("I understand this is refused if later work conflicts", key=f"editor_revert_confirm_{revision['id']}")
+                if st.button("Revert safely", key=f"editor_revert_{revision['id']}", disabled=not acknowledged):
+                    try:
+                        new_id = content_editing.revert_revision(revision["id"])
+                    except content_editing.ContentEditError as error:
+                        st.error(f"Not reverted: {error}")
+                    else:
+                        _clear_loaded_entities()
+                        st.session_state["_editor_message"] = f"Revision {revision['id']} safely reverted as revision {new_id}."
+                        st.rerun()
+                continue
+
+            inverse_generation = st.session_state.get("_editor_inverse_generation", 0)
+            prepare_key = f"editor_inverse_prepare_{revision['id']}_{inverse_generation}"
+            if st.button("Prepare inverse review", key=prepare_key):
+                _clear_confirmation_widgets("editor_inverse_review_")
+                for key in ("_editor_inverse_review", "_editor_inverse_revision", "_editor_inverse_error",
+                            "_editor_inverse_local_error"):
+                    st.session_state.pop(key, None)
+                st.session_state["_editor_inverse_generation"] = inverse_generation + 1
                 try:
-                    new_id = content_editing.revert_revision(revision["id"])
-                except content_editing.ContentEditError as error:
-                    st.error(f"Not reverted: {error}")
+                    inverse = content_changes.review_inverse(revision["id"])
+                except (content_changes.ChangeError, change_packages.PackageError) as error:
+                    st.session_state["_editor_inverse_error"] = str(error)
+                    st.session_state["_editor_inverse_local_error"] = getattr(error, "local", None)
+                else:
+                    st.session_state["_editor_inverse_review"] = inverse
+                    st.session_state["_editor_inverse_revision"] = revision["id"]
+
+            if st.session_state.get("_editor_inverse_revision") != revision["id"]:
+                continue
+            inverse = st.session_state.get("_editor_inverse_review")
+            if inverse is None:
+                continue
+            review_generation = st.session_state.get("_editor_inverse_generation", 0)
+            prefix = f"editor_inverse_review_{revision['id']}_{review_generation}"
+            _show_full_review(inverse, prefix)
+            confirmed = st.checkbox(
+                "I confirm this exact inverse review",
+                key=f"{prefix}_confirm",
+            )
+            if st.button("Apply reviewed inverse", key=f"{prefix}_apply", disabled=not confirmed):
+                try:
+                    new_id = content_changes.apply_review(inverse)
+                except content_changes.StaleReviewError as error:
+                    st.session_state.pop("_editor_inverse_review", None)
+                    st.session_state.pop("_editor_inverse_revision", None)
+                    st.session_state["_editor_inverse_clear_confirmation"] = True
+                    st.session_state["_editor_error"] = f"Not reverted: {error} Prepare a new inverse review."
+                except (content_changes.ChangeError, change_packages.PackageError, content_editing.ContentEditError) as error:
+                    st.session_state["_editor_inverse_clear_confirmation"] = True
+                    st.session_state["_editor_error"] = f"Not reverted: {error}"
                 else:
                     _clear_loaded_entities()
-                    st.session_state["_editor_message"] = f"Revision {revision['id']} safely reverted as revision {new_id}."
-                    st.rerun()
+                    st.session_state.pop("_editor_inverse_review", None)
+                    st.session_state.pop("_editor_inverse_revision", None)
+                    st.session_state["_editor_message"] = (
+                        f"Revision {revision['id']} reverted as reviewed revision {new_id}."
+                    )
+                st.rerun()
+
+    inverse_error = st.session_state.pop("_editor_inverse_error", None)
+    if inverse_error:
+        st.error(inverse_error)
+        local = st.session_state.pop("_editor_inverse_local_error", None)
+        if local is not None:
+            with st.expander("Local refusal details — session only"):
+                st.error(str(local))
 
 
 if st.session_state.pop("_editor_reset_new_snippet", False):
     st.session_state["_editor_new_snippet_generation"] = (
         st.session_state.get("_editor_new_snippet_generation", 0) + 1
     )
+
+if st.session_state.pop("_editor_ai_clear_confirmation", False):
+    _clear_confirmation_widgets("editor_ai_review_")
+if st.session_state.pop("_editor_inverse_clear_confirmation", False):
+    _clear_confirmation_widgets("editor_inverse_review_")
+
+if st.session_state.pop("_editor_ai_reset_widgets", False):
+    st.session_state["_editor_ai_generation"] = st.session_state.get("_editor_ai_generation", 0) + 1
+    for key in list(st.session_state):
+        if key.startswith("editor_ai_"):
+            st.session_state.pop(key, None)
+    st.session_state.pop("_editor_ai_upload_signature", None)
+    _clear_ai_review()
 
 st.title("✏️ Editor")
 message = st.session_state.pop("_editor_message", None)
@@ -245,7 +632,7 @@ writes_enabled = _snapshot_gate()
 presets, blocks, fields, snippets = db.get_all_presets(), db.get_all_editor_blocks(), db.get_all_fields(), db.get_all_snippets()
 section = st.radio(
     "Editor section",
-    ["Presets", "Blocks", "Fields", "Snippets", "Recent revisions"],
+    ["Presets", "Blocks", "Fields", "Snippets", "AI package", "Recent revisions"],
     key="editor_section",
     horizontal=True,
     label_visibility="collapsed",
@@ -321,6 +708,9 @@ elif section == "Snippets":
                     st.session_state["_editor_message"] = f"Snippet created as content revision {result['revision_id']}."
                     st.session_state["_editor_reset_new_snippet"] = True
                     st.rerun()
+
+elif section == "AI package":
+    _ai_package_section(writes_enabled)
 
 elif section == "Recent revisions":
     if writes_enabled: _revisions()
