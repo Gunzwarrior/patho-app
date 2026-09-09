@@ -272,32 +272,92 @@ def parse_package(raw):
 
 def authoring_contract():
     """Generate the structural contract from the parser's actual allowlists."""
+    update = {table: sorted(spec[1]) for table, spec in content_editing.EDITABLE.items()}
+    identities = {
+        table: [key] for table, (key, _columns) in content_snapshot.BASE_TABLES.items()
+    }
+    identities.update({
+        table: list(key_columns)
+        for table, (_columns, key_columns) in content_snapshot.RELATION_TABLES.items()
+    })
+    writable_tables = {
+        table: ["create", "update"] for table in CREATE
+    }
+    writable_tables.update({table: ["link"] for table in LINK})
+    table_access = {
+        table: {"access": "writable", "operations": writable_tables[table]}
+        if table in writable_tables else {"access": "read_only", "operations": []}
+        for table in (*content_snapshot.BASE_TABLES, *content_snapshot.RELATION_TABLES)
+    }
     return {
         "envelope": ["format", "base_snapshot_sha256", "summary", "operations"],
-        "format": FORMAT, "create": CREATE,
-        "update": {table: sorted(spec[1]) for table, spec in content_editing.EDITABLE.items()},
-        "link": LINK, "types": list(FIELD_TYPES),
-        "limits": {"bytes": MAX_BYTES, "depth": MAX_DEPTH, "operations": MAX_OPERATIONS,
-                   "summary_characters": 500, "new_key_characters": 80, "position_max": 999,
-                   "integer_max": MAX_INTEGER},
+        "format": FORMAT,
+        "syntax": {
+            "create": {"members": ["op", "table", "key", "values"], "tables": CREATE},
+            "update": {"members": ["op", "table", "key", "set"], "tables": update},
+            "link": {"members": ["op", "table", "key", "values"], "tables": LINK},
+        },
+        "create": CREATE, "update": update, "link": LINK, "types": list(FIELD_TYPES),
+        "identity": identities,
+        "tables": table_access,
+        "limits": {
+            "raw_utf8_bytes": {"max": MAX_BYTES},
+            "json_nesting": {"max": MAX_DEPTH},
+            "operations": {"min": 1, "max": MAX_OPERATIONS},
+            "summary_characters": {"min": 1, "max": 500},
+            "new_key_characters": {"min": 1, "max": 80},
+            "sort_order": {"min": 0, "max": 999},
+            "number": {"min": 0, "max": MAX_INTEGER},
+            "decimal": {"min": 0, "finite": True},
+        },
+        "value_representation": {
+            "package": "Use native JSON: options is an array, field_overrides is an object, decimals are JSON numbers, and checkboxes are JSON booleans.",
+            "snapshot": "Snapshot rows preserve database storage: Fields.options and Preset_Blocks.field_overrides are JSON text; number, decimal, and checkbox defaults/Block overrides are text or null.",
+        },
+        "hashes": {
+            "snapshot_sha256": "SHA-256 of the canonical snapshot JSON bytes (UTF-8, sorted keys, compact separators, final newline).",
+            "base_snapshot_sha256": "Copy context.snapshot_sha256 exactly into the package; it must equal the exported snapshot hash.",
+            "package_sha256": "The server calculates this only after parsing and normalization. Do not calculate or include it.",
+        },
+        "inheritance": [
+            "Block_Fields.default_override null inherits the Field default.",
+            "Preset_Blocks.field_overrides: a missing Field key inherits the resolved Block/Field value.",
+        ],
+        "nulls": [
+            "Text and decimal defaults/overrides may be null. Number, select, and checkbox Preset overrides cannot be null.",
+            "For global number/select/checkbox defaults, null is allowed only on creation or when already null, and every new effective use must have a usable override; never clear a usable default.",
+            "Optional text accepts null; whitespace-only optional text becomes null. Required text is nonblank.",
+        ],
+        "incomplete_source": "This is an expressibility rule, separate from clinical grounding: v1 cannot write every snapshot table. Do not invent missing source rows or modify a read-only table. If the requested change requires either, explain that v1 cannot express it and do not return a package.",
         "rules": [
             "Return only changed values; updates target existing rows, links belong to new owners. No deletes.",
             "New Field keys: [A-Za-z_][A-Za-z0-9_]*; other new keys: [A-Za-z0-9_-]+; case-sensitive.",
-            "Required text is nonblank; optional text accepts null and blank becomes null. Preserve template whitespace.",
-            "Use native JSON arrays/objects for options and field_overrides, unlike snapshot JSON stored in text columns.",
             "Select options: nonempty unique nonblank strings; other types: options null.",
             "Defaults/overrides: text string/null; number nonnegative integer; decimal finite nonnegative number/null; select exact option; checkbox boolean.",
-            "Global number/select/checkbox null requires usable overrides at every new use; standalone Fields need usable defaults. Do not clear a usable default.",
-            "Block default_override null inherits. Preset field_overrides missing inherits; explicit null only for text/decimal.",
             "Template context: linked Field keys, <decimal_key>_display, fragment_text when fragments is linked, site_label when configured, literal snippet('shortcut'). Addendum: value and snippet only.",
             "Reserved Field names: snippet, value, site_label, fragment_text, Jinja literals, and decimal display aliases.",
             "Context/title template Fields must be context_section=true. Each new Preset needs a non-table Block; positions unique per owner, below 1000.",
             "New Blocks force is_table=0/site_label=null/conclusion_group=null; new Presets force default_adicap=null; omit these columns.",
         ],
-        "example": {"format": FORMAT, "base_snapshot_sha256": "0" * 64,
-                    "summary": "Add an optional specimen size field",
-                    "operations": [{"op": "create", "table": "Fields", "key": "specimen_size_mm",
-                                    "values": {"label": "Taille (mm)", "type": "decimal", "default_value": None}}]},
+        "example": {
+            "format": FORMAT, "base_snapshot_sha256": "0" * 64,
+            "summary": "Add a specimen-size preset",
+            "operations": [
+                {"op": "create", "table": "Fields", "key": "example_size_mm",
+                 "values": {"label": "Taille (mm)", "type": "decimal", "default_value": 2.5}},
+                {"op": "create", "table": "Blocks", "key": "example_size_block",
+                 "values": {"name": "Spécimen mesuré", "macro_template": "Taille : {{ example_size_mm_display }} mm.",
+                            "micro_template": "Examen microscopique.", "conclusion_template": "Conclusion."}},
+                {"op": "create", "table": "Presets", "key": "example_size_preset",
+                 "values": {"name": "Examen avec taille"}},
+                {"op": "link", "table": "Block_Fields",
+                 "key": {"block_key": "example_size_block", "field_key": "example_size_mm"},
+                 "values": {"sort_order": 0}},
+                {"op": "link", "table": "Preset_Blocks",
+                 "key": {"preset_code": "example_size_preset", "block_key": "example_size_block", "sort_order": 0},
+                 "values": {"field_overrides": {"example_size_mm": 12.5}}},
+            ],
+        },
     }
 
 
@@ -309,7 +369,7 @@ def export_ai_context(db_name=None):
         "format": "pathopilot-ai-context-v1",
         "snapshot_sha256": content_snapshot.content_snapshot_hash(snapshot),
         "instructions": {
-            "response": "Return one pathopilot-content-change-package-v1 JSON object, without markdown. Copy the base hash; return only changed/created values, never the source snapshot.",
+            "response": "Only when the request is sufficiently grounded in the user's request and exported content, return exactly one pathopilot-content-change-package-v1 JSON object without markdown. Copy the base hash; return only changed/created values, never the source snapshot. If required clinical content is missing, ask the user for it; do not invent it, use placeholders, or return an empty package. If the requested change cannot be expressed by writable v1 operations, explain that limitation and do not return a package.",
             "privacy": "Do not include patient information, case identifiers, report examples, or audit data.",
             "contract": authoring_contract(),
         }, "snapshot": snapshot,

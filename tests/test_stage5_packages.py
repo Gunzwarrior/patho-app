@@ -106,12 +106,95 @@ def test_context_privacy_allowlisted_queries_and_contract_example(mutable_db, mo
     assert set(payload) == {"format", "snapshot_sha256", "instructions", "snapshot"}
     assert payload["snapshot_sha256"] == content_snapshot.content_snapshot_hash(payload["snapshot"])
     assert exported.endswith(b"\n")
-    example = payload["instructions"]["contract"]["example"]
+    contract = payload["instructions"]["contract"]
+    response = payload["instructions"]["response"]
+    assert "Only when the request is sufficiently grounded" in response
+    assert "required clinical content is missing, ask the user for it" in response
+    assert "do not invent it, use placeholders, or return an empty package" in response
+    assert "cannot be expressed by writable v1 operations" in response
+    assert "do not return a package" in response
+    assert "separate from clinical grounding" in contract["incomplete_source"]
+    example = contract["example"]
     example["base_snapshot_sha256"] = payload["snapshot_sha256"]
     assert packages.dry_run(raw(example), mutable_db).candidate_snapshot_hash
     # Named fixture measurement is documented; this fixture's content is unchanged by Cases/audit.
-    assert len(exported) == 24263  # seed_data.seed_all content + generated v1 contract
+    assert len(exported) == 28806  # seed_data.seed_all content + generated v1 contract
     assert len(exported) == len(packages.export_ai_context(mutable_db))
+
+
+def test_generated_contract_maps_operations_tables_identities_and_limits():
+    contract = packages.authoring_contract()
+    update = {table: sorted(spec[1]) for table, spec in content_editing.EDITABLE.items()}
+    assert contract["syntax"] == {
+        "create": {"members": ["op", "table", "key", "values"], "tables": packages.CREATE},
+        "update": {"members": ["op", "table", "key", "set"], "tables": update},
+        "link": {"members": ["op", "table", "key", "values"], "tables": packages.LINK},
+    }
+    assert contract["create"] == packages.CREATE
+    assert contract["update"] == update
+    assert contract["link"] == packages.LINK
+    assert contract["limits"] == {
+        "raw_utf8_bytes": {"max": packages.MAX_BYTES},
+        "json_nesting": {"max": packages.MAX_DEPTH},
+        "operations": {"min": 1, "max": packages.MAX_OPERATIONS},
+        "summary_characters": {"min": 1, "max": 500},
+        "new_key_characters": {"min": 1, "max": 80},
+        "sort_order": {"min": 0, "max": 999},
+        "number": {"min": 0, "max": packages.MAX_INTEGER},
+        "decimal": {"min": 0, "finite": True},
+    }
+    assert all(contract["identity"][table] == [key]
+               for table, (key, _columns) in content_snapshot.BASE_TABLES.items())
+    assert contract["identity"] == {
+        **{table: [key] for table, (key, _columns) in content_snapshot.BASE_TABLES.items()},
+        **{table: list(key_columns) for table, (_columns, key_columns)
+           in content_snapshot.RELATION_TABLES.items()},
+    }
+    assert set(contract["tables"]) == set(content_snapshot.BASE_TABLES) | set(content_snapshot.RELATION_TABLES)
+    assert {table for table, metadata in contract["tables"].items()
+            if metadata["access"] == "writable"} == set(packages.CREATE) | set(packages.LINK)
+    assert {table for table, metadata in contract["tables"].items()
+            if metadata["access"] == "read_only"} == set(content_snapshot.RELATION_TABLES) - set(packages.LINK)
+    assert all(metadata["access"] in {"writable", "read_only"}
+               for metadata in contract["tables"].values())
+
+
+def test_complete_contract_example_uses_both_links_and_native_decimal_values(mutable_db):
+    context = json.loads(packages.export_ai_context(mutable_db))
+    example = copy.deepcopy(context["instructions"]["contract"]["example"])
+    example["base_snapshot_sha256"] = context["snapshot_sha256"]
+    assert len(example["operations"]) == 5
+    assert {operation["table"] for operation in example["operations"] if operation["op"] == "link"} == {
+        "Block_Fields", "Preset_Blocks"
+    }
+    field = next(operation for operation in example["operations"] if operation["table"] == "Fields")
+    preset_link = next(operation for operation in example["operations"] if operation["table"] == "Preset_Blocks")
+    assert type(field["values"]["default_value"]) is float
+    assert type(preset_link["values"]["field_overrides"]["example_size_mm"]) is float
+    assert packages.dry_run(raw(example), mutable_db).candidate_snapshot_hash
+
+
+def test_former_single_create_example_still_parses_and_dry_runs(mutable_db):
+    package = {
+        "format": packages.FORMAT,
+        "base_snapshot_sha256": content_snapshot.content_snapshot_hash(
+            content_snapshot.export_content_snapshot(mutable_db)
+        ),
+        "summary": "Add an optional specimen size field",
+        "operations": [{"op": "create", "table": "Fields", "key": "specimen_size_mm",
+                        "values": {"label": "Taille (mm)", "type": "decimal", "default_value": None}}],
+    }
+    assert packages.parse_package(raw(package))["operations"]
+    assert packages.dry_run(raw(package), mutable_db).candidate_snapshot_hash
+
+
+def test_snapshot_hash_is_unchanged_when_only_instructions_change(mutable_db, monkeypatch):
+    original = json.loads(packages.export_ai_context(mutable_db))
+    monkeypatch.setattr(packages, "authoring_contract", lambda: {"changed": "instructions only"})
+    revised = json.loads(packages.export_ai_context(mutable_db))
+    assert original["snapshot"] == revised["snapshot"]
+    assert original["snapshot_sha256"] == revised["snapshot_sha256"]
+    assert original["snapshot_sha256"] == content_snapshot.content_snapshot_hash(original["snapshot"])
 
 
 def test_graph_shuffle_complete_reports_and_no_source_writes(mutable_db, monkeypatch):
