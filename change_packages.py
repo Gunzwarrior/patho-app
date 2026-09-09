@@ -40,6 +40,9 @@ CORRECTIONS = {
     "candidate": "Correct the candidate templates and defaults.",
     "pending": "Review the local pending-case errors.",
     "stale": "Export fresh context and prepare a package against its hash.",
+    "operation_shape": "Use the documented operation shape for this operation and table.",
+    "link_key": "Use the documented composite key for this relationship table.",
+    "required_member": "Supply the documented required member for this operation and table.",
 }
 
 
@@ -155,6 +158,37 @@ def _values(table, values, path, creating):
     return result
 
 
+def _required_member(values, required, optional, path):
+    """Name a missing known member without reflecting an uploaded value or key."""
+    if not isinstance(values, dict) or set(values) - set(required) - set(optional):
+        return
+    for member in required:
+        if member not in values:
+            _fail("required_member", path + "." + member)
+
+
+def _operation_shape(operation, path):
+    """Recognize only enough trusted structure for fixed structural feedback."""
+    if not isinstance(operation, dict):
+        _fail(path=path)
+    op, table = operation.get("op"), operation.get("table")
+    if (not isinstance(op, str) or op not in ("create", "update", "link")
+            or not isinstance(table, str) or table not in set(CREATE) | set(LINK)):
+        _fail(path=path)
+    if ((op == "link" and table not in LINK)
+            or (op != "link" and table not in CREATE)):
+        _fail("operation_shape", path)
+    member = "set" if op == "update" else "values"
+    other_member = "values" if member == "set" else "set"
+    if member not in operation or other_member in operation or not isinstance(operation[member], dict):
+        _fail("operation_shape", path)
+    if not {"op", "table", "key", member} <= set(operation):
+        _fail(path=path)
+    if set(operation) - {"op", "table", "key", member}:
+        _fail(path=path)
+    return op, table, member
+
+
 def normalize_operations(operations):
     """Source-independent v1 operation syntax; final-graph checks happen on a copy."""
     if not isinstance(operations, list) or not 1 <= len(operations) <= MAX_OPERATIONS:
@@ -163,16 +197,11 @@ def normalize_operations(operations):
     for index, operation in enumerate(operations):
         path = f"operations[{index}]"
         try:
-            _object(operation, ("op", "table", "key"), ("values", "set"), path)
-            op, table = operation["op"], operation["table"]
-            if not isinstance(table, str) or op not in ("create", "update", "link"):
-                _fail(path=path)
-            member = "set" if op == "update" else "values"
-            _object(operation, ("op", "table", "key", member), path=path)
+            op, table, member = _operation_shape(operation, path)
             if op == "link":
-                if table not in LINK:
-                    _fail(path=path)
                 spec = LINK[table]
+                if not isinstance(operation["key"], dict):
+                    _fail("link_key", path + ".key")
                 _object(operation["key"], spec["key"], path=path + ".key")
                 key = dict(operation["key"])
                 for k, v in key.items():
@@ -180,6 +209,7 @@ def normalize_operations(operations):
                         _position(v, path + ".key.sort_order")
                     else:
                         _key(v, table, False, path + ".key")
+                _required_member(operation[member], spec["required"], spec["defaults"], path + ".values")
                 _object(operation[member], spec["required"], spec["defaults"], path)
                 values = {**spec["defaults"], **_values(table, operation[member], path, False)}
                 if table == "Block_Fields":
@@ -189,11 +219,10 @@ def normalize_operations(operations):
                 elif not isinstance(values["field_overrides"], dict):
                     _fail("value", path + ".values.field_overrides")
             else:
-                if table not in CREATE:
-                    _fail(path=path)
                 key = _key(operation["key"], table, op == "create", path + ".key")
                 if op == "create":
                     spec = CREATE[table]
+                    _required_member(operation[member], spec["required"], spec["defaults"], path + ".values")
                     _object(operation[member], spec["required"], spec["defaults"], path)
                     values = _values(table, {**spec["defaults"], **operation[member]}, path + ".values", True)
                 else:

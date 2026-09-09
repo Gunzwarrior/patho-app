@@ -169,6 +169,28 @@ def test_failed_new_dry_run_clears_success_and_feedback_is_fixed(mutable_db):
     assert any(item.value == "Copyable AI feedback" for item in app.subheader)
 
 
+def test_actionable_feedback_codes_are_copyable_and_patient_safe(mutable_db):
+    app = _open_ai()
+    cases = [
+        ("operation_shape", {"op": "create", "table": "Block_Fields",
+         "key": {"block_key": "PATIENT-CANARY", "field_key": "synthetic_field"},
+         "values": {"sort_order": 0}}),
+        ("link_key", {"op": "link", "table": "Block_Fields",
+         "key": ["PATIENT-CANARY", "synthetic_field"], "values": {"sort_order": 0}}),
+        ("required_member", {"op": "create", "table": "Blocks", "key": "synthetic_block",
+         "values": {"name": "Synthetic", "micro_template": "Micro", "conclusion_template": "Conclusion"}}),
+    ]
+    for index, (expected_code, operation) in enumerate(cases):
+        payload = envelope(mutable_db, [operation])
+        payload["summary"] = "PATIENT-CANARY uploaded summary"
+        upload = _file(payload, file_id=str(index), name=f"{index}.json")
+        _click_with_file(app, "editor_ai_dry_run_0", upload)
+        feedback = next(json.loads(item.value) for item in app.code if item.language == "json")
+        assert feedback["errors"][0]["code"] == expected_code
+        assert "PATIENT-CANARY" not in json.dumps(feedback)
+        assert any(item.value == "Copyable AI feedback" for item in app.subheader)
+
+
 def test_readable_complete_review_and_recovery_gate(mutable_db):
     package = _file(envelope(mutable_db, graph()))
     app = _review(_open_ai(package), package)

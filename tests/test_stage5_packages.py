@@ -262,6 +262,66 @@ def test_exact_contract_rejections(db, mutate):
         packages.parse_package(raw(payload))
 
 
+@pytest.mark.parametrize("operation", [
+    {"op": "create", "table": "Block_Fields",
+     "key": {"block_key": "synthetic_block", "field_key": "synthetic_field"},
+     "values": {"sort_order": 0}},
+    {"op": "link", "table": "Fields", "key": "synthetic_field",
+     "values": {"label": "Valeur", "type": "text", "default_value": ""}},
+    {"op": "create", "table": "Snippets", "key": "synthetic_phrase",
+     "set": {"expansion": "Phrase."}},
+    {"op": "update", "table": "Snippets", "key": "synthetic_phrase",
+     "values": {"expansion": "Phrase."}},
+    {"op": "link", "table": "Block_Fields",
+     "key": {"block_key": "synthetic_block", "field_key": "synthetic_field"},
+     "set": {"sort_order": 0}},
+], ids=["create-relationship", "link-base", "create-set", "update-values", "link-set"])
+def test_recognized_operation_shape_has_fixed_diagnostic(db, operation):
+    with pytest.raises(packages.PackageError) as error:
+        packages.parse_package(raw(envelope(db, [operation])))
+    assert error.value.ai_feedback()["errors"] == [{
+        "code": "operation_shape", "path": "operations[0]",
+        "correction": packages.CORRECTIONS["operation_shape"],
+    }]
+
+
+@pytest.mark.parametrize("key", ["synthetic_block", ["synthetic_block", "synthetic_field"]],
+                         ids=["scalar", "array"])
+def test_recognized_link_with_nonobject_composite_key_has_fixed_diagnostic(db, key):
+    operation = {"op": "link", "table": "Block_Fields", "key": key,
+                 "values": {"sort_order": 0}}
+    with pytest.raises(packages.PackageError) as error:
+        packages.parse_package(raw(envelope(db, [operation])))
+    assert error.value.ai_feedback()["errors"] == [{
+        "code": "link_key", "path": "operations[0].key",
+        "correction": packages.CORRECTIONS["link_key"],
+    }]
+
+
+def test_recognized_create_missing_required_member_has_fixed_path(db):
+    operation = {"op": "create", "table": "Blocks", "key": "synthetic_block", "values": {
+        "name": "Synthetic", "micro_template": "Micro", "conclusion_template": "Conclusion",
+    }}
+    with pytest.raises(packages.PackageError) as error:
+        packages.parse_package(raw(envelope(db, [operation])))
+    assert error.value.ai_feedback()["errors"] == [{
+        "code": "required_member", "path": "operations[0].values.macro_template",
+        "correction": packages.CORRECTIONS["required_member"],
+    }]
+
+
+@pytest.mark.parametrize("operation", [
+    {"op": "create", "table": "UNTRUSTED-TABLE", "key": "x", "values": {}},
+    {"op": "create", "table": "Fields", "key": "x", "values": {
+        "label": "Value", "type": "text", "default_value": "", "UNTRUSTED-MEMBER": "x",
+    }},
+])
+def test_unknown_input_keeps_generic_safe_correction(db, operation):
+    with pytest.raises(packages.PackageError) as error:
+        packages.parse_package(raw(envelope(db, [operation])))
+    assert error.value.ai_feedback()["errors"][0]["code"] == "contract"
+
+
 @pytest.mark.parametrize("kind,value,options", [
     ("number", True, None), ("number", 1.0, None), ("number", "1", None),
     ("number", -1, None), ("number", 2**53, None), ("decimal", "1.2", None),
