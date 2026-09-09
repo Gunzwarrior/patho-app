@@ -360,13 +360,16 @@ def authoring_contract():
         "incomplete_source": "This is an expressibility rule, separate from clinical grounding: v1 cannot write every snapshot table. Do not invent missing source rows or modify a read-only table. If the requested change requires either, explain that v1 cannot express it and do not return a package.",
         "rules": [
             "Return only changed values; updates target existing rows, links belong to new owners. No deletes.",
+            "Use exactly one operation for each logical base target or relationship link. Put all intended changes for that target in its single operation; do not split updates, create then update, or duplicate a link.",
             "New Field keys: [A-Za-z_][A-Za-z0-9_]*; other new keys: [A-Za-z0-9_-]+; case-sensitive.",
             "Select options: nonempty unique nonblank strings; other types: options null.",
             "Defaults/overrides: text string/null; number nonnegative integer; decimal finite nonnegative number/null; select exact option; checkbox boolean.",
+            "Each new Block must be usable standalone with resolved Field defaults and Block-level overrides where required; do not rely on Preset_Blocks.field_overrides to make a new Block usable.",
             "Template context: linked Field keys, <decimal_key>_display, fragment_text when fragments is linked, site_label when configured, literal snippet('shortcut'). Addendum: value and snippet only.",
             "Reserved Field names: snippet, value, site_label, fragment_text, Jinja literals, and decimal display aliases.",
             "Context/title template Fields must be context_section=true. Each new Preset needs a non-table Block; positions unique per owner, below 1000.",
             "New Blocks force is_table=0/site_label=null/conclusion_group=null; new Presets force default_adicap=null; omit these columns.",
+            "Existing Blocks with is_table=1 are read-only: do not update them or link them into a newly created Preset.",
         ],
         "example": {
             "format": FORMAT, "base_snapshot_sha256": "0" * 64,

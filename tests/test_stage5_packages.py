@@ -118,7 +118,7 @@ def test_context_privacy_allowlisted_queries_and_contract_example(mutable_db, mo
     example["base_snapshot_sha256"] = payload["snapshot_sha256"]
     assert packages.dry_run(raw(example), mutable_db).candidate_snapshot_hash
     # Named fixture measurement is documented; this fixture's content is unchanged by Cases/audit.
-    assert len(exported) == 28806  # seed_data.seed_all content + generated v1 contract
+    assert len(exported) == 29311  # seed_data.seed_all content + generated v1 contract
     assert len(exported) == len(packages.export_ai_context(mutable_db))
 
 
@@ -157,6 +157,17 @@ def test_generated_contract_maps_operations_tables_identities_and_limits():
             if metadata["access"] == "read_only"} == set(content_snapshot.RELATION_TABLES) - set(packages.LINK)
     assert all(metadata["access"] in {"writable", "read_only"}
                for metadata in contract["tables"].values())
+
+
+def test_exported_contract_documents_existing_target_and_default_constraints(mutable_db):
+    contract = json.loads(packages.export_ai_context(mutable_db))["instructions"]["contract"]
+    rules = "\n".join(contract["rules"])
+    assert "exactly one operation for each logical base target or relationship link" in rules
+    assert "create then update" in rules
+    assert "standalone with resolved Field defaults and Block-level overrides" in rules
+    assert "do not rely on Preset_Blocks.field_overrides" in rules
+    assert "Existing Blocks with is_table=1 are read-only" in rules
+    assert "do not update them or link them into a newly created Preset" in rules
 
 
 def test_complete_contract_example_uses_both_links_and_native_decimal_values(mutable_db):
@@ -709,6 +720,30 @@ def test_create_update_collision_and_table_block_refusal(mutable_db):
             {"op": "link", "table": "Preset_Blocks",
              "key": {"preset_code": "table_reuse", "block_key": "appendice", "sort_order": 0}, "values": {}},
         ])
+
+
+@pytest.mark.parametrize("operations", [
+    [
+        {"op": "update", "table": "Snippets", "key": "absence_malignite", "set": {"expansion": "One."}},
+        {"op": "update", "table": "Snippets", "key": "absence_malignite", "set": {"expansion": "Two."}},
+    ],
+    [
+        {"op": "create", "table": "Snippets", "key": "single_target", "values": {"expansion": "One."}},
+        {"op": "update", "table": "Snippets", "key": "single_target", "set": {"expansion": "Two."}},
+    ],
+    [
+        {"op": "link", "table": "Block_Fields",
+         "key": {"block_key": "synthetic_block", "field_key": "synthetic_field"},
+         "values": {"sort_order": 0}},
+        {"op": "link", "table": "Block_Fields",
+         "key": {"block_key": "synthetic_block", "field_key": "synthetic_field"},
+         "values": {"sort_order": 0}},
+    ],
+], ids=["split-update", "create-then-update", "duplicate-link"])
+def test_one_operation_per_logical_target_is_parser_enforced(db, operations):
+    with pytest.raises(packages.PackageError) as error:
+        packages.parse_package(raw(envelope(db, operations)))
+    assert error.value.ai_feedback()["errors"][0]["code"] == "target"
 
 
 def test_all_existing_override_configuration_is_checked(mutable_db):
