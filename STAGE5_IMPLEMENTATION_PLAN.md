@@ -4,8 +4,39 @@
 Authority: the approved
 `EDITOR_UI_PROPOSAL.md` §§3, 4, 9–10 and `PROGRESS.md` in commit `5dd1f44`.
 Repository reviewed: `7178f71`. This document replaces the previous proposed
-plan. It specifies Stage 5 work for later implementation review; it does not
-authorise implementation or a commit.
+plan. Its implemented outcome is recorded below; it does not authorise Stage 6
+or Stage 7 work.
+
+## Completion record — 2026-09-10
+
+All three Stage 5 checkpoints are complete: no-write contract/review
+(`220cd2e`), atomic Apply/reviewed inverse (`5868ad9`), and Editor integration
+with restricted presentation (`5522a7b`). The final checkpoint 1
+authoring-contract refinement is `de8ccce`, checkpoint 2 safe actionable
+diagnostics are `3b93dea`, and the independent Sol review's blocking remediation
+is `717fda6` (`Clarify v1 package authoring rules`). No previously deferred
+non-blocking suggestions were added.
+
+Checkpoint 3 browser/manual review passed on 2026-09-08. Final isolated
+regression verification on 2026-09-10 passed all 370 collected tests (run in
+bounded terminal shards), including 243 focused Stage 5
+package/transaction/Editor/Workspace tests; relevant Python files compiled,
+`git diff --check` passed, and an isolated temporary-database boot returned
+HTTP 200 for all five routes. The operational database was not opened through
+SQLite and its raw SHA-256 was unchanged before and after. No goldens, accepted
+operational-review artifacts, or seed content were changed.
+
+Independent real-model acceptance used the same fresh
+`pathopilot-ai-context-v1` export with no reference answer or repository access.
+Sonnet 5, ChatGPT High, and Gemini each produced a valid first package for the
+fully specified request; each passed PathoPilot dry run, despite slightly
+different JSON sizes (about 1.0–1.4 kB), with the same intended
+normalized/rendered result. All three declined the intentionally incomplete
+Block request and requested missing clinical content without inventing wording,
+placeholders, or an empty package. In the malformed-link feedback loop,
+PathoPilot returned safe actionable `link_key` feedback and Sonnet 5 returned a
+corrected replacement that passed dry run on its first attempt. These results
+verify package authoring behavior, not clinical correctness.
 
 ## 1. Review findings and scope decisions
 

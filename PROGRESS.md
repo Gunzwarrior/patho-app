@@ -7,9 +7,11 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 5 checkpoints 1–2 are committed, and checkpoint 3 is complete,
-fully tested, and browser-approved for this commit. Checkpoint 1 is `220cd2e`;
-checkpoint 2 is `5868ad9`.** Thomas authorized the checkpoint 1 commit and continuation with
+**Stage 5 is complete: checkpoint 1 is `220cd2e`, checkpoint 2 is
+`5868ad9`, and checkpoint 3 is `5522a7b`.** The final checkpoint 1
+authoring-contract refinement and checkpoint 2 safe diagnostics are committed
+as `de8ccce` and `3b93dea`; the independently reviewed blocking remediation is
+`717fda6`. Thomas authorized the checkpoint 1 commit and continuation with
 checkpoint 2. Thomas browser-checked Appendix/Gallbladder, thyroid decimals,
 duplication/grouping, manual lock, Editor previews and frozen validated reports.
 Thomas also browser-confirmed the wildcard fix: correct duplicate targeting,
@@ -17,7 +19,8 @@ save/reopen persistence and removal. He reported the first composition action
 after reopen closing the section. Thomas has now confirmed that the section
 fix and the authorized live thyroid correction also work in his browser.
 Thomas completed the checkpoint 3 browser review on 2026-09-08 and approved
-the functionality and commit. Stages 6–7 remain. Authority remains
+the functionality and commit. External real-model acceptance completed on
+2026-09-10. Stages 6–7 remain. Authority remains
 the roadmap in `5dd1f44` and the reviewed
 `STAGE5_IMPLEMENTATION_PLAN.md`.
 Thomas confirmed that PathoPilot must remain fully usable without a paid AI plan. Stage 5 is now an optional, token-economical AI context/change-
@@ -181,8 +184,35 @@ The operational `pathology.db` was not opened; its file SHA-256 remained
 across final verification. No golden fixture, accepted operational-review
 artifact, or seed content was changed.
 
-**Next boundary:** checkpoint 3 is approved for commit. Do not begin Stage 6 or
-Stage 7 without the next bounded authorization.
+**Final regression and real-model acceptance — 2026-09-10.** The current
+isolated test selection passed all **370 collected tests** (run in bounded
+terminal shards); its focused Stage 5 package/transaction/Editor/Workspace
+selection passed **243 tests**. Relevant Python files compiled and `git diff
+--check` passed. A temporary seeded database boot returned HTTP 200 for `/`,
+`/workspace`, `/worklist`, `/editor`, and `/manager`; it was removed after the
+check. The operational database was not opened through SQLite and its raw
+SHA-256 was unchanged before and after:
+`5fa1abcc1a69d623108291e9e5839b85767a9ca99f89d4b2a2e316584d89477e`.
+No golden fixtures, accepted operational-review artifacts, or seed content
+were changed.
+
+For independent real-model acceptance, the same fresh
+`pathopilot-ai-context-v1` export and fully specified request were given
+independently to Sonnet 5, ChatGPT High, and Gemini, without a reference answer
+or repository access. Each returned a valid first package that passed dry run.
+Their JSON differed slightly in bytes (about 1.0–1.4 kB) but produced the same
+intended normalized/rendered result in PathoPilot. For the intentionally
+incomplete Block request, all three declined to return a package and asked for
+missing clinical information; none invented wording, used placeholders, or
+returned an empty package. In the corrective-feedback loop, PathoPilot safely
+rejected a deliberately malformed relationship key with `link_key` feedback;
+Sonnet 5 received the original package, context export, and copied feedback,
+then returned a corrected replacement that passed dry run on its first attempt.
+
+**Next boundary:** Stage 5 is complete. Do not begin Stage 6 or Stage 7 without
+the next bounded authorization. The deferred Stage 5 items remain deferred;
+this acceptance did not add a v2 format, alter parser/validator semantics, or
+change clinical content.
 
 **Editor UI Stages 1–3 are complete at baseline commit `c19fe85`**
 (`Complete safe direct editing`). Stage 3 was browser-reviewed; its isolated

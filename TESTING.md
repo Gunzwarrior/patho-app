@@ -350,7 +350,7 @@ checkpoint 3. Browser appearance still requires Thomas's review.
 
 ## Stage 5 checkpoint 3 — Editor integration and restricted presentation
 
-`tests/test_stage5_ui.py` adds 13 checkpoint-specific tests. Together with the
+`tests/test_stage5_ui.py` contains 14 checkpoint-specific tests. Together with the
 existing Editor and Workspace AppTests, the focused checkpoint run passed
 **56 tests in 34.68 s**. Coverage includes the persistent AI-package section and
 measured private export wording; explicit upload/dry-run/review/confirm/Apply;
@@ -386,6 +386,40 @@ AppTest establishes server/session behavior and emitted restricted HTML, not
 real-browser layout, file-download behavior, or frontend remount behavior.
 Thomas completed the checkpoint 3 browser review on 2026-09-08; it passed, and
 he approved the functionality and this commit.
+
+### Final contract hardening, regression, and real-model acceptance
+
+The final checkpoint 1 authoring-contract refinement is committed as `de8ccce`;
+checkpoint 2 safe, copyable diagnostics are committed as `3b93dea`. An
+independent Sol review identified a blocking authoring-rule clarification,
+remediated and committed as `717fda6` (`Clarify v1 package authoring rules`).
+No deferred non-blocking review suggestions were implemented.
+
+On 2026-09-10, the current isolated test selection passed all **370 collected
+tests**, run in bounded terminal shards; the focused Stage 5
+package/transaction/Editor/Workspace selection passed **243 tests**. Relevant
+Python files compiled and `git diff --check` passed. An isolated temporary
+seeded database returned HTTP 200 for `/`, `/workspace`, `/worklist`,
+`/editor`, and `/manager`, then the server and database were removed. The
+operational database was not opened through SQLite; its raw file SHA-256 was
+unchanged before and after at
+`5fa1abcc1a69d623108291e9e5839b85767a9ca99f89d4b2a2e316584d89477e`.
+Golden fixtures, accepted operational-review artifacts, and seed content were
+not changed.
+
+Independent external-model acceptance used the same fresh
+`pathopilot-ai-context-v1` export and no reference answer or repository access.
+For a fully specified request, Sonnet 5, ChatGPT High, and Gemini each returned
+a valid package on its first response, and each package passed PathoPilot dry
+run. The files were not byte-identical and measured approximately 1.0–1.4 kB,
+but all produced the same intended normalized/rendered result. For an
+intentionally incomplete Block request, all three declined to generate a
+package and explained missing clinical information to varying degrees; none
+invented clinical wording, emitted placeholders, or returned an empty package.
+For the corrective-feedback loop, PathoPilot rejected a deliberately malformed
+relationship key with safe actionable `link_key` feedback. Given the original
+package, export, and copied feedback, Sonnet 5 produced a corrected replacement
+on its first attempt; it passed dry run.
 
 The independent checkpoint 1–2 review added four regressions. They cover Jinja
 literal-concatenation Snippet calls across pending fingerprints, impact and
