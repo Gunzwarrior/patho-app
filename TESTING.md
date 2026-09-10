@@ -46,7 +46,8 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-351 tests currently exist; the last full isolated run passed in 233.02 seconds.
+370 tests currently exist; the Stage 5 completion run passed in bounded
+terminal shards as documented below.
 
 ## Structure
 

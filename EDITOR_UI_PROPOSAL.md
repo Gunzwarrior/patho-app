@@ -1,12 +1,12 @@
 # EDITOR_UI_PROPOSAL.md — Tier 3 Editor UI: post-review design
 
-Status: **Stages 1–4 complete. Their safety design remains frozen; Thomas
-approved a revised product roadmap for Stages 5–7 before Stage 5 began.**
+Status: **Stages 1–5 complete. Their safety design remains frozen; Stage 6 is
+the next planned stage in Thomas's approved product roadmap.**
 
-This is the approved design baseline and forward roadmap. Stages 1–4 record
-the implemented safety foundation. Stages 5–7 record the product outcomes
-Thomas wants next; each still needs a bounded implementation proposal and
-review before code is written.
+This is the approved design baseline and forward roadmap. Stages 1–5 record
+the implemented safety foundation and optional reviewed AI workflow. Stages
+6–7 record the remaining product outcomes. Stage 6 now has an approved bounded
+implementation plan; Stage 7 still needs one before code is written.
 
 Sol’s review identified real blockers in the previous write-capable stages.
 This revision accepts those findings where they are concrete, records
@@ -501,7 +501,7 @@ disabled until all Stage 2 safety requirements are implemented and verified.
    pytest fixtures. Comparison reports added/removed/changed/unchanged
    Presets; acceptance is an explicit atomic command bound to the reviewed
    candidate artifact SHA-256. It never opens `pathology.db`.
-5. **Optional reviewed AI change-package import.** Add a compact **Download
+5. **COMPLETE — Optional reviewed AI change-package import.** Add a compact **Download
    context for AI** artifact containing the canonical content/configuration
    snapshot, its hash, and the exact authoring contract, but no Case or patient
    data. Thomas may continue to provide example reports and discuss what is

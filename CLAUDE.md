@@ -210,10 +210,10 @@ reconsider, not just re-explain.
   consequence of an earlier click (via Streamlit's rerun cycle) doesn't
   reliably qualify. The only workaround is a fragile hidden-button JS
   trick — explicitly rejected in favor of two adjacent buttons.
-- **The Editor UI (Tier 3)**: deliberately not started — Tier 2's case-type
-  templates are still actively being corrected against real-world usage
-  (see PROGRESS.md), and building Editor UI against templates that keep
-  changing would mean redoing Editor work too. Wait until Tier 2 settles.
+- **The Editor UI (Tier 3)**: Stages 1–5 are complete; Stage 6 is the next
+  planned stage. Tier 2's content was deliberately allowed to settle before
+  Editor work began; see PROGRESS.md and EDITOR_UI_PROPOSAL.md for current
+  status and scope.
   **A persistent automated test suite is a decided prerequisite/companion —
   see TESTING.md** for the full plan, philosophy, and checkpoint-by-
   checkpoint status (all current checkpoints complete). Every round's

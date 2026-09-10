@@ -370,9 +370,9 @@ not any later local work.
 ## Editor UI implementation boundary
 
 `EDITOR_UI_PROPOSAL.md` preserves the frozen implemented safety baseline and
-now records the revised product roadmap. Stages 1–4 and Stage 5 checkpoints 1–2
-are committed; checkpoint 3 is tested and browser-approved for this commit.
-Stages 6–7 are unimplemented. Do not begin a future stage until its bounded implementation
+now records the revised product roadmap. Stages 1–5 are committed; Stage 5
+checkpoint 3 is tested and browser-approved. Stages 6–7 are unimplemented. Do
+not begin a future stage until its bounded implementation
 proposal has been reviewed against the approved outcomes.
 
 Quick Type expansion is no longer an incidental non-blocker: it is the focus

@@ -1,6 +1,6 @@
 # Stage 5 implementation plan — optional reviewed change packages
 
-**Reviewed plan; checkpoint 1 committed as `220cd2e`; checkpoint 2 complete and committed.**
+**Completed plan; all three checkpoints are implemented, tested, reviewed, and committed.**
 Authority: the approved
 `EDITOR_UI_PROPOSAL.md` §§3, 4, 9–10 and `PROGRESS.md` in commit `5dd1f44`.
 Repository reviewed: `7178f71`. This document replaces the previous proposed
