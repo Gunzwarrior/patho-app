@@ -207,18 +207,71 @@ def migrate_schema(db_name=None):
             conn.execute(
                 """UPDATE Case_Validation_History
                    SET preset_short_code_snapshot = (
-                           SELECT c.preset_short_code_snapshot FROM Cases c
-                           WHERE c.id = Case_Validation_History.case_id
+                           SELECT p.short_code FROM Presets p
+                           WHERE p.id = Case_Validation_History.preset_id
                        ),
                        preset_name_snapshot = (
-                           SELECT c.preset_name_snapshot FROM Cases c
-                           WHERE c.id = Case_Validation_History.case_id
+                           SELECT p.name FROM Presets p
+                           WHERE p.id = Case_Validation_History.preset_id
                        )
-                   WHERE preset_short_code_snapshot IS NULL
-                      OR preset_name_snapshot IS NULL"""
+                   WHERE preset_id IS NOT NULL
+                     AND EXISTS (
+                         SELECT 1 FROM Presets p
+                         WHERE p.id = Case_Validation_History.preset_id
+                     )
+                     AND (preset_short_code_snapshot IS NULL
+                          OR preset_name_snapshot IS NULL)"""
             )
             conn.execute(
                 "INSERT INTO Schema_Migrations (name) VALUES (?)", (stage6_marker,)
+            )
+
+        # The original checkpoint-1 migration incorrectly obtained history
+        # identities from each Case's then-current Preset.  Its effect is
+        # provable only for a pre-marker history row whose non-null historical
+        # Preset differs from its Case's current Preset while both frozen
+        # fields exactly match the Case's.  Do not infer corruption from a
+        # Preset's current metadata: a later rename is legitimate history.
+        # Null or unavailable history references are similarly ambiguous and
+        # must retain their existing frozen values.
+        stage6_history_repair_marker = "stage6_validation_history_preset_identity_repair_v1"
+        if not conn.execute(
+            "SELECT 1 FROM Schema_Migrations WHERE name = ?", (stage6_history_repair_marker,)
+        ).fetchone():
+            conn.execute(
+                """UPDATE Case_Validation_History
+                   SET preset_short_code_snapshot = (
+                           SELECT p.short_code FROM Presets p
+                           WHERE p.id = Case_Validation_History.preset_id
+                       ),
+                       preset_name_snapshot = (
+                           SELECT p.name FROM Presets p
+                           WHERE p.id = Case_Validation_History.preset_id
+                       )
+                   WHERE EXISTS (
+                           SELECT 1 FROM Presets p
+                           WHERE p.id = Case_Validation_History.preset_id
+                       )
+                     AND preset_short_code_snapshot IS NOT NULL
+                     AND preset_name_snapshot IS NOT NULL
+                     AND validated_at < (
+                         SELECT applied_at FROM Schema_Migrations
+                         WHERE name = ?
+                     )
+                     AND EXISTS (
+                         SELECT 1 FROM Cases c
+                         WHERE c.id = Case_Validation_History.case_id
+                           AND c.preset_id IS NOT NULL
+                           AND c.preset_id <> Case_Validation_History.preset_id
+                           AND Case_Validation_History.preset_short_code_snapshot
+                               IS c.preset_short_code_snapshot
+                           AND Case_Validation_History.preset_name_snapshot
+                               IS c.preset_name_snapshot
+                     )""",
+                (stage6_marker,),
+            )
+            conn.execute(
+                "INSERT INTO Schema_Migrations (name) VALUES (?)", (stage6_history_repair_marker,)
             )
         conn.commit()
     finally:

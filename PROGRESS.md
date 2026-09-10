@@ -7,8 +7,12 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 6 checkpoint 1 — implementation complete, awaiting approval to
-commit.** The working tree has the approved additive persistence and
+**Stage 6 checkpoint 1 — complete and ready to serve as the foundation for
+checkpoint 2.** The foundation was implemented in `9445e8b`, manually
+browser-checked, and independently reviewed by Sol High. That review found
+the validation-history Preset-identity migration defect; its conservative,
+separate idempotent repair migration was independently reviewed and verified.
+The working tree has the approved additive persistence and
 compatibility foundation only: `is_archived` on base content, independent
 `Preset_Blocks.display_order`, frozen Preset code/name columns on Cases and
 validation history, and the empty Case-content-reference audit table. The
@@ -19,6 +23,17 @@ read-only to v2, and operational-review artifacts hash that normalised v2
 source. The AI v1 package format itself remains unchanged; its contract marks
 archived base rows read-only and it rejects archived update/link targets.
 
+The bounded remediation corrects fresh validation-history backfill to resolve
+each row through its own `preset_id`, and adds the named, idempotent
+`stage6_validation_history_preset_identity_repair_v1` marker for databases
+that already ran the original migration. The repair changes only a strictly pre-marker
+history row with a resolvable, non-null `preset_id` different from its parent
+Case's current `preset_id`, where both frozen fields exactly equal the Case's
+frozen fields. Null/unavailable references and every ambiguous frozen identity
+are preserved. The isolated Stage 6/Stage 2/Stage 4 migration selection,
+compilation, and `git diff --check` pass (32 tests). No operational database,
+seed content, golden, or accepted artifact was opened or changed.
+
 New schema tests cover an actual pre-Stage-6 schema migration with pending and
 validated Cases, repeat migration, IDs/reports/history, v1/v2 restore,
 operational artifacts for both formats, archived package refusal, and legacy
@@ -26,9 +41,10 @@ Stage 5 audit-image readability. Focused Stage 2/4/schema tests passed 28;
 all 133 Stage 5 package tests and all 53 Stage 5 transaction tests passed in
 bounded shards; golden/pure rendering tests passed 89; Stage 3 Editor/backend
 tests passed 26; Workspace AppTests passed 33; Stage 5 UI AppTests passed 14.
-`py_compile`, `git diff --check`, and collection (376 tests) pass. No
+`py_compile`, `git diff --check`, and collection (380 tests) pass. No
 operational database, seed content, goldens, or accepted artifact was changed.
-Browser checks and user approval remain required before committing.
+The manual browser check and independent Sol High remediation review passed;
+Checkpoint 1 is complete.
 
 **Stage 5 is complete: checkpoint 1 is `220cd2e`, checkpoint 2 is
 `5868ad9`, and checkpoint 3 is `5522a7b`.** The final checkpoint 1

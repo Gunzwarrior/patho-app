@@ -57,6 +57,10 @@ def _remove_stage6_columns(db_name):
             "DELETE FROM Schema_Migrations WHERE name = ?",
             ("stage6_persistence_compatibility_v1",),
         )
+        conn.execute(
+            "DELETE FROM Schema_Migrations WHERE name = ?",
+            ("stage6_validation_history_preset_identity_repair_v1",),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -140,6 +144,275 @@ def test_stage6_migration_is_additive_idempotent_and_preserves_cases(mutable_db)
     assert after_ids == before_ids
     assert snapshots == [{"preset_short_code_snapshot": "gt", "preset_name_snapshot": "Gastric Trio"}] * 2
     assert history_snapshots == [{"preset_short_code_snapshot": "gt", "preset_name_snapshot": "Gastric Trio"}]
+
+
+def _save_revalidated_case(case_number):
+    dai = _preset("dai")
+    gt = _preset("gt")
+    assert database.save_case(
+        case_number, dai["id"], "first validation", _case_input(database.get_preset_blocks(dai["id"])),
+        "<p>first validated report</p>", status="validated",
+    )
+    assert database.return_case_to_pending(case_number, "new specimen")
+    assert database.save_case(
+        case_number, gt["id"], "second validation", _case_input(database.get_preset_blocks(gt["id"])),
+        "<p>second validated report</p>", status="validated",
+    )
+    return dai, gt
+
+
+def test_stage6_history_backfill_uses_its_own_preset_without_case_fallback(mutable_db):
+    dai, gt = _save_revalidated_case("STAGE6-HISTORY-BACKFILL")
+    conn = database.get_db_connection()
+    try:
+        case = conn.execute(
+            "SELECT id, preset_id, status, rendered_html FROM Cases WHERE case_number = ?",
+            ("STAGE6-HISTORY-BACKFILL",),
+        ).fetchone()
+        conn.execute(
+            """INSERT INTO Case_Validation_History
+               (case_id, rendered_html, structured_input, clinical_info, preset_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (case["id"], "<p>null-preset report</p>", "{}", "legacy null", None),
+        )
+        conn.execute(
+            """INSERT INTO Case_Validation_History
+               (case_id, rendered_html, structured_input, clinical_info, preset_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (case["id"], "<p>missing-preset report</p>", "{}", "legacy missing", 999999),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _remove_stage6_columns(mutable_db)
+    database.migrate_schema(mutable_db)
+    database.migrate_schema(mutable_db)
+
+    conn = database.get_db_connection()
+    try:
+        case_after = dict(conn.execute(
+            "SELECT id, preset_id, status, rendered_html FROM Cases WHERE case_number = ?",
+            ("STAGE6-HISTORY-BACKFILL",),
+        ).fetchone())
+        history = [dict(row) for row in conn.execute(
+            """SELECT id, preset_id, rendered_html, structured_input,
+                      preset_short_code_snapshot, preset_name_snapshot
+               FROM Case_Validation_History WHERE case_id = ? ORDER BY id""",
+            (case_after["id"],),
+        )]
+    finally:
+        conn.close()
+
+    assert case_after == dict(case)
+    assert [(row["preset_id"], row["preset_short_code_snapshot"], row["preset_name_snapshot"])
+            for row in history] == [
+        (dai["id"], "dai", "Appendice"),
+        (gt["id"], "gt", "Gastric Trio"),
+        (None, None, None),
+        (999999, None, None),
+    ]
+    assert [row["rendered_html"] for row in history] == [
+        "<p>first validated report</p>", "<p>second validated report</p>",
+        "<p>null-preset report</p>", "<p>missing-preset report</p>",
+    ]
+
+
+def test_stage6_history_identity_repair_corrects_only_proven_legacy_backfill(mutable_db):
+    dai, gt = _save_revalidated_case("STAGE6-HISTORY-REPAIR")
+    assert database.save_case(
+        "STAGE6-UNRELATED-HISTORY", dai["id"], "unrelated", _case_input(database.get_preset_blocks(dai["id"])),
+        "<p>unrelated validated report</p>", status="validated",
+    )
+    conn = database.get_db_connection()
+    try:
+        case = dict(conn.execute(
+            "SELECT * FROM Cases WHERE case_number = ?", ("STAGE6-HISTORY-REPAIR",)
+        ).fetchone())
+        history = [dict(row) for row in conn.execute(
+            "SELECT * FROM Case_Validation_History WHERE case_id = ? ORDER BY id", (case["id"],)
+        )]
+        unrelated = dict(conn.execute(
+            """SELECT h.* FROM Case_Validation_History h JOIN Cases c ON c.id = h.case_id
+               WHERE c.case_number = ?""",
+            ("STAGE6-UNRELATED-HISTORY",),
+        ).fetchone())
+        for row in history:
+            conn.execute(
+                """UPDATE Case_Validation_History
+                   SET preset_short_code_snapshot = ?, preset_name_snapshot = ? WHERE id = ?""",
+                ("gt", "Gastric Trio", row["id"]),
+            )
+        conn.execute(
+            """INSERT INTO Case_Validation_History
+               (case_id, rendered_html, structured_input, clinical_info, preset_id,
+                preset_short_code_snapshot, preset_name_snapshot)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (case["id"], "<p>legacy missing-preset report</p>", "{}", "legacy missing", 999999,
+             "gt", "Gastric Trio"),
+        )
+        conn.execute(
+            """INSERT INTO Case_Validation_History
+               (case_id, rendered_html, structured_input, clinical_info, preset_id,
+                preset_short_code_snapshot, preset_name_snapshot)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (case["id"], "<p>deleted-preset report</p>", "{}", "deleted preset", 999998,
+             "old", "Deleted historical preset"),
+        )
+        conn.execute(
+            """INSERT INTO Case_Validation_History
+               (case_id, rendered_html, structured_input, clinical_info, preset_id,
+                preset_short_code_snapshot, preset_name_snapshot)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (case["id"], "<p>legacy null-preset report</p>", "{}", "legacy null", None,
+             "gt", "Gastric Trio"),
+        )
+        conn.execute(
+            "UPDATE Schema_Migrations SET applied_at = ? WHERE name = ?",
+            ("2099-01-01 00:00:00", "stage6_persistence_compatibility_v1"),
+        )
+        conn.execute(
+            "DELETE FROM Schema_Migrations WHERE name = ?",
+            ("stage6_validation_history_preset_identity_repair_v1",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.migrate_schema(mutable_db)
+    conn = database.get_db_connection()
+    try:
+        repaired_case = dict(conn.execute(
+            "SELECT * FROM Cases WHERE id = ?", (case["id"],)
+        ).fetchone())
+        repaired_history = [dict(row) for row in conn.execute(
+            "SELECT * FROM Case_Validation_History WHERE case_id = ? ORDER BY id", (case["id"],)
+        )]
+        repaired_unrelated = dict(conn.execute(
+            "SELECT * FROM Case_Validation_History WHERE id = ?", (unrelated["id"],)
+        ).fetchone())
+        marker_count = conn.execute(
+            "SELECT COUNT(*) FROM Schema_Migrations WHERE name = ?",
+            ("stage6_validation_history_preset_identity_repair_v1",),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert repaired_case == case
+    assert repaired_unrelated == unrelated
+    assert [(row["preset_id"], row["preset_short_code_snapshot"], row["preset_name_snapshot"])
+            for row in repaired_history] == [
+        (dai["id"], "dai", "Appendice"),
+        (gt["id"], "gt", "Gastric Trio"),
+        (999999, "gt", "Gastric Trio"),
+        (999998, "old", "Deleted historical preset"),
+        (None, "gt", "Gastric Trio"),
+    ]
+    assert [(row["id"], row["rendered_html"], row["structured_input"], row["clinical_info"])
+            for row in repaired_history] == [
+        (history[0]["id"], history[0]["rendered_html"], history[0]["structured_input"], history[0]["clinical_info"]),
+        (history[1]["id"], history[1]["rendered_html"], history[1]["structured_input"], history[1]["clinical_info"]),
+        (repaired_history[2]["id"], "<p>legacy missing-preset report</p>", "{}", "legacy missing"),
+        (repaired_history[3]["id"], "<p>deleted-preset report</p>", "{}", "deleted preset"),
+        (repaired_history[4]["id"], "<p>legacy null-preset report</p>", "{}", "legacy null"),
+    ]
+    assert marker_count == 1
+
+    database.migrate_schema(mutable_db)
+    conn = database.get_db_connection()
+    try:
+        rerun_history = [dict(row) for row in conn.execute(
+            "SELECT * FROM Case_Validation_History WHERE case_id = ? ORDER BY id", (case["id"],)
+        )]
+        rerun_marker_count = conn.execute(
+            "SELECT COUNT(*) FROM Schema_Migrations WHERE name = ?",
+            ("stage6_validation_history_preset_identity_repair_v1",),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert rerun_history == repaired_history
+    assert rerun_marker_count == 1
+
+
+def test_stage6_history_repair_preserves_post_marker_identity_after_preset_rename(mutable_db):
+    conn = database.get_db_connection()
+    try:
+        conn.execute(
+            "UPDATE Schema_Migrations SET applied_at = ? WHERE name = ?",
+            ("2000-01-01 00:00:00", "stage6_persistence_compatibility_v1"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    dai, _ = _save_revalidated_case("STAGE6-POST-MARKER")
+    conn = database.get_db_connection()
+    try:
+        history = dict(conn.execute(
+            """SELECT h.* FROM Case_Validation_History h JOIN Cases c ON c.id = h.case_id
+               WHERE c.case_number = ? ORDER BY h.id LIMIT 1""",
+            ("STAGE6-POST-MARKER",),
+        ).fetchone())
+        conn.execute("UPDATE Presets SET name = ? WHERE id = ?", ("Appendice renommée", dai["id"]))
+        conn.execute(
+            "UPDATE Schema_Migrations SET applied_at = ? WHERE name = ?",
+            (history["validated_at"], "stage6_persistence_compatibility_v1"),
+        )
+        conn.execute(
+            "DELETE FROM Schema_Migrations WHERE name = ?",
+            ("stage6_validation_history_preset_identity_repair_v1",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.migrate_schema(mutable_db)
+    conn = database.get_db_connection()
+    try:
+        after = dict(conn.execute(
+            "SELECT * FROM Case_Validation_History WHERE id = ?", (history["id"],)
+        ).fetchone())
+    finally:
+        conn.close()
+    assert after == history
+
+
+def test_stage6_history_repair_preserves_unavailable_historical_preset_identity(mutable_db):
+    preset = _preset("dai")
+    assert database.save_case(
+        "STAGE6-UNAVAILABLE", preset["id"], "unavailable", _case_input(database.get_preset_blocks(preset["id"])),
+        "<p>unavailable report</p>", status="validated",
+    )
+    conn = sqlite3.connect(mutable_db)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.row_factory = sqlite3.Row
+        history = dict(conn.execute(
+            """SELECT h.* FROM Case_Validation_History h JOIN Cases c ON c.id = h.case_id
+               WHERE c.case_number = ?""",
+            ("STAGE6-UNAVAILABLE",),
+        ).fetchone())
+        conn.execute("DELETE FROM Presets WHERE id = ?", (preset["id"],))
+        conn.execute(
+            "UPDATE Schema_Migrations SET applied_at = ? WHERE name = ?",
+            ("2099-01-01 00:00:00", "stage6_persistence_compatibility_v1"),
+        )
+        conn.execute(
+            "DELETE FROM Schema_Migrations WHERE name = ?",
+            ("stage6_validation_history_preset_identity_repair_v1",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.migrate_schema(mutable_db)
+    conn = database.get_db_connection()
+    try:
+        after = dict(conn.execute(
+            "SELECT * FROM Case_Validation_History WHERE id = ?", (history["id"],)
+        ).fetchone())
+    finally:
+        conn.close()
+    assert after == history
 
 
 def test_saving_and_validating_a_case_freezes_its_live_preset_identity(mutable_db):

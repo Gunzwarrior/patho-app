@@ -400,8 +400,20 @@ readability. Focused Stage 2/4/schema coverage passed 28 tests; all 133 Stage
 5 package tests and all 53 Stage 5 transaction tests passed in bounded shards;
 unchanged golden/pure rendering coverage passed 89; Stage 3 Editor/backend
 tests passed 26; Workspace AppTests passed 33; and Stage 5 UI AppTests passed
-14. The complete suite now collects 376 tests. Browser approval and the
-checkpoint commit remain pending.
+14. The checkpoint was manually browser-checked.
+
+Independent Sol High review found that the original migration backfilled
+validation-history Preset identity from the parent Case's current Preset. The
+conservative remediation corrects fresh backfill through each history row's
+own `preset_id` and adds the separate idempotent
+`stage6_validation_history_preset_identity_repair_v1` marker. Its repair
+criterion requires strict pre-marker timing, a resolvable non-null historical
+Preset distinct from the parent Case Preset, and both history identity fields
+matching the Case identity; null, unavailable, and otherwise ambiguous rows
+are preserved. The remediation was independently reviewed and verified. Its
+final focused Stage 6/Stage 2/Stage 4 migration selection passed 32 tests;
+the complete suite now collects 380 tests. Checkpoint 1 is complete and ready
+to serve as the foundation for Checkpoint 2.
 
 ### Final contract hardening, regression, and real-model acceptance
 
