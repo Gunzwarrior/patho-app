@@ -236,6 +236,8 @@ def materialize_operations(conn, operations):
                 before = _fetch(conn, table, key)
                 if (kind == "create" and before is not None) or (kind == "update" and before is None):
                     raise contract.PackageError("target", path)
+                if kind == "update" and before and before["is_archived"]:
+                    raise contract.PackageError("target", path)
                 if table == "Blocks" and before and before["is_table"]:
                     raise contract.PackageError("target", path)
                 values = dict(op["values" if kind == "create" else "set"])
@@ -279,7 +281,7 @@ def materialize_operations(conn, operations):
                     raise contract.PackageError("target", path)
                 block = _fetch(conn, "Blocks", key["block_key"])
                 field = _fetch(conn, "Fields", key["field_key"])
-                if block is None or field is None:
+                if block is None or field is None or block["is_archived"] or field["is_archived"]:
                     raise contract.PackageError("target", path)
                 values = dict(op["values"])
                 if values["default_override"] is not None:
@@ -292,7 +294,8 @@ def materialize_operations(conn, operations):
                 if ("Presets", key["preset_code"]) not in created:
                     raise contract.PackageError("target", path)
                 preset, block = _fetch(conn, "Presets", key["preset_code"]), _fetch(conn, "Blocks", key["block_key"])
-                if preset is None or block is None or block["is_table"]:
+                if (preset is None or block is None or preset["is_archived"]
+                        or block["is_archived"] or block["is_table"]):
                     raise contract.PackageError("target", path)
                 fields = {r["key"]: dict(r) for r in conn.execute(
                     "SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id WHERE bf.block_id=?",
@@ -304,6 +307,7 @@ def materialize_operations(conn, operations):
                 for name, value in overrides.items():
                     contract.field_value(fields[name], value, path=path + ".values.field_overrides")
                 after = {"preset_id": preset["id"], "block_id": block["id"], "sort_order": key["sort_order"],
+                         "display_order": key["sort_order"],
                          "field_overrides": contract.canonical_json(overrides).strip()}
                 before = None
                 _insert(conn, table, after)
@@ -674,7 +678,7 @@ _RELATION_COLUMNS = {
 }
 _RELATION_IMAGES = {
     "Block_Fields": {"block_id", "field_id", "sort_order", "label_override", "default_override", "context_section"},
-    "Preset_Blocks": {"preset_id", "block_id", "sort_order", "field_overrides"},
+    "Preset_Blocks": {"preset_id", "block_id", "sort_order", "display_order", "field_overrides"},
 }
 
 
@@ -742,8 +746,26 @@ def _read_audit(conn, revision_id):
                 expected_columns = (set(content_snapshot.BASE_TABLES[table][1]) | {"id"}
                                     if table in content_snapshot.BASE_TABLES else _RELATION_IMAGES[table])
                 if image is not None:
-                    if not isinstance(image, dict) or set(image) != expected_columns:
+                    legacy_columns = set(expected_columns)
+                    if table in content_snapshot.BASE_TABLES:
+                        legacy_columns.discard("is_archived")
+                    elif table == "Preset_Blocks":
+                        legacy_columns.discard("display_order")
+                    if not isinstance(image, dict) or frozenset(image) not in {frozenset(expected_columns), frozenset(legacy_columns)}:
                         raise ValueError("Invalid audit image.")
+                    # Stage 6 adds only non-rendering storage.  Old audited
+                    # images retain their original hash, then receive the
+                    # deterministic active/display defaults in memory so the
+                    # existing inverse machinery can still compare physical
+                    # rows after the additive migration.
+                    legacy = set(image) == legacy_columns and legacy_columns != expected_columns
+                    expected_hash_image = image
+                    if legacy:
+                        image = dict(image)
+                        if table in content_snapshot.BASE_TABLES:
+                            image["is_archived"] = 0
+                        else:
+                            image["display_order"] = image["sort_order"]
                     ids = [c for c in image if c == "id" or c.endswith("_id")]
                     if any(type(image[c]) is not int or image[c] <= 0 for c in ids):
                         raise ValueError("Invalid audit row ID.")
@@ -753,7 +775,7 @@ def _read_audit(conn, revision_id):
                         raise ValueError("Invalid audit position.")
                     if table == "Blocks" and image["is_table"]:
                         raise ValueError("Table Blocks cannot be reverted here.")
-                if record[side + "_hash"] != (content_editing.row_hash(image) if image is not None else None):
+                if record[side + "_hash"] != (content_editing.row_hash(expected_hash_image) if image is not None else None):
                     raise ValueError("Invalid audit hash.")
                 images.append(image)
             before, after = images

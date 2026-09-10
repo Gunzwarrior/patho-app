@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-370 tests currently exist; the Stage 5 completion run passed in bounded
+376 tests currently exist; the Stage 5 completion run passed in bounded
 terminal shards as documented below.
 
 ## Structure
@@ -66,6 +66,7 @@ patho-app/
     test_stage5_packages.py  # strict AI contract and no-write candidate review
     test_stage5_transactions.py # atomic Apply, stale guards and audited inverses
     test_stage5_ui.py        # package Editor flow and restricted report HTML
+    test_stage6_schema.py    # additive lifecycle/order storage and v1/v2 compatibility
     golden_helpers.py        # shared render-a-preset-at-defaults helper
     golden_fixtures/         # frozen known-good plain-text output
     regenerate_golden.py     # deliberate, human-reviewed fixture updates
@@ -387,6 +388,20 @@ AppTest establishes server/session behavior and emitted restricted HTML, not
 real-browser layout, file-download behavior, or frontend remount behavior.
 Thomas completed the checkpoint 3 browser review on 2026-09-08; it passed, and
 he approved the functionality and this commit.
+
+## Stage 6 checkpoint 1 — persistence and compatibility foundation
+
+`test_stage6_schema.py` proves additive, idempotent migration from a
+pre-Stage-6 schema with pending and validated Cases; identity/report/history
+preservation; archive/display-order/frozen-Preset backfill; v1 read-only
+normalisation; byte-deterministic v2 round-trip; Stage 4 artifact generation
+from both versions; archived v1-package refusal; and legacy Stage 5 audit-image
+readability. Focused Stage 2/4/schema coverage passed 28 tests; all 133 Stage
+5 package tests and all 53 Stage 5 transaction tests passed in bounded shards;
+unchanged golden/pure rendering coverage passed 89; Stage 3 Editor/backend
+tests passed 26; Workspace AppTests passed 33; and Stage 5 UI AppTests passed
+14. The complete suite now collects 376 tests. Browser approval and the
+checkpoint commit remain pending.
 
 ### Final contract hardening, regression, and real-model acceptance
 

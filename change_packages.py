@@ -357,6 +357,7 @@ def authoring_contract():
             "For global number/select/checkbox defaults, null is allowed only on creation or when already null, and every new effective use must have a usable override; never clear a usable default.",
             "Optional text accepts null; whitespace-only optional text becomes null. Required text is nonblank.",
         ],
+        "archived_content": "Archived Fields, Blocks, Presets, and Snippets remain in the snapshot as read-only targets. v1 rejects updates to archived rows and links involving archived endpoints.",
         "incomplete_source": "This is an expressibility rule, separate from clinical grounding: v1 cannot write every snapshot table. Do not invent missing source rows or modify a read-only table. If the requested change requires either, explain that v1 cannot express it and do not return a package.",
         "rules": [
             "Return only changed values; updates target existing rows, links belong to new owners. No deletes.",

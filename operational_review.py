@@ -130,6 +130,10 @@ def generate(snapshot_path, candidate_path):
     paths = _check_paths(snapshot_path, candidate_path)
     snapshot = _read_json(paths["snapshot"], "snapshot")
     content_snapshot.validate_content_snapshot(snapshot)
+    # A legacy recovery snapshot is rendered from its deterministic v2
+    # normalisation.  Artifacts stay v1, but their source hash now always
+    # identifies the operational v2 content representation.
+    snapshot = content_snapshot.normalize_content_snapshot(snapshot)
     artifact = {
         "format": ARTIFACT_FORMAT,
         "source_snapshot_sha256": content_snapshot.content_snapshot_hash(snapshot),

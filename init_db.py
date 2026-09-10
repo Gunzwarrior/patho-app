@@ -33,6 +33,7 @@ def setup_database(db_name=None):
 
     print("Dropping old tables (if they exist)...")
     cursor.executescript("""
+        DROP TABLE IF EXISTS Case_Content_Reference_Changes;
         DROP TABLE IF EXISTS Cases;
         DROP TABLE IF EXISTS Field_Consistency_Rules;
         DROP TABLE IF EXISTS Quick_Type_Tokens;
@@ -59,6 +60,7 @@ def setup_database(db_name=None):
             key TEXT NOT NULL UNIQUE,
             label TEXT NOT NULL,
             type TEXT NOT NULL,           -- 'text' | 'number' | 'select' | 'checkbox'
+            is_archived INTEGER NOT NULL DEFAULT 0,
             options JSON,                 -- e.g. ["légère","modérée","sévère"]
             default_value TEXT,
             conclusion_addendum_template TEXT   -- optional Jinja2 template (context: {value}).
@@ -76,6 +78,7 @@ def setup_database(db_name=None):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             key TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
+            is_archived INTEGER NOT NULL DEFAULT 0,
             is_table BOOLEAN DEFAULT 0,
             site_label TEXT,               -- e.g. 'antrale', 'fundique' — the site-specific
                                             -- word a groupable conclusion_template substitutes
@@ -154,6 +157,7 @@ def setup_database(db_name=None):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             short_code TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
+            is_archived INTEGER NOT NULL DEFAULT 0,
             category TEXT,
             default_adicap TEXT,
             default_title TEXT   -- optional: pre-fills the Workspace Title widget
@@ -169,6 +173,7 @@ def setup_database(db_name=None):
             preset_id INTEGER NOT NULL REFERENCES Presets(id),
             block_id INTEGER NOT NULL REFERENCES Blocks(id),
             sort_order INTEGER,
+            display_order INTEGER NOT NULL DEFAULT 0,
             field_overrides JSON,
             PRIMARY KEY (preset_id, block_id, sort_order)
         );
@@ -272,6 +277,7 @@ def setup_database(db_name=None):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             shortcut TEXT NOT NULL UNIQUE,
             expansion TEXT NOT NULL,
+            is_archived INTEGER NOT NULL DEFAULT 0,
             category TEXT
         );
 
@@ -284,6 +290,8 @@ def setup_database(db_name=None):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             case_number TEXT NOT NULL UNIQUE,
             preset_id INTEGER REFERENCES Presets(id),
+            preset_short_code_snapshot TEXT,
+            preset_name_snapshot TEXT,
             status TEXT DEFAULT 'pending',   -- 'pending' | 'validated'
             pending_reason TEXT,             -- e.g. 'IHC', 'Niveaux', 'Avis', 'Colo', 'Autre' —
                                               -- free text by convention, not schema-enforced,

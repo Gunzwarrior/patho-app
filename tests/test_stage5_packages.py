@@ -118,7 +118,7 @@ def test_context_privacy_allowlisted_queries_and_contract_example(mutable_db, mo
     example["base_snapshot_sha256"] = payload["snapshot_sha256"]
     assert packages.dry_run(raw(example), mutable_db).candidate_snapshot_hash
     # Named fixture measurement is documented; this fixture's content is unchanged by Cases/audit.
-    assert len(exported) == 29311  # seed_data.seed_all content + generated v1 contract
+    assert len(exported) == 30292  # seed_data.seed_all content + generated v1 contract
     assert len(exported) == len(packages.export_ai_context(mutable_db))
 
 

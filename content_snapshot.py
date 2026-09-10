@@ -15,7 +15,18 @@ import tempfile
 import database
 
 
+FORMAT_V1 = "pathopilot-content-snapshot-v1"
+FORMAT_V2 = "pathopilot-content-snapshot-v2"
+
+
 BASE_TABLES = {
+    "Fields": ("key", ("key", "label", "type", "options", "default_value", "conclusion_addendum_template", "is_archived")),
+    "Blocks": ("key", ("key", "name", "is_table", "site_label", "conclusion_group", "macro_template", "micro_template", "conclusion_template", "context_template", "title_fragment_template", "conclusion_label_template", "is_archived")),
+    "Presets": ("short_code", ("short_code", "name", "category", "default_adicap", "default_title", "is_archived")),
+    "Snippets": ("shortcut", ("shortcut", "expansion", "category", "is_archived")),
+}
+
+_V1_BASE_TABLES = {
     "Fields": ("key", ("key", "label", "type", "options", "default_value", "conclusion_addendum_template")),
     "Blocks": ("key", ("key", "name", "is_table", "site_label", "conclusion_group", "macro_template", "micro_template", "conclusion_template", "context_template", "title_fragment_template", "conclusion_label_template")),
     "Presets": ("short_code", ("short_code", "name", "category", "default_adicap", "default_title")),
@@ -28,7 +39,7 @@ RELATION_TABLES = {
         ("block_key", "field_key"),
     ),
     "Preset_Blocks": (
-        ("preset_code", "block_key", "sort_order", "field_overrides"),
+        ("preset_code", "block_key", "sort_order", "display_order", "field_overrides"),
         ("preset_code", "block_key", "sort_order"),
     ),
     "Preset_Block_Rows": (
@@ -49,6 +60,14 @@ RELATION_TABLES = {
     ),
 }
 
+_V1_RELATION_TABLES = {
+    **RELATION_TABLES,
+    "Preset_Blocks": (
+        ("preset_code", "block_key", "sort_order", "field_overrides"),
+        ("preset_code", "block_key", "sort_order"),
+    ),
+}
+
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -63,7 +82,7 @@ def _base_rows(conn, table, key, columns):
 
 
 def _read_snapshot_rows(conn):
-    payload = {"format": "pathopilot-content-snapshot-v1", "tables": {}}
+    payload = {"format": FORMAT_V2, "tables": {}}
     tables = payload["tables"]
     for table, (key, columns) in BASE_TABLES.items():
         tables[table] = _base_rows(conn, table, key, columns)
@@ -73,9 +92,10 @@ def _read_snapshot_rows(conn):
         FROM Block_Fields bf JOIN Blocks b ON b.id = bf.block_id JOIN Fields f ON f.id = bf.field_id
         ORDER BY b.key, f.key""")
     tables["Preset_Blocks"] = _rows(conn, """
-        SELECT p.short_code AS preset_code, b.key AS block_key, pb.sort_order, pb.field_overrides
+        SELECT p.short_code AS preset_code, b.key AS block_key, pb.sort_order,
+               pb.display_order, pb.field_overrides
         FROM Preset_Blocks pb JOIN Presets p ON p.id = pb.preset_id JOIN Blocks b ON b.id = pb.block_id
-        ORDER BY p.short_code, pb.sort_order, b.key""")
+        ORDER BY p.short_code, pb.display_order, pb.sort_order, b.key""")
     tables["Preset_Block_Rows"] = _rows(conn, """
         SELECT p.short_code AS preset_code, b.key AS block_key, pbr.sort_order, pbr.field_overrides
         FROM Preset_Block_Rows pbr JOIN Presets p ON p.id = pbr.preset_id JOIN Blocks b ON b.id = pbr.block_id
@@ -140,6 +160,43 @@ def content_snapshot_json(snapshot):
     return _json(snapshot) + "\n"
 
 
+def normalize_content_snapshot(snapshot):
+    """Return a detached v2 representation of a v1 or v2 snapshot.
+
+    v1 is accepted only at this compatibility boundary.  The caller's object
+    is never changed, so inspecting or hashing a legacy recovery file remains
+    deterministic and read-only.
+    """
+    if not isinstance(snapshot, dict) or set(snapshot) != {"format", "tables"}:
+        raise ValueError("Unsupported content snapshot format")
+    version = snapshot.get("format")
+    if version == FORMAT_V2:
+        return copy.deepcopy(snapshot)
+    if version != FORMAT_V1:
+        raise ValueError("Unsupported content snapshot format")
+    tables = snapshot.get("tables")
+    expected = set(_V1_BASE_TABLES) | set(_V1_RELATION_TABLES)
+    if not isinstance(tables, dict) or set(tables) != expected:
+        raise ValueError("Content snapshot has missing or unexpected tables")
+    normalised = {"format": FORMAT_V2, "tables": {}}
+    for table, (_key, columns) in _V1_BASE_TABLES.items():
+        rows = tables[table]
+        if not isinstance(rows, list) or any(not isinstance(row, dict) or set(row) != set(columns) for row in rows):
+            raise ValueError(f"Invalid {table} rows")
+        normalised["tables"][table] = [{**copy.deepcopy(row), "is_archived": 0} for row in rows]
+    for table, (columns, _key_columns) in _V1_RELATION_TABLES.items():
+        rows = tables[table]
+        if not isinstance(rows, list) or any(not isinstance(row, dict) or set(row) != set(columns) for row in rows):
+            raise ValueError(f"Invalid {table} rows")
+        if table == "Preset_Blocks":
+            normalised["tables"][table] = [
+                {**copy.deepcopy(row), "display_order": row["sort_order"]} for row in rows
+            ]
+        else:
+            normalised["tables"][table] = copy.deepcopy(rows)
+    return normalised
+
+
 def validate_content_snapshot(snapshot):
     """Reject an unsupported or structurally unsafe content snapshot.
 
@@ -147,11 +204,11 @@ def validate_content_snapshot(snapshot):
     before choosing a target database.  Restore retains its own validation so
     its safety behaviour is unchanged.
     """
-    _validate_shape(snapshot)
+    _validate_shape(normalize_content_snapshot(snapshot))
 
 
 def _validate_shape(snapshot):
-    if not isinstance(snapshot, dict) or set(snapshot) != {"format", "tables"} or snapshot.get("format") != "pathopilot-content-snapshot-v1":
+    if not isinstance(snapshot, dict) or set(snapshot) != {"format", "tables"} or snapshot.get("format") != FORMAT_V2:
         raise ValueError("Unsupported content snapshot format")
     tables = snapshot.get("tables")
     expected = set(BASE_TABLES) | set(RELATION_TABLES)
@@ -162,6 +219,8 @@ def _validate_shape(snapshot):
         for row in tables[table]:
             if set(row) != set(columns) or not row.get(key) or row[key] in seen:
                 raise ValueError(f"Invalid {table} rows")
+            if type(row["is_archived"]) is not int or row["is_archived"] not in (0, 1):
+                raise ValueError(f"Invalid {table} archive state")
             seen.add(row[key])
     base_keys = {
         table: {row[key] for row in tables[table]}
@@ -179,6 +238,8 @@ def _validate_shape(snapshot):
                 raise ValueError(f"Invalid {table} stable key") from error
             if invalid_identity:
                 raise ValueError(f"Invalid or duplicate {table} stable key")
+            if table == "Preset_Blocks" and type(row["display_order"]) is not int:
+                raise ValueError("Invalid Preset_Blocks display order")
             seen.add(identity)
 
     for row in tables["Block_Fields"]:
@@ -251,8 +312,16 @@ def _replace_relationships(conn, tables, ids):
     existing_pb = {(r["preset_id"], r["block_id"], r["sort_order"]): r for r in _rows(conn, "SELECT * FROM Preset_Blocks")}
     for key in set(existing_pb) - set(desired_pb): conn.execute("DELETE FROM Preset_Blocks WHERE preset_id=? AND block_id=? AND sort_order=?", key)
     for key, row in desired_pb.items():
-        if key in existing_pb: conn.execute("UPDATE Preset_Blocks SET field_overrides=? WHERE preset_id=? AND block_id=? AND sort_order=?", (row["field_overrides"], *key))
-        else: conn.execute("INSERT INTO Preset_Blocks VALUES (?, ?, ?, ?)", (*key, row["field_overrides"]))
+        if key in existing_pb:
+            conn.execute(
+                "UPDATE Preset_Blocks SET display_order=?, field_overrides=? WHERE preset_id=? AND block_id=? AND sort_order=?",
+                (row["display_order"], row["field_overrides"], *key),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO Preset_Blocks (preset_id, block_id, sort_order, display_order, field_overrides) VALUES (?, ?, ?, ?, ?)",
+                (*key, row["display_order"], row["field_overrides"]),
+            )
 
     def sync_surrogate(table, columns, key_columns, values):
         desired = {tuple(row[c] for c in key_columns): row for row in values}
@@ -311,6 +380,7 @@ def restore_content_snapshot(snapshot, db_name=None, summary="Restored content s
     try:
         if isinstance(snapshot, str):
             snapshot = json.loads(snapshot)
+        snapshot = normalize_content_snapshot(snapshot)
         _validate_shape(snapshot)
         target = database.get_db_connection() if db_name is None else sqlite3.connect(db_name)
         target.row_factory = sqlite3.Row

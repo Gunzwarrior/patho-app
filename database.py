@@ -27,7 +27,7 @@ def _table_columns(conn, table_name):
 
 
 def migrate_schema(db_name=None):
-    """Apply Stage 2 additions without rebuilding content or Cases.
+    """Apply additive operational-safety and Stage 6 schema migrations.
 
     This migration is deliberately additive and safe to run on every app
     start.  Existing validated cases receive exactly one history artifact;
@@ -86,6 +86,17 @@ def migrate_schema(db_name=None):
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 initial_snapshot_hash TEXT,
                 initial_snapshot_at TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS Case_Content_Reference_Changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                revision_id INTEGER NOT NULL REFERENCES Content_Revisions(id),
+                case_id INTEGER NOT NULL REFERENCES Cases(id),
+                reference_kind TEXT NOT NULL,
+                before_preset_id INTEGER,
+                before_preset_key TEXT,
+                after_preset_id INTEGER,
+                after_preset_key TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
         # Stage 5 provenance is additive; legacy revisions keep NULL values.
@@ -151,6 +162,64 @@ def migrate_schema(db_name=None):
             "INSERT OR IGNORE INTO Schema_Migrations (name) VALUES (?)",
             ("stage2_relevant_content_fingerprint_v2",),
         )
+
+        # Stage 6 checkpoint 1 is deliberately storage-only.  The marker
+        # makes its data backfill one-shot: subsequent app starts must not
+        # reinterpret Case identity or reset a future display order.
+        for table in ("Fields", "Blocks", "Presets", "Snippets"):
+            if "is_archived" not in _table_columns(conn, table):
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0"
+                )
+        preset_block_columns = _table_columns(conn, "Preset_Blocks")
+        if "display_order" not in preset_block_columns:
+            conn.execute(
+                "ALTER TABLE Preset_Blocks ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0"
+            )
+        case_columns = _table_columns(conn, "Cases")
+        if "preset_short_code_snapshot" not in case_columns:
+            conn.execute("ALTER TABLE Cases ADD COLUMN preset_short_code_snapshot TEXT")
+        if "preset_name_snapshot" not in case_columns:
+            conn.execute("ALTER TABLE Cases ADD COLUMN preset_name_snapshot TEXT")
+        validation_columns = _table_columns(conn, "Case_Validation_History")
+        if "preset_short_code_snapshot" not in validation_columns:
+            conn.execute("ALTER TABLE Case_Validation_History ADD COLUMN preset_short_code_snapshot TEXT")
+        if "preset_name_snapshot" not in validation_columns:
+            conn.execute("ALTER TABLE Case_Validation_History ADD COLUMN preset_name_snapshot TEXT")
+
+        stage6_marker = "stage6_persistence_compatibility_v1"
+        if not conn.execute(
+            "SELECT 1 FROM Schema_Migrations WHERE name = ?", (stage6_marker,)
+        ).fetchone():
+            for table in ("Fields", "Blocks", "Presets", "Snippets"):
+                conn.execute(f"UPDATE {table} SET is_archived = 0 WHERE is_archived IS NULL")
+            conn.execute("UPDATE Preset_Blocks SET display_order = sort_order")
+            conn.execute(
+                """UPDATE Cases
+                   SET preset_short_code_snapshot = (
+                           SELECT short_code FROM Presets WHERE id = Cases.preset_id
+                       ),
+                       preset_name_snapshot = (
+                           SELECT name FROM Presets WHERE id = Cases.preset_id
+                       )
+                   WHERE preset_id IS NOT NULL"""
+            )
+            conn.execute(
+                """UPDATE Case_Validation_History
+                   SET preset_short_code_snapshot = (
+                           SELECT c.preset_short_code_snapshot FROM Cases c
+                           WHERE c.id = Case_Validation_History.case_id
+                       ),
+                       preset_name_snapshot = (
+                           SELECT c.preset_name_snapshot FROM Cases c
+                           WHERE c.id = Case_Validation_History.case_id
+                       )
+                   WHERE preset_short_code_snapshot IS NULL
+                      OR preset_name_snapshot IS NULL"""
+            )
+            conn.execute(
+                "INSERT INTO Schema_Migrations (name) VALUES (?)", (stage6_marker,)
+            )
         conn.commit()
     finally:
         conn.close()
@@ -631,7 +700,8 @@ def get_all_cases(status=None, search_term=None):
     """
     conn = get_db_connection()
     query = """
-        SELECT c.*, p.name AS preset_name, p.short_code AS preset_code
+        SELECT c.*, COALESCE(p.name, c.preset_name_snapshot) AS preset_name,
+               COALESCE(p.short_code, c.preset_short_code_snapshot) AS preset_code
         FROM Cases c
         LEFT JOIN Presets p ON p.id = c.preset_id
         WHERE 1=1
@@ -843,6 +913,11 @@ def save_case(case_number, preset_id, clinical_info, structured_input, rendered_
             # A duplicate case number is never an escape hatch around the
             # validated-record lock.  return_case_to_pending is intentional.
             return False
+        preset_identity = cursor.execute(
+            "SELECT short_code, name FROM Presets WHERE id = ?", (preset_id,)
+        ).fetchone()
+        if not preset_identity:
+            return False
         current_fingerprint = compute_case_content_fingerprint(preset_id, structured_input, conn)
         if content_fingerprint is not None and content_fingerprint != current_fingerprint:
             # The relevant content changed after the caller rendered or
@@ -857,29 +932,32 @@ def save_case(case_number, preset_id, clinical_info, structured_input, rendered_
                 """UPDATE Cases
                    SET preset_id = ?, status = ?, pending_reason = ?, clinical_info = ?,
                        structured_input = ?, rendered_html = ?, content_fingerprint = ?,
-                       content_revision_id = ?, updated_at = CURRENT_TIMESTAMP
+                       content_revision_id = ?, preset_short_code_snapshot = ?,
+                       preset_name_snapshot = ?, updated_at = CURRENT_TIMESTAMP
                    WHERE case_number = ?""",
                 (preset_id, status, pending_reason, clinical_info,
                  _canonical_json(structured_input), rendered_html, content_fingerprint,
-                 content_revision_id, case_number),
+                 content_revision_id, preset_identity["short_code"], preset_identity["name"], case_number),
             )
         else:
             cursor.execute(
-                """INSERT INTO Cases
+                   """INSERT INTO Cases
                    (case_number, preset_id, status, pending_reason, clinical_info, structured_input, rendered_html,
-                    content_fingerprint, content_revision_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    content_fingerprint, content_revision_id, preset_short_code_snapshot, preset_name_snapshot)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (case_number, preset_id, status, pending_reason, clinical_info,
-                 _canonical_json(structured_input), rendered_html, content_fingerprint, content_revision_id),
+                 _canonical_json(structured_input), rendered_html, content_fingerprint, content_revision_id,
+                 preset_identity["short_code"], preset_identity["name"]),
             )
         if status == "validated":
             case_id = existing["id"] if existing else cursor.lastrowid
             cursor.execute(
                 """INSERT INTO Case_Validation_History
-                   (case_id, rendered_html, structured_input, clinical_info, preset_id, content_fingerprint)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (case_id, rendered_html, structured_input, clinical_info, preset_id, content_fingerprint,
+                    preset_short_code_snapshot, preset_name_snapshot)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (case_id, rendered_html, _canonical_json(structured_input), clinical_info,
-                 preset_id, content_fingerprint),
+                 preset_id, content_fingerprint, preset_identity["short_code"], preset_identity["name"]),
             )
             cursor.execute(
                 "INSERT INTO Case_Status_History (case_id, transition) VALUES (?, ?)",

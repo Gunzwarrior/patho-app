@@ -263,6 +263,7 @@ def test_snapshot_refuses_new_render_dependency_for_saved_case(mutable_db):
     changed["tables"]["Fields"].append({
         "key": "restore_probe", "label": "Probe", "type": "checkbox", "options": None,
         "default_value": "1", "conclusion_addendum_template": "ADDED REPORT CONTENT",
+        "is_archived": 0,
     })
     changed["tables"]["Block_Fields"].append({
         "block_key": "appendice", "field_key": "restore_probe", "sort_order": 999,

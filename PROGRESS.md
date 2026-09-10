@@ -7,6 +7,29 @@ record from earlier rounds.
 
 ## Current status
 
+**Stage 6 checkpoint 1 — implementation complete, awaiting approval to
+commit.** The working tree has the approved additive persistence and
+compatibility foundation only: `is_archived` on base content, independent
+`Preset_Blocks.display_order`, frozen Preset code/name columns on Cases and
+validation history, and the empty Case-content-reference audit table. The
+named `stage6_persistence_compatibility_v1` migration backfills active state,
+display order and frozen identities once without rebuilding tables or
+regenerating reports. Snapshot export is now v2; v1 recovery files normalise
+read-only to v2, and operational-review artifacts hash that normalised v2
+source. The AI v1 package format itself remains unchanged; its contract marks
+archived base rows read-only and it rejects archived update/link targets.
+
+New schema tests cover an actual pre-Stage-6 schema migration with pending and
+validated Cases, repeat migration, IDs/reports/history, v1/v2 restore,
+operational artifacts for both formats, archived package refusal, and legacy
+Stage 5 audit-image readability. Focused Stage 2/4/schema tests passed 28;
+all 133 Stage 5 package tests and all 53 Stage 5 transaction tests passed in
+bounded shards; golden/pure rendering tests passed 89; Stage 3 Editor/backend
+tests passed 26; Workspace AppTests passed 33; Stage 5 UI AppTests passed 14.
+`py_compile`, `git diff --check`, and collection (376 tests) pass. No
+operational database, seed content, goldens, or accepted artifact was changed.
+Browser checks and user approval remain required before committing.
+
 **Stage 5 is complete: checkpoint 1 is `220cd2e`, checkpoint 2 is
 `5868ad9`, and checkpoint 3 is `5522a7b`.** The final checkpoint 1
 authoring-contract refinement and checkpoint 2 safe diagnostics are committed
