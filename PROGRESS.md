@@ -7,7 +7,30 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 6 checkpoint 1 — complete and ready to serve as the foundation for
+**Stage 6 checkpoint 2 — complete, manually regression-reviewed, and ready
+to commit.** `content_studio.py`
+now translates guided-form actions into internal stable-key operations without
+writing directly. `content_changes.review_candidate(..., internal=True)`
+uses the existing candidate copy, local stale guard and immutable review, but
+now materialises base content, all six configuration tables, archive/restore,
+relationship reorder/override changes, explicit cleanup, and narrowly scoped
+validated-Case Preset detachments. It records exact physical content/config
+row images in `Content_Changes`, and Case reference changes only in
+`Case_Content_Reference_Changes`, with no clinical text. Generalised inverses
+restore original IDs, configuration/order rows, archive flags and detached
+validated references; legacy Stage 3/5 audit paths remain intact. The external
+AI v1 parser remains unchanged and still takes its original narrow path.
+
+`tests/test_stage6_candidates.py` currently has seven isolated tests for
+no-write review, stale/rollback guards, archive/revert/revert, deterministic
+intent ordering, all configuration tables, display-order restoration, and
+validated Preset deletion/detachment/inverse reattachment. Focused results:
+7 Stage 6 candidate tests; 32 Stage 2/4/schema compatibility tests; 12
+Stage 5 package-contract regression tests; and 9 Stage 5 transaction/inverse
+regressions passed. `py_compile` and `git diff --check` pass. No operational
+database, seed content, goldens or accepted artifacts was opened or changed.
+
+**Stage 6 checkpoint 1 — complete and serves as the foundation for
 checkpoint 2.** The foundation was implemented in `9445e8b`, manually
 browser-checked, and independently reviewed by Sol High. That review found
 the validation-history Preset-identity migration defect; its conservative,

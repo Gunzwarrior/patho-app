@@ -12,6 +12,8 @@ import content_snapshot
 import database
 import editor_preview
 import rendering
+import quicktype
+import consistency
 
 
 _REVIEW_ISSUER = object()
@@ -659,8 +661,11 @@ def _review_on_connection(candidate, operations, base_hash, *, package_hash=None
         )
 
 
-def review_candidate(operations, base_hash, *, package_hash=None, summary="", db_name=None):
+def review_candidate(operations, base_hash, *, package_hash=None, summary="", db_name=None,
+                     internal=False):
     """One SQLite backup, one private memory candidate, no live write transaction."""
+    if internal:
+        return _review_generalized_candidate(operations, base_hash, summary=summary, db_name=db_name)
     operations = _checked_operations(operations)
     try:
         with _candidate_copy(db_name) as candidate:
@@ -918,6 +923,16 @@ def review_inverse(revision_id, *, db_name=None):
     """Prepare a no-write inverse with current before/after report impact."""
     try:
         with _candidate_copy(db_name) as candidate:
+            revision = candidate.execute("SELECT origin FROM Content_Revisions WHERE id=?", (revision_id,)).fetchone()
+            if revision is not None and revision["origin"] in {"content_studio", "revision_revert"} and (
+                revision["origin"] == "content_studio" or candidate.execute(
+                    "SELECT 1 FROM Case_Content_Reference_Changes WHERE revision_id=?", (revision_id,)
+                ).fetchone() or candidate.execute(
+                    "SELECT 1 FROM Content_Changes WHERE revision_id=? AND table_name IN ('Preset_Block_Rows','Quick_Type_Tokens','Field_Consistency_Rules','Conclusion_Group_Labels')",
+                    (revision_id,),
+                ).fetchone()
+            ):
+                return _review_generalized_inverse(candidate, revision_id)
             inverse = _read_audit(candidate, revision_id)
             base_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
             return _review_on_connection(candidate, _inverse_operations(inverse["changes"]), base_hash,
@@ -973,6 +988,8 @@ def apply_review(review, *, db_name=None):
     """Recheck an issued review under one lock, then commit content and audit once."""
     if not isinstance(review, ReviewResult) or review._issuer is not _REVIEW_ISSUER:
         raise ChangeError("A successful current review is required before Apply.")
+    if review.data.get("engine") == "generalized_v1":
+        return _apply_generalized_review(review, db_name=db_name)
     conn = None
     try:
         conn = database.get_db_connection() if db_name is None else sqlite3.connect(db_name)
@@ -1026,3 +1043,682 @@ def apply_review(review, *, db_name=None):
     finally:
         if conn is not None:
             conn.close()
+
+
+# Stage 6 internal candidate service ---------------------------------------
+#
+# The package path above deliberately remains constrained by change_packages.
+# Guided authoring has a separate, stable-key grammar and records full physical
+# rows.  Keeping this code beside the established review/apply machinery gives
+# both sources the same copy, guard, report impact and transaction boundary.
+
+_GENERAL_TABLES = tuple(content_snapshot.BASE_TABLES) + tuple(content_snapshot.RELATION_TABLES)
+_GENERAL_RELATIONS = frozenset(content_snapshot.RELATION_TABLES)
+_GENERAL_KEYS = {
+    "Block_Fields": ("block_key", "field_key"),
+    "Preset_Blocks": ("preset_code", "block_key", "sort_order"),
+    "Preset_Block_Rows": ("preset_code", "block_key", "sort_order"),
+    "Quick_Type_Tokens": ("preset_code", "sort_order"),
+    "Field_Consistency_Rules": ("block_key", "field_a_key", "field_a_values", "field_b_key", "field_b_values", "message"),
+    "Conclusion_Group_Labels": ("block_key_set",),
+}
+_GENERAL_ACTIONS = frozenset({"create", "update", "archive", "restore", "delete", "link", "unlink", "reorder"})
+_GENERAL_PHYSICAL_COLUMNS = {
+    "Fields": ("id", "key", "label", "type", "is_archived", "options", "default_value", "conclusion_addendum_template"),
+    "Blocks": ("id", "key", "name", "is_archived", "is_table", "site_label", "conclusion_group", "macro_template", "micro_template", "conclusion_template", "context_template", "title_fragment_template", "conclusion_label_template"),
+    "Presets": ("id", "short_code", "name", "is_archived", "category", "default_adicap", "default_title"),
+    "Snippets": ("id", "shortcut", "expansion", "is_archived", "category"),
+    "Block_Fields": ("block_id", "field_id", "sort_order", "label_override", "default_override", "context_section"),
+    "Preset_Blocks": ("preset_id", "block_id", "sort_order", "display_order", "field_overrides"),
+    "Preset_Block_Rows": ("id", "preset_id", "block_id", "sort_order", "field_overrides"),
+    "Quick_Type_Tokens": ("id", "preset_id", "sort_order", "block_sort_order", "field_key", "token_kind", "lookup_table", "digit_width"),
+    "Field_Consistency_Rules": ("id", "block_id", "field_a_key", "field_a_values", "field_b_key", "field_b_values", "message"),
+    "Conclusion_Group_Labels": ("id", "block_key_set", "combined_label"),
+}
+
+
+def _general_key_columns(table):
+    if table in content_snapshot.BASE_TABLES:
+        return (content_snapshot.BASE_TABLES[table][0],)
+    return _GENERAL_KEYS[table]
+
+
+def _general_audit_key(table, key):
+    return key if table in content_snapshot.BASE_TABLES else contract.canonical_json(key).strip()
+
+
+def _general_columns(conn, table):
+    # Current Stage 6 schema is additive and these are deliberately exact
+    # audit images.  A static allowlist also keeps a candidate's restricted
+    # SQLite authorizer from needing metadata PRAGMAs during Apply.
+    return _GENERAL_PHYSICAL_COLUMNS[table]
+
+
+def _general_row(conn, table, key):
+    """Fetch a physical row from a stable key, including a config row's ID."""
+    if table in content_snapshot.BASE_TABLES:
+        row = conn.execute(f"SELECT * FROM {table} WHERE {_general_key_columns(table)[0]}=?", (key,)).fetchone()
+        return dict(row) if row else None
+    if not isinstance(key, dict) or set(key) != set(_general_key_columns(table)):
+        raise ChangeError("Content Studio relationship key is invalid.")
+    if table == "Block_Fields":
+        row = conn.execute("""SELECT bf.* FROM Block_Fields bf JOIN Blocks b ON b.id=bf.block_id
+                              JOIN Fields f ON f.id=bf.field_id
+                              WHERE b.key=? AND f.key=?""", (key["block_key"], key["field_key"])).fetchone()
+    elif table == "Preset_Blocks":
+        row = conn.execute("""SELECT pb.* FROM Preset_Blocks pb JOIN Presets p ON p.id=pb.preset_id
+                              JOIN Blocks b ON b.id=pb.block_id
+                              WHERE p.short_code=? AND b.key=? AND pb.sort_order=?""",
+                           (key["preset_code"], key["block_key"], key["sort_order"])).fetchone()
+    elif table == "Preset_Block_Rows":
+        row = conn.execute("""SELECT pbr.* FROM Preset_Block_Rows pbr JOIN Presets p ON p.id=pbr.preset_id
+                              JOIN Blocks b ON b.id=pbr.block_id
+                              WHERE p.short_code=? AND b.key=? AND pbr.sort_order=?""",
+                           (key["preset_code"], key["block_key"], key["sort_order"])).fetchone()
+    elif table == "Quick_Type_Tokens":
+        row = conn.execute("""SELECT q.* FROM Quick_Type_Tokens q JOIN Presets p ON p.id=q.preset_id
+                              WHERE p.short_code=? AND q.sort_order=?""",
+                           (key["preset_code"], key["sort_order"])).fetchone()
+    elif table == "Field_Consistency_Rules":
+        row = conn.execute("""SELECT r.* FROM Field_Consistency_Rules r JOIN Blocks b ON b.id=r.block_id
+                              WHERE b.key=? AND r.field_a_key=? AND r.field_a_values=?
+                                AND r.field_b_key=? AND r.field_b_values=? AND r.message=?""",
+                           (key["block_key"], key["field_a_key"], key["field_a_values"],
+                            key["field_b_key"], key["field_b_values"], key["message"])).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM Conclusion_Group_Labels WHERE block_key_set=?", (key["block_key_set"],)).fetchone()
+    return dict(row) if row else None
+
+
+def _general_rows(conn):
+    """Physical rows keyed by stable content identity, for exact audit checks."""
+    result = {}
+    for table in _GENERAL_TABLES:
+        rows = {}
+        if table in content_snapshot.BASE_TABLES or table == "Conclusion_Group_Labels":
+            direct = [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
+            for row in direct:
+                key = row[content_snapshot.BASE_TABLES[table][0]] if table in content_snapshot.BASE_TABLES else {"block_key_set": row["block_key_set"]}
+                rows[contract.canonical_json(key) if isinstance(key, dict) else key] = row
+        elif table == "Block_Fields":
+            for row in conn.execute("""SELECT bf.*,b.key block_key,f.key field_key FROM Block_Fields bf
+                                      JOIN Blocks b ON b.id=bf.block_id JOIN Fields f ON f.id=bf.field_id"""):
+                row = dict(row); key = {k: row[k] for k in _GENERAL_KEYS[table]}; rows[contract.canonical_json(key)] = {k: row[k] for k in _GENERAL_PHYSICAL_COLUMNS[table]}
+        elif table == "Preset_Blocks":
+            for row in conn.execute("""SELECT pb.*,p.short_code preset_code,b.key block_key FROM Preset_Blocks pb
+                                      JOIN Presets p ON p.id=pb.preset_id JOIN Blocks b ON b.id=pb.block_id"""):
+                row = dict(row); key = {k: row[k] for k in _GENERAL_KEYS[table]}; rows[contract.canonical_json(key)] = {k: row[k] for k in _GENERAL_PHYSICAL_COLUMNS[table]}
+        elif table == "Preset_Block_Rows":
+            for row in conn.execute("""SELECT pbr.*,p.short_code preset_code,b.key block_key FROM Preset_Block_Rows pbr
+                                      JOIN Presets p ON p.id=pbr.preset_id JOIN Blocks b ON b.id=pbr.block_id"""):
+                row = dict(row); key = {k: row[k] for k in _GENERAL_KEYS[table]}; rows[contract.canonical_json(key)] = {k: row[k] for k in _GENERAL_PHYSICAL_COLUMNS[table]}
+        elif table == "Quick_Type_Tokens":
+            for row in conn.execute("""SELECT q.*,p.short_code preset_code FROM Quick_Type_Tokens q
+                                      JOIN Presets p ON p.id=q.preset_id"""):
+                row = dict(row); key = {k: row[k] for k in _GENERAL_KEYS[table]}; rows[contract.canonical_json(key)] = {k: row[k] for k in _GENERAL_PHYSICAL_COLUMNS[table]}
+        else:
+            for row in conn.execute("""SELECT r.*,b.key block_key FROM Field_Consistency_Rules r
+                                      JOIN Blocks b ON b.id=r.block_id"""):
+                row = dict(row); key = {k: row[k] for k in _GENERAL_KEYS[table]}; rows[contract.canonical_json(key)] = {k: row[k] for k in _GENERAL_PHYSICAL_COLUMNS[table]}
+        result[table] = rows
+    return result
+
+
+def _general_normalize(operations):
+    if not isinstance(operations, list) or not operations or len(operations) > contract.MAX_OPERATIONS:
+        raise ChangeError("Content Studio operations are invalid.")
+    cleaned, targets = [], set()
+    for operation in operations:
+        if not isinstance(operation, dict):
+            raise ChangeError("Content Studio operations are invalid.")
+        action, table, key = operation.get("op"), operation.get("table"), operation.get("key")
+        if action == "case_preset_reference":
+            if set(operation) != {"op", "case_id", "before_preset_id", "after_preset_id"}:
+                raise ChangeError("Content Studio Case reference is invalid.")
+            if type(operation["case_id"]) is not int or operation["case_id"] <= 0:
+                raise ChangeError("Content Studio Case reference is invalid.")
+            if any(v is not None and (type(v) is not int or v <= 0)
+                   for v in (operation["before_preset_id"], operation["after_preset_id"])):
+                raise ChangeError("Content Studio Case reference is invalid.")
+            marker = (action, operation["case_id"])
+            if marker in targets:
+                raise ChangeError("Content Studio targets must be unique.")
+            targets.add(marker); cleaned.append(dict(operation)); continue
+        if action not in _GENERAL_ACTIONS or table not in _GENERAL_TABLES:
+            raise ChangeError("Content Studio operation is unsupported.")
+        key_columns = _general_key_columns(table)
+        if table in content_snapshot.BASE_TABLES:
+            valid_key = isinstance(key, str) and bool(key)
+        else:
+            valid_key = isinstance(key, dict) and set(key) == set(key_columns) and all(
+                isinstance(value, str) and value != "" for column, value in key.items()
+                if not (column == "sort_order" and type(value) is int)
+            )
+        if not valid_key:
+            raise ChangeError("Content Studio relationship key is invalid.")
+        has_values = "values" in operation
+        if action in {"create", "update", "link", "reorder"}:
+            if set(operation) != {"op", "table", "key", "values"} or not isinstance(operation["values"], dict):
+                raise ChangeError("Content Studio operation values are invalid.")
+        elif set(operation) != {"op", "table", "key"}:
+            raise ChangeError("Content Studio operation is invalid.")
+        if table in content_snapshot.BASE_TABLES and action in {"link", "unlink", "reorder"}:
+            raise ChangeError("Content Studio operation is invalid.")
+        if table in _GENERAL_RELATIONS and action in {"archive", "restore"}:
+            raise ChangeError("Content Studio operation is invalid.")
+        marker = (table, _general_audit_key(table, key))
+        if marker in targets:
+            raise ChangeError("Content Studio targets must be unique.")
+        targets.add(marker)
+        clean = {"op": action, "table": table, "key": dict(key) if isinstance(key, dict) else key}
+        if has_values:
+            clean["values"] = dict(operation["values"])
+        cleaned.append(clean)
+    # Makes review input order irrelevant while preserving source action data.
+    def phase(operation):
+        if operation["op"] == "case_preset_reference": return -1
+        if operation["op"] == "create": return 0 if operation["table"] in content_snapshot.BASE_TABLES else 3
+        if operation["op"] in {"update", "archive", "restore", "reorder"}: return 1
+        if operation["op"] in {"unlink", "delete"} and operation["table"] in _GENERAL_RELATIONS: return 2
+        return 4
+    return sorted(cleaned, key=lambda o: (phase(o), o.get("table", ""),
+                                           contract.canonical_json(o.get("key", o.get("case_id")))))
+
+
+def _general_endpoint_ids(conn, table, key):
+    def base(name, stable):
+        row = _fetch(conn, name, stable)
+        if row is None:
+            raise ChangeError("Content Studio relationship endpoint is unavailable.")
+        return row["id"]
+    if table == "Block_Fields":
+        return {"block_id": base("Blocks", key["block_key"]), "field_id": base("Fields", key["field_key"])}
+    if table in {"Preset_Blocks", "Preset_Block_Rows"}:
+        return {"preset_id": base("Presets", key["preset_code"]), "block_id": base("Blocks", key["block_key"])}
+    if table == "Quick_Type_Tokens":
+        return {"preset_id": base("Presets", key["preset_code"])}
+    if table == "Field_Consistency_Rules":
+        return {"block_id": base("Blocks", key["block_key"])}
+    return {}
+
+
+def _general_insert_from_intent(conn, op):
+    table, key, values = op["table"], op["key"], dict(op["values"])
+    if table in content_snapshot.BASE_TABLES:
+        values[content_snapshot.BASE_TABLES[table][0]] = key
+        if table == "Blocks":
+            values.setdefault("is_table", 0); values.setdefault("site_label", None); values.setdefault("conclusion_group", None)
+        if table == "Presets":
+            values.setdefault("category", None); values.setdefault("default_adicap", None); values.setdefault("default_title", None)
+        if table == "Fields":
+            values.setdefault("options", None); values.setdefault("conclusion_addendum_template", None)
+        if table == "Snippets":
+            values.setdefault("category", None)
+        values.setdefault("is_archived", 0)
+        if table == "Fields":
+            if values["options"] is not None:
+                values["options"] = contract.canonical_json(values["options"]).strip()
+            values["default_value"] = _field_storage(values, values["default_value"], "content_studio.default", nullable_global=True)
+        content_editing._validate_row(table, values)
+    else:
+        values.update(_general_endpoint_ids(conn, table, key))
+        if table == "Block_Fields":
+            values.setdefault("label_override", None); values.setdefault("default_override", None); values.setdefault("context_section", 0)
+            field = conn.execute("SELECT * FROM Fields WHERE id=?", (values["field_id"],)).fetchone()
+            if values["default_override"] is not None:
+                values["default_override"] = _field_storage(dict(field), values["default_override"], "content_studio.default_override")
+        elif table == "Preset_Blocks":
+            values.setdefault("display_order", key["sort_order"]); values.setdefault("field_overrides", "{}")
+        elif table == "Preset_Block_Rows":
+            values.setdefault("field_overrides", "{}")
+        elif table == "Conclusion_Group_Labels":
+            values.setdefault("block_key_set", key["block_key_set"])
+        for name in ("sort_order",):
+            if name in key:
+                values.setdefault(name, key[name])
+        if table in {"Preset_Blocks", "Preset_Block_Rows"} and isinstance(values["field_overrides"], dict):
+            values["field_overrides"] = contract.canonical_json(values["field_overrides"]).strip()
+        if table == "Quick_Type_Tokens" and isinstance(values.get("lookup_table"), dict):
+            values["lookup_table"] = contract.canonical_json(values["lookup_table"]).strip()
+        if table == "Field_Consistency_Rules":
+            for name in ("field_a_values", "field_b_values"):
+                if isinstance(values.get(name), list):
+                    values[name] = contract.canonical_json(values[name]).strip()
+    allowed = set(_general_columns(conn, table)) - {"id"}
+    if set(values) - allowed or set(values) != allowed:
+        raise ChangeError("Content Studio create values are incomplete.")
+    _insert(conn, table, values)
+
+
+def _general_update_from_intent(conn, op):
+    table, key, values = op["table"], op["key"], dict(op["values"])
+    before = _general_row(conn, table, key)
+    if before is None:
+        raise ChangeError("Content Studio target is unavailable.")
+    forbidden = {"id", "is_archived"} | ({content_snapshot.BASE_TABLES[table][0]} if table in content_snapshot.BASE_TABLES else set())
+    if not values or set(values) & forbidden or set(values) - set(before):
+        raise ChangeError("Content Studio update values are invalid.")
+    if table == "Fields" and set(values) & {"type", "options"}:
+        raise ChangeError("Field type and options require a separate reviewed migration.")
+    if table == "Blocks" and "is_table" in values:
+        raise ChangeError("Block table state is immutable.")
+    if table == "Preset_Blocks" and "sort_order" in values:
+        raise ChangeError("Preset instance identity is immutable.")
+    immutable_relation_columns = {
+        "Block_Fields": {"block_id", "field_id"},
+        "Preset_Blocks": {"preset_id", "block_id", "sort_order"},
+        "Preset_Block_Rows": {"preset_id", "block_id", "sort_order"},
+        "Quick_Type_Tokens": {"preset_id", "sort_order"},
+        "Field_Consistency_Rules": {"block_id", "field_a_key", "field_a_values", "field_b_key", "field_b_values", "message"},
+        "Conclusion_Group_Labels": {"block_key_set"},
+    }
+    if set(values) & immutable_relation_columns.get(table, set()):
+        raise ChangeError("Relationship identity is immutable; unlink and create the replacement instead.")
+    if before.get("is_archived") and table in content_snapshot.BASE_TABLES:
+        raise ChangeError("Archived content must be restored before it can be edited.")
+    if op["op"] == "reorder":
+        allowed = {"sort_order"} if table == "Block_Fields" else {"display_order"} if table == "Preset_Blocks" else set()
+        if set(values) != allowed:
+            raise ChangeError("This Content Studio relationship cannot be reordered.")
+    if any(before[name] == value for name, value in values.items()):
+        raise ChangeError("Content Studio operation has no persisted change.")
+    candidate = {**before, **values}
+    if table == "Fields" and "default_value" in values:
+        values["default_value"] = _field_storage(candidate, values["default_value"], "content_studio.default", nullable_global=True)
+        candidate["default_value"] = values["default_value"]
+    if table in {"Preset_Blocks", "Preset_Block_Rows"} and isinstance(values.get("field_overrides"), dict):
+        values["field_overrides"] = contract.canonical_json(values["field_overrides"]).strip()
+    if table == "Quick_Type_Tokens" and isinstance(values.get("lookup_table"), dict):
+        values["lookup_table"] = contract.canonical_json(values["lookup_table"]).strip()
+    if table == "Field_Consistency_Rules":
+        for name in ("field_a_values", "field_b_values"):
+            if isinstance(values.get(name), list): values[name] = contract.canonical_json(values[name]).strip()
+    if table in content_snapshot.BASE_TABLES:
+        content_editing._validate_row(table, candidate, original=before)
+    columns, target = _physical_target_general(conn, table, key)
+    conn.execute(f"UPDATE {table} SET {', '.join(name + '=?' for name in values)} WHERE " +
+                 " AND ".join(name + "=?" for name in columns), (*values.values(), *target))
+
+
+def _physical_target_general(conn, table, key):
+    row = _general_row(conn, table, key)
+    if row is None:
+        return (), None
+    if "id" in row:
+        return ("id",), (row["id"],)
+    # Only the two old join tables have no surrogate key.
+    if table == "Block_Fields":
+        return ("block_id", "field_id"), (row["block_id"], row["field_id"])
+    return ("preset_id", "block_id", "sort_order"), (row["preset_id"], row["block_id"], row["sort_order"])
+
+
+def _general_delete_from_intent(conn, table, key):
+    columns, values = _physical_target_general(conn, table, key)
+    if values is None:
+        raise ChangeError("Content Studio target is unavailable.")
+    conn.execute(f"DELETE FROM {table} WHERE " + " AND ".join(name + "=?" for name in columns), values)
+
+
+def _general_materialize(conn, operations):
+    """Apply an internal intent list in deterministic FK-safe phases."""
+    for op in operations:
+        if op["op"] == "case_preset_reference":
+            continue
+        action, table, key = op["op"], op["table"], op["key"]
+        before = _general_row(conn, table, key)
+        if action in {"create", "link"}:
+            if before is not None:
+                raise ChangeError("Content Studio target already exists.")
+            _general_insert_from_intent(conn, op)
+        elif action in {"update", "reorder"}:
+            _general_update_from_intent(conn, op)
+        elif action in {"archive", "restore"}:
+            if table not in content_snapshot.BASE_TABLES or before is None:
+                raise ChangeError("Content Studio archive target is unavailable.")
+            value = 1 if action == "archive" else 0
+            if before["is_archived"] == value:
+                raise ChangeError("Content Studio archive state is unchanged.")
+            conn.execute(f"UPDATE {table} SET is_archived=? WHERE id=?", (value, before["id"]))
+        else:  # unlink/delete
+            if before is None:
+                raise ChangeError("Content Studio target is unavailable.")
+            _general_delete_from_intent(conn, table, key)
+
+
+def _general_changes(before, after):
+    changes = []
+    for table in _GENERAL_TABLES:
+        for encoded in sorted(set(before[table]) | set(after[table])):
+            old, new = before[table].get(encoded), after[table].get(encoded)
+            if old == new:
+                continue
+            key = (old or new)
+            if table in content_snapshot.BASE_TABLES:
+                key = key[content_snapshot.BASE_TABLES[table][0]]
+            else:
+                # The stable key is carried in the encoded index; it is never
+                # inferred from mutable physical row columns.
+                key = json.loads(encoded)
+            changes.append({"table": table, "key": key,
+                            "operation": "create" if old is None else "delete" if new is None else "update",
+                            "before": old, "after": new})
+    return changes
+
+
+def _same_general_changes(left, right):
+    """Compare exact rows while allowing an inverse's audit verb to be `revert`."""
+    return [{k: value for k, value in change.items() if k != "operation"} for change in left] == [
+        {k: value for k, value in change.items() if k != "operation"} for change in right
+    ]
+
+
+def _validate_general_configuration(conn):
+    for preset in conn.execute("SELECT id FROM Presets"):
+        tokens = []
+        for token in conn.execute("SELECT * FROM Quick_Type_Tokens WHERE preset_id=? ORDER BY sort_order", (preset["id"],)):
+            token = dict(token)
+            token["lookup_table"] = json.loads(token["lookup_table"]) if token["lookup_table"] else None
+            tokens.append(token)
+        quicktype.validate_quick_type_config(tokens)
+    for block in conn.execute("SELECT id FROM Blocks"):
+        fields = {row[0] for row in conn.execute("""SELECT f.key FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+                                                   WHERE bf.block_id=?""", (block["id"],))}
+        rules = []
+        for rule in conn.execute("SELECT * FROM Field_Consistency_Rules WHERE block_id=?", (block["id"],)):
+            rule = dict(rule)
+            rule["field_a_values"] = json.loads(rule["field_a_values"])
+            rule["field_b_values"] = json.loads(rule["field_b_values"])
+            rules.append(rule)
+        consistency.validate_consistency_rules(fields, rules)
+    for label in conn.execute("SELECT block_key_set FROM Conclusion_Group_Labels"):
+        keys = label["block_key_set"].split(",")
+        if keys != sorted(set(keys)) or any(not _fetch(conn, "Blocks", key) for key in keys):
+            raise ChangeError("Conclusion group label configuration is invalid.")
+
+
+def _general_case_references(conn, operations, *, inverse=False):
+    result = []
+    for op in operations:
+        if op["op"] != "case_preset_reference":
+            continue
+        before, after = op["before_preset_id"], op["after_preset_id"]
+        if inverse:
+            before, after = after, before
+        row = conn.execute("SELECT id,preset_id,status FROM Cases WHERE id=?", (op["case_id"],)).fetchone()
+        if row is None or row["preset_id"] != before or row["status"] != "validated":
+            raise ChangeError("Validated Case reference changed since review.")
+        result.append({"case_id": op["case_id"], "reference_kind": "preset_id",
+                       "before_preset_id": before, "after_preset_id": after})
+    return result
+
+
+def _general_apply_case_references(conn, references, *, attaching):
+    for ref in references:
+        # Detach before a possible Preset deletion; attach only after a
+        # possible inverse recreation.  The two phases must not be reversed.
+        if (ref["after_preset_id"] is not None) != attaching:
+            continue
+        if ref["after_preset_id"] is not None and not conn.execute("SELECT 1 FROM Presets WHERE id=?", (ref["after_preset_id"],)).fetchone():
+            raise ChangeError("Validated Case reference endpoint is unavailable.")
+        conn.execute("UPDATE Cases SET preset_id=? WHERE id=? AND preset_id IS ?",
+                     (ref["after_preset_id"], ref["case_id"], ref["before_preset_id"]))
+        if conn.execute("SELECT changes()").fetchone()[0] != 1:
+            raise ChangeError("Validated Case reference changed since review.")
+
+
+def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=None):
+    operations = _general_normalize(operations)
+    try:
+        with _candidate_copy(db_name) as candidate:
+            if content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate)) != base_hash:
+                raise contract.PackageError("stale")
+            guard = local_review_guard(candidate)
+            with _access_scope(candidate):
+                before_rows = _general_rows(candidate)
+                before_presets, before_pending = _capture(candidate)
+            refs = _general_case_references(candidate, operations)
+            with _access_scope(candidate, {"Cases"}):
+                _general_apply_case_references(candidate, refs, attaching=False)
+            with _access_scope(candidate, set(_GENERAL_TABLES) | {"sqlite_sequence"}):
+                _general_materialize(candidate, operations)
+            with _access_scope(candidate, {"Cases"}):
+                _general_apply_case_references(candidate, refs, attaching=True)
+            with _access_scope(candidate):
+                after_rows = _general_rows(candidate)
+                changes = _general_changes(before_rows, after_rows)
+                if not changes and not refs:
+                    raise ChangeError("Content Studio operation has no persisted change.")
+                content_snapshot.validate_content_snapshot(content_snapshot.snapshot_from_connection(candidate))
+                _validate_stored_field_configuration(candidate)
+                _validate_general_configuration(candidate)
+                content_editing.validate_content_templates(candidate)
+                content_editing.validate_standalone_content(candidate)
+                content_editing._validate_discrete_branches(candidate)
+                after_presets, after_pending = _capture(candidate, candidate=True)
+                result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
+            presets = []
+            for code in sorted(set(before_presets) | set(after_presets)):
+                before, after = before_presets.get(code), after_presets.get(code)
+                presets.append({"code": code, "affected": before != after, "added": before is None,
+                                "removed": after is None,
+                                "output_changed": (before or {}).get("report") != (after or {}).get("report"),
+                                "before": before, "after": after})
+            pending = [{"id": case_id, "case_number": after["case_number"],
+                        "before_label": "Current before this change", "after_label": "Candidate after this change",
+                        "saved_label": "Last saved report", "saved_html": after["saved_html"],
+                        "already_stale": before_pending[case_id].get("already_stale"),
+                        "before": before_pending[case_id], "after": after}
+                       for case_id, after in after_pending.items()
+                       if before_pending[case_id].get("fingerprint") != after["fingerprint"]
+                       or "error" in before_pending[case_id]]
+            payload = {"engine": "generalized_v1", "summary": summary, "operations": operations,
+                       "changes": changes, "case_references": refs, "presets": presets,
+                       "unaffected_presets": sum(not item["affected"] for item in presets),
+                       "pending_cases": pending, "validated_pending_count": len(after_pending),
+                       "warnings": [], "branch_warnings": [], "standalone": [], "before_standalone": [],
+                       "inverse_revision_id": None, "inverse_source_hash": None}
+            return _issued_review(None, base_hash, result_hash, guard, contract.canonical_json(payload))
+    except (ChangeError, contract.PackageError):
+        raise
+    except Exception as error:
+        raise ChangeError("Content Studio candidate could not be prepared.", local=str(error)) from None
+
+
+def _record_generalized_changes(conn, review, changes, references, *, origin="content_studio"):
+    revision_id = conn.execute("""INSERT INTO Content_Revisions(origin,summary,package_hash,base_snapshot_hash,result_snapshot_hash)
+                                  VALUES (?,?,?,?,?)""",
+                               (origin, review.data["summary"], None, review.base_snapshot_hash,
+                                review.candidate_snapshot_hash)).lastrowid
+    for change in changes:
+        before, after = change["before"], change["after"]
+        conn.execute("""INSERT INTO Content_Changes(revision_id,table_name,entity_key,operation,before_json,after_json,before_hash,after_hash)
+                        VALUES (?,?,?,?,?,?,?,?)""",
+                     (revision_id, change["table"], _general_audit_key(change["table"], change["key"]), change["operation"],
+                      contract.canonical_json(before).strip() if before is not None else None,
+                      contract.canonical_json(after).strip() if after is not None else None,
+                      content_editing.row_hash(before) if before is not None else None,
+                      content_editing.row_hash(after) if after is not None else None))
+    for ref in references:
+        before_key = conn.execute("SELECT short_code FROM Presets WHERE id=?", (ref["before_preset_id"],)).fetchone()
+        after_key = conn.execute("SELECT short_code FROM Presets WHERE id=?", (ref["after_preset_id"],)).fetchone()
+        def recorded_key(preset_id):
+            if preset_id is None:
+                return None
+            for change in changes:
+                if change["table"] != "Presets":
+                    continue
+                for image in (change["before"], change["after"]):
+                    if image is not None and image["id"] == preset_id:
+                        return image["short_code"]
+            return None
+        conn.execute("""INSERT INTO Case_Content_Reference_Changes
+                        (revision_id,case_id,reference_kind,before_preset_id,before_preset_key,after_preset_id,after_preset_key)
+                        VALUES (?,?,?,?,?,?,?)""",
+                     (revision_id, ref["case_id"], ref["reference_kind"], ref["before_preset_id"],
+                      before_key[0] if before_key else recorded_key(ref["before_preset_id"]), ref["after_preset_id"],
+                      after_key[0] if after_key else recorded_key(ref["after_preset_id"])))
+    return revision_id
+
+
+def _apply_generalized_review(review, *, db_name=None):
+    conn = None
+    try:
+        conn = database.get_db_connection() if db_name is None else sqlite3.connect(db_name)
+        conn.row_factory = sqlite3.Row; conn.execute("PRAGMA foreign_keys=ON"); conn.execute("BEGIN IMMEDIATE")
+        content_editing._require_initial_snapshot(conn)
+        with _access_scope(conn):
+            if content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(conn)) != review.base_snapshot_hash:
+                raise StaleReviewError("Content changed since review. Prepare a new review.")
+            if local_review_guard(conn) != review.local_guard:
+                raise StaleReviewError("Local state changed since review. Prepare a new review.")
+            before_rows = _general_rows(conn)
+            inverse_id = review.data["inverse_revision_id"]
+            if inverse_id is None:
+                operations = _general_normalize(review.operations)
+                if operations != review.operations:
+                    raise ChangeError("This review is invalid. Run a new review.")
+                refs = _general_case_references(conn, operations)
+            else:
+                source = _read_generalized_audit(conn, inverse_id)
+                if source["source_hash"] != review.data["inverse_source_hash"] or source["changes"] != review.changes:
+                    raise StaleReviewError("The revision audit changed since review. Prepare a new inverse review.")
+                operations, refs = None, source["references"]
+        if operations is None:
+            with _access_scope(conn, set(_GENERAL_TABLES) | {"sqlite_sequence"}):
+                _general_apply_images(conn, review.changes)
+            with _access_scope(conn, {"Cases"}):
+                for ref in refs:
+                    row = conn.execute("SELECT preset_id,status FROM Cases WHERE id=?", (ref["case_id"],)).fetchone()
+                    if row is None or row["preset_id"] != ref["before_preset_id"] or row["status"] != "validated":
+                        raise ChangeError("Revert refused: a validated Case reference changed.")
+                    conn.execute("UPDATE Cases SET preset_id=? WHERE id=?", (ref["after_preset_id"], ref["case_id"]))
+        else:
+            with _access_scope(conn, {"Cases"}):
+                _general_apply_case_references(conn, refs, attaching=False)
+            with _access_scope(conn, set(_GENERAL_TABLES) | {"sqlite_sequence"}):
+                _general_materialize(conn, operations)
+            with _access_scope(conn, {"Cases"}):
+                _general_apply_case_references(conn, refs, attaching=True)
+        with _access_scope(conn):
+            applied = _general_changes(before_rows, _general_rows(conn))
+            if not _same_general_changes(applied, review.changes) or refs != review.data["case_references"]:
+                raise ChangeError("The candidate differs from the reviewed result. Run a new review.")
+            content_snapshot.validate_content_snapshot(content_snapshot.snapshot_from_connection(conn))
+            _validate_stored_field_configuration(conn); _validate_general_configuration(conn)
+            content_editing.validate_content_templates(conn); content_editing.validate_standalone_content(conn)
+            content_editing._validate_discrete_branches(conn); _capture(conn, candidate=True)
+            if content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(conn)) != review.candidate_snapshot_hash:
+                raise ChangeError("The candidate differs from the reviewed result. Run a new review.")
+        with _access_scope(conn, {"Content_Revisions", "Content_Changes", "Case_Content_Reference_Changes", "sqlite_sequence"}, insert_only=True):
+            audit_changes = review.changes if review.data["inverse_revision_id"] is not None else applied
+            revision_id = _record_generalized_changes(conn, review, audit_changes, refs,
+                                                       origin="revision_revert" if review.data["inverse_revision_id"] is not None else "content_studio")
+        conn.commit(); return revision_id
+    except (ChangeError, contract.PackageError, content_editing.ContentEditError):
+        if conn is not None: conn.rollback()
+        raise
+    except Exception as error:
+        if conn is not None: conn.rollback()
+        raise ChangeError("Apply failed. No content or audit changes were saved.", local=str(error)) from None
+    finally:
+        if conn is not None: conn.close()
+
+
+def _read_generalized_audit(conn, revision_id):
+    revision = conn.execute("SELECT * FROM Content_Revisions WHERE id=?", (revision_id,)).fetchone()
+    records = [dict(row) for row in conn.execute("SELECT * FROM Content_Changes WHERE revision_id=? ORDER BY id", (revision_id,))]
+    refs = [dict(row) for row in conn.execute("SELECT * FROM Case_Content_Reference_Changes WHERE revision_id=? ORDER BY id", (revision_id,))]
+    if revision is None or (not records and not refs):
+        raise ChangeError("That revision has no reversible content changes.")
+    changes, seen = [], set()
+    try:
+        for record in records:
+            table = record["table_name"]
+            if table not in _GENERAL_TABLES:
+                raise ValueError("unsupported table")
+            key = record["entity_key"] if table in content_snapshot.BASE_TABLES else json.loads(record["entity_key"])
+            marker = (table, _general_audit_key(table, key))
+            if marker in seen: raise ValueError("duplicate key")
+            seen.add(marker)
+            images = []
+            for side in ("before", "after"):
+                image = json.loads(record[side + "_json"]) if record[side + "_json"] else None
+                if image is not None and set(image) != set(_general_columns(conn, table)):
+                    raise ValueError("row shape")
+                if record[side + "_hash"] != (content_editing.row_hash(image) if image is not None else None):
+                    raise ValueError("row hash")
+                images.append(image)
+            if images[0] == images[1]: raise ValueError("empty")
+            changes.append({"table": table, "key": key, "operation": "revert",
+                            "before": images[1], "after": images[0]})
+        inverse_refs = []
+        for ref in refs:
+            if ref["reference_kind"] != "preset_id": raise ValueError("reference kind")
+            inverse_refs.append({"case_id": ref["case_id"], "reference_kind": "preset_id",
+                                 "before_preset_id": ref["after_preset_id"], "after_preset_id": ref["before_preset_id"]})
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+        raise ChangeError("Revert refused: invalid or unavailable audit data.", local=str(error)) from None
+    return {"revision": dict(revision), "changes": changes, "references": inverse_refs,
+            "source_hash": contract.digest({"revision": dict(revision), "changes": records, "references": refs})}
+
+
+def _general_apply_images(conn, changes):
+    """Apply exact inverse images, preserving original SQLite IDs."""
+    # Deletes require config rows first; recreates require base endpoints first.
+    def order(change):
+        relation = change["table"] in _GENERAL_RELATIONS
+        deleting = change["after"] is None
+        return (3 if deleting and not relation else 2 if deleting else 0 if not relation else 1,
+                change["table"], _general_audit_key(change["table"], change["key"]))
+    for change in sorted(changes, key=order):
+        current = _general_row(conn, change["table"], change["key"])
+        if current != change["before"]:
+            raise ChangeError("Revert refused: later content changes or identities conflict with this revision.")
+        table, after = change["table"], change["after"]
+        if after is None:
+            _general_delete_from_intent(conn, table, change["key"])
+        elif current is None:
+            _insert(conn, table, after)
+        else:
+            columns, target = _physical_target_general(conn, table, change["key"])
+            editable = [name for name in after if name not in columns and name != "id"]
+            conn.execute(f"UPDATE {table} SET {', '.join(name + '=?' for name in editable)} WHERE " +
+                         " AND ".join(name + "=?" for name in columns), (*[after[n] for n in editable], *target))
+    if any(_general_row(conn, c["table"], c["key"]) != c["after"] for c in changes):
+        raise ChangeError("Revert refused: restored rows do not match their audit images.")
+
+
+def _review_generalized_inverse(candidate, revision_id):
+    inverse = _read_generalized_audit(candidate, revision_id)
+    base_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
+    guard = local_review_guard(candidate)
+    with _access_scope(candidate):
+        before_presets, before_pending = _capture(candidate)
+    with _access_scope(candidate, set(_GENERAL_TABLES) | {"sqlite_sequence"}):
+        _general_apply_images(candidate, inverse["changes"])
+    # Reattachment happens after its Preset is recreated; detachment (rare in
+    # an inverse) happened before deletion in the original apply path.
+    for ref in inverse["references"]:
+        row = candidate.execute("SELECT preset_id,status FROM Cases WHERE id=?", (ref["case_id"],)).fetchone()
+        if row is None or row["preset_id"] != ref["before_preset_id"] or row["status"] != "validated":
+            raise ChangeError("Revert refused: a validated Case reference changed.")
+        candidate.execute("UPDATE Cases SET preset_id=? WHERE id=?", (ref["after_preset_id"], ref["case_id"]))
+    with _access_scope(candidate):
+        content_snapshot.validate_content_snapshot(content_snapshot.snapshot_from_connection(candidate))
+        _validate_stored_field_configuration(candidate); _validate_general_configuration(candidate)
+        content_editing.validate_content_templates(candidate); content_editing.validate_standalone_content(candidate)
+        content_editing._validate_discrete_branches(candidate)
+        after_presets, after_pending = _capture(candidate, candidate=True)
+        result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
+    presets = [{"code": code, "affected": before_presets.get(code) != after_presets.get(code),
+                "added": code not in before_presets, "removed": code not in after_presets,
+                "output_changed": (before_presets.get(code) or {}).get("report") != (after_presets.get(code) or {}).get("report"),
+                "before": before_presets.get(code), "after": after_presets.get(code)}
+               for code in sorted(set(before_presets) | set(after_presets))]
+    payload = {"engine": "generalized_v1", "summary": f"Reverted revision {revision_id}", "operations": [],
+               "changes": inverse["changes"], "case_references": inverse["references"], "presets": presets,
+               "unaffected_presets": sum(not item["affected"] for item in presets), "pending_cases": [],
+               "validated_pending_count": len(after_pending), "warnings": [], "branch_warnings": [],
+               "standalone": [], "before_standalone": [], "inverse_revision_id": revision_id,
+               "inverse_source_hash": inverse["source_hash"]}
+    return _issued_review(None, base_hash, result_hash, guard, contract.canonical_json(payload))

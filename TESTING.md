@@ -415,6 +415,19 @@ final focused Stage 6/Stage 2/Stage 4 migration selection passed 32 tests;
 the complete suite now collects 380 tests. Checkpoint 1 is complete and ready
 to serve as the foundation for Checkpoint 2.
 
+## Stage 6 checkpoint 2 — generalized candidate, audit, and inverse
+
+`test_stage6_candidates.py` adds isolated coverage for no-write candidate
+review, stale and audit rollback, archive/revert/revert, deterministic intent
+ordering, all configuration tables, Preset display-order restoration, and
+validated Preset detachment/deletion with inverse reattachment. The focused
+candidate suite passed 7 tests; Stage 6 schema plus Stage 2/4 compatibility
+coverage passed 32; targeted Stage 5 package and transaction/inverse
+regressions passed 21. Changed files compiled and `git diff --check` passed.
+The existing AI-package review/Apply/inverse and Recent revisions manual
+regression review also passed. No operational database, seed content, golden,
+or accepted review artifact was changed.
+
 ### Final contract hardening, regression, and real-model acceptance
 
 The final checkpoint 1 authoring-contract refinement is committed as `de8ccce`;
