@@ -428,6 +428,13 @@ The existing AI-package review/Apply/inverse and Recent revisions manual
 regression review also passed. No operational database, seed content, golden,
 or accepted review artifact was changed.
 
+Checkpoint 2 remediation extends this file to 17 candidate tests. Its
+adversarial cases cover pending-dependent inverse refusal and pending impact,
+semantic cleanup breakage (Preset, Quick Type, table-row and default paths),
+Case-reference transition/audit-identity refusal, and inverse rollback after
+materialisation failure. Focused Stage 6 candidates, Stage 2/4/schema, and
+Stage 5 package/transaction compatibility selections pass.
+
 ### Final contract hardening, regression, and real-model acceptance
 
 The final checkpoint 1 authoring-contract refinement is committed as `de8ccce`;

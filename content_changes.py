@@ -1320,7 +1320,7 @@ def _general_update_from_intent(conn, op):
         allowed = {"sort_order"} if table == "Block_Fields" else {"display_order"} if table == "Preset_Blocks" else set()
         if set(values) != allowed:
             raise ChangeError("This Content Studio relationship cannot be reordered.")
-    if any(before[name] == value for name, value in values.items()):
+    if all(before[name] == value for name, value in values.items()):
         raise ChangeError("Content Studio operation has no persisted change.")
     candidate = {**before, **values}
     if table == "Fields" and "default_value" in values:
@@ -1413,21 +1413,105 @@ def _same_general_changes(left, right):
 
 
 def _validate_general_configuration(conn):
+    """Validate the complete final configuration, not just changed rows.
+
+    Internal cleanup may remove a row that another configuration still names.
+    SQLite foreign keys cannot express every one of those logical ownership
+    relationships, so this is deliberately candidate-wide.
+    """
+    preset_blocks = {}
+    for preset in conn.execute("SELECT id FROM Presets"):
+        links = [dict(row) for row in conn.execute(
+            """SELECT pb.*, b.is_table FROM Preset_Blocks pb JOIN Blocks b ON b.id=pb.block_id
+               WHERE pb.preset_id=? ORDER BY pb.sort_order""", (preset["id"],)
+        )]
+        if not links:
+            raise ChangeError("A Preset must retain at least one Block.")
+        positions = [link["sort_order"] for link in links]
+        display = [link["display_order"] for link in links]
+        # These are instance identifiers / display positions, not list array
+        # indexes.  Stage 5 packages and migrated databases legitimately use
+        # sparse positions (for example 999), so require uniqueness only.
+        if len(set(positions)) != len(positions) or len(set(display)) != len(display):
+            raise ChangeError("Preset Block instance or display order is invalid.")
+        preset_blocks[preset["id"]] = {link["sort_order"]: link for link in links}
+        for block in database.get_preset_blocks_on_connection(conn, preset["id"]):
+            _check_widget_defaults(block)
+
     for preset in conn.execute("SELECT id FROM Presets"):
         tokens = []
         for token in conn.execute("SELECT * FROM Quick_Type_Tokens WHERE preset_id=? ORDER BY sort_order", (preset["id"],)):
             token = dict(token)
             token["lookup_table"] = json.loads(token["lookup_table"]) if token["lookup_table"] else None
+            target = preset_blocks[preset["id"]].get(token["block_sort_order"])
+            if target is None or target["is_table"]:
+                raise ChangeError("Quick Type token targets an unavailable Block instance.")
+            field = conn.execute(
+                """SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+                   WHERE bf.block_id=? AND f.key=?""", (target["block_id"], token["field_key"])
+            ).fetchone()
+            if field is None:
+                raise ChangeError("Quick Type token targets an unavailable Field.")
+            field = dict(field)
+            if token["token_kind"] == "measurement":
+                if field["type"] not in {"number", "decimal"}:
+                    raise ChangeError("Quick Type measurement must target a numeric Field.")
+                if token["digit_width"] is not None and (type(token["digit_width"]) is not int or token["digit_width"] <= 0):
+                    raise ChangeError("Quick Type digit width is invalid.")
+            elif token["token_kind"] == "lookup":
+                if token["lookup_table"] is None:
+                    raise ChangeError("Quick Type lookup table is unavailable.")
+                for value in token["lookup_table"].values():
+                    contract.field_value(field, value)
             tokens.append(token)
         quicktype.validate_quick_type_config(tokens)
+
+    rows_seen = set()
+    for row in conn.execute("""SELECT pbr.*, b.is_table,
+                                      EXISTS(SELECT 1 FROM Preset_Blocks pb
+                                             WHERE pb.preset_id=pbr.preset_id AND pb.block_id=pbr.block_id)
+                                             AS has_owner
+                               FROM Preset_Block_Rows pbr
+                               JOIN Blocks b ON b.id=pbr.block_id"""):
+        row = dict(row)
+        identity = (row["preset_id"], row["block_id"], row["sort_order"])
+        if identity in rows_seen or not row["is_table"] or not row["has_owner"]:
+            raise ChangeError("Table row ownership is invalid.")
+        rows_seen.add(identity)
+        overrides = json.loads(row["field_overrides"] or "{}")
+        if not isinstance(overrides, dict):
+            raise ChangeError("Table row overrides are invalid.")
+        fields = [dict(field) for field in conn.execute(
+            """SELECT f.*, bf.default_override FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+               WHERE bf.block_id=?""", (row["block_id"],)
+        )]
+        by_key = {field["key"]: field for field in fields}
+        if set(overrides) - set(by_key):
+            raise ChangeError("Table row override targets an unavailable Field.")
+        for key, field in by_key.items():
+            value = overrides.get(key, field["default_override"] if field["default_override"] is not None else field["default_value"])
+            if value is None and field["type"] in {"number", "select", "checkbox"}:
+                raise ChangeError("Table row has no effective Field default.")
+            contract.field_value(field, _native_stored(field, value))
+
     for block in conn.execute("SELECT id FROM Blocks"):
-        fields = {row[0] for row in conn.execute("""SELECT f.key FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
-                                                   WHERE bf.block_id=?""", (block["id"],))}
+        bindings = [dict(row) for row in conn.execute("""SELECT f.key, bf.sort_order FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+                                                        WHERE bf.block_id=?""", (block["id"],))]
+        fields = {row["key"] for row in bindings}
+        if len({row["sort_order"] for row in bindings}) != len(bindings):
+            raise ChangeError("Block Field order is invalid.")
         rules = []
         for rule in conn.execute("SELECT * FROM Field_Consistency_Rules WHERE block_id=?", (block["id"],)):
             rule = dict(rule)
             rule["field_a_values"] = json.loads(rule["field_a_values"])
             rule["field_b_values"] = json.loads(rule["field_b_values"])
+            for key, values in ((rule["field_a_key"], rule["field_a_values"]),
+                                (rule["field_b_key"], rule["field_b_values"])):
+                field = conn.execute("SELECT * FROM Fields WHERE key=?", (key,)).fetchone()
+                if field is None:
+                    raise ChangeError("Consistency rule Field is unavailable.")
+                for value in values:
+                    contract.field_value(dict(field), value)
             rules.append(rule)
         consistency.validate_consistency_rules(fields, rules)
     for label in conn.execute("SELECT block_key_set FROM Conclusion_Group_Labels"):
@@ -1436,19 +1520,53 @@ def _validate_general_configuration(conn):
             raise ChangeError("Conclusion group label configuration is invalid.")
 
 
-def _general_case_references(conn, operations, *, inverse=False):
+def _validate_general_final_graph(conn):
+    try:
+        content_snapshot.validate_content_snapshot(content_snapshot.snapshot_from_connection(conn))
+        if conn.execute("PRAGMA foreign_key_check").fetchone():
+            raise ChangeError("Candidate graph has invalid foreign-key relationships.")
+        _validate_stored_field_configuration(conn)
+        _validate_general_configuration(conn)
+        content_editing.validate_content_templates(conn)
+        content_editing.validate_standalone_content(conn)
+        content_editing._validate_discrete_branches(conn)
+    except contract.PackageError as error:
+        raise ChangeError("Content Studio candidate graph is invalid.", local=error.local) from None
+
+
+def _general_case_references(conn, operations):
+    """Allow only the complete detachments accompanying one Preset deletion."""
     result = []
+    deleted_presets = {}
+    for op in operations:
+        if op.get("op") == "delete" and op.get("table") == "Presets":
+            preset = _fetch(conn, "Presets", op["key"])
+            if preset is not None:
+                deleted_presets[preset["id"]] = op["key"]
     for op in operations:
         if op["op"] != "case_preset_reference":
             continue
         before, after = op["before_preset_id"], op["after_preset_id"]
-        if inverse:
-            before, after = after, before
-        row = conn.execute("SELECT id,preset_id,status FROM Cases WHERE id=?", (op["case_id"],)).fetchone()
-        if row is None or row["preset_id"] != before or row["status"] != "validated":
+        if before is None or after is not None or before not in deleted_presets:
+            raise ChangeError("Validated Case references may only detach for a reviewed Preset deletion.")
+        preset = _fetch(conn, "Presets", deleted_presets[before])
+        row = conn.execute("""SELECT id,preset_id,status,preset_short_code_snapshot
+                              FROM Cases WHERE id=?""", (op["case_id"],)).fetchone()
+        if (preset is None or row is None or row["preset_id"] != before or row["status"] != "validated"
+                or row["preset_short_code_snapshot"] != preset["short_code"]):
             raise ChangeError("Validated Case reference changed since review.")
         result.append({"case_id": op["case_id"], "reference_kind": "preset_id",
-                       "before_preset_id": before, "after_preset_id": after})
+                       "before_preset_id": before, "before_preset_key": preset["short_code"],
+                       "before_preset_name": preset["name"],
+                       "after_preset_id": after, "after_preset_key": None,
+                       "after_preset_name": None})
+    for preset_id in deleted_presets:
+        expected = {row["id"] for row in conn.execute(
+            "SELECT id FROM Cases WHERE status='validated' AND preset_id=?", (preset_id,)
+        )}
+        actual = {ref["case_id"] for ref in result if ref["before_preset_id"] == preset_id}
+        if actual != expected:
+            raise ChangeError("Every validated Case using a deleted Preset must detach in the same review.")
     return result
 
 
@@ -1458,12 +1576,103 @@ def _general_apply_case_references(conn, references, *, attaching):
         # possible inverse recreation.  The two phases must not be reversed.
         if (ref["after_preset_id"] is not None) != attaching:
             continue
-        if ref["after_preset_id"] is not None and not conn.execute("SELECT 1 FROM Presets WHERE id=?", (ref["after_preset_id"],)).fetchone():
-            raise ChangeError("Validated Case reference endpoint is unavailable.")
+        _validate_general_case_reference(conn, ref)
         conn.execute("UPDATE Cases SET preset_id=? WHERE id=? AND preset_id IS ?",
                      (ref["after_preset_id"], ref["case_id"], ref["before_preset_id"]))
         if conn.execute("SELECT changes()").fetchone()[0] != 1:
             raise ChangeError("Validated Case reference changed since review.")
+
+
+def _validate_general_case_reference(conn, ref, *, inverse=False):
+    """Bind a Case reference to its frozen Preset identity, not merely an ID.
+
+    The Case snapshots are the only Case identity data used here.  They let an
+    inverse reject a substituted Preset record even if another Preset in the
+    same audited revision happens to have a valid ID/key pair.
+    """
+    row = conn.execute("""SELECT preset_id,status,preset_short_code_snapshot
+                          FROM Cases WHERE id=?""", (ref["case_id"],)).fetchone()
+    if row is None or row["preset_id"] != ref["before_preset_id"] or row["status"] != "validated":
+        raise ChangeError("Revert refused: a validated Case reference changed." if inverse
+                          else "Validated Case reference changed since review.")
+    identity = "before" if ref["before_preset_id"] is not None else "after"
+    preset_id = ref[identity + "_preset_id"]
+    preset_key = ref[identity + "_preset_key"]
+    if (preset_id is None or not isinstance(preset_key, str)
+            or row["preset_short_code_snapshot"] != preset_key):
+        raise ChangeError("Revert refused: a validated Case reference identity changed." if inverse
+                          else "Validated Case reference changed since review.")
+    if ref["after_preset_id"] is not None:
+        endpoint = conn.execute("SELECT short_code FROM Presets WHERE id=?", (ref["after_preset_id"],)).fetchone()
+        if endpoint is None or endpoint["short_code"] != ref["after_preset_key"]:
+            raise ChangeError("Revert refused: a validated Case reference endpoint is unavailable." if inverse
+                              else "Validated Case reference endpoint is unavailable.")
+
+
+def _general_pending_instances(conn, case):
+    structured = json.loads(case["structured_input"] or "{}")
+    instances = structured.get("block_instances")
+    if instances is None:
+        instances = [dict(row) for row in conn.execute(
+            "SELECT block_id, sort_order AS instance_no FROM Preset_Blocks WHERE preset_id=?",
+            (case["preset_id"],),
+        )]
+    return instances
+
+
+def _check_general_pending_removals(conn, changes):
+    """Refuse an inverse that would remove content a current draft uses."""
+    removals = [change for change in changes if change["after"] is None]
+    if not removals:
+        return
+    for case in conn.execute("SELECT id,preset_id,structured_input FROM Cases WHERE status='pending'"):
+        try:
+            instances = _general_pending_instances(conn, case)
+            block_ids = {instance["block_id"] for instance in instances}
+            links = [dict(row) for block_id in block_ids for row in conn.execute(
+                "SELECT * FROM Block_Fields WHERE block_id=?", (block_id,)
+            )]
+            field_ids = {link["field_id"] for link in links}
+            templates = [row[column] for block_id in block_ids for row in conn.execute(
+                "SELECT * FROM Blocks WHERE id=?", (block_id,)
+            ) for column in content_editing.BLOCK_TEMPLATE_COLUMNS]
+            templates.extend(row[0] for field_id in field_ids for row in conn.execute(
+                "SELECT conclusion_addendum_template FROM Fields WHERE id=?", (field_id,)
+            ))
+            snippets = database._snippet_shortcuts(templates)
+            for change in removals:
+                table, image = change["table"], change["before"]
+                needed = (
+                    (table == "Presets" and image["id"] == case["preset_id"])
+                    or (table == "Blocks" and image["id"] in block_ids)
+                    or (table == "Fields" and image["id"] in field_ids)
+                    or (table == "Snippets" and change["key"] in snippets)
+                    or (table == "Block_Fields" and image["block_id"] in block_ids)
+                    or (table == "Preset_Blocks" and image["preset_id"] == case["preset_id"] and any(
+                        instance["block_id"] == image["block_id"] and instance.get("instance_no") == image["sort_order"]
+                        for instance in instances
+                    ))
+                    or (table == "Preset_Block_Rows" and image["preset_id"] == case["preset_id"] and image["block_id"] in block_ids)
+                )
+                if needed:
+                    raise ChangeError("Revert refused: a pending case depends on content being removed.",
+                                      local={"case_id": case["id"], "table": table})
+        except ChangeError:
+            raise
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise ChangeError("Revert refused: a pending case cannot be checked safely.",
+                              local={"case_id": case["id"]}) from None
+
+
+def _general_pending_impact(before_pending, after_pending):
+    return [{"id": case_id, "case_number": after["case_number"],
+             "before_label": "Current before this change", "after_label": "Candidate after this change",
+             "saved_label": "Last saved report", "saved_html": after["saved_html"],
+             "already_stale": before_pending[case_id].get("already_stale"),
+             "before": before_pending[case_id], "after": after}
+            for case_id, after in after_pending.items()
+            if before_pending[case_id].get("fingerprint") != after["fingerprint"]
+            or "error" in before_pending[case_id]]
 
 
 def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=None):
@@ -1488,12 +1697,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                 changes = _general_changes(before_rows, after_rows)
                 if not changes and not refs:
                     raise ChangeError("Content Studio operation has no persisted change.")
-                content_snapshot.validate_content_snapshot(content_snapshot.snapshot_from_connection(candidate))
-                _validate_stored_field_configuration(candidate)
-                _validate_general_configuration(candidate)
-                content_editing.validate_content_templates(candidate)
-                content_editing.validate_standalone_content(candidate)
-                content_editing._validate_discrete_branches(candidate)
+                _validate_general_final_graph(candidate)
                 after_presets, after_pending = _capture(candidate, candidate=True)
                 result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
             presets = []
@@ -1503,14 +1707,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                                 "removed": after is None,
                                 "output_changed": (before or {}).get("report") != (after or {}).get("report"),
                                 "before": before, "after": after})
-            pending = [{"id": case_id, "case_number": after["case_number"],
-                        "before_label": "Current before this change", "after_label": "Candidate after this change",
-                        "saved_label": "Last saved report", "saved_html": after["saved_html"],
-                        "already_stale": before_pending[case_id].get("already_stale"),
-                        "before": before_pending[case_id], "after": after}
-                       for case_id, after in after_pending.items()
-                       if before_pending[case_id].get("fingerprint") != after["fingerprint"]
-                       or "error" in before_pending[case_id]]
+            pending = _general_pending_impact(before_pending, after_pending)
             payload = {"engine": "generalized_v1", "summary": summary, "operations": operations,
                        "changes": changes, "case_references": refs, "presets": presets,
                        "unaffected_presets": sum(not item["affected"] for item in presets),
@@ -1539,24 +1736,11 @@ def _record_generalized_changes(conn, review, changes, references, *, origin="co
                       content_editing.row_hash(before) if before is not None else None,
                       content_editing.row_hash(after) if after is not None else None))
     for ref in references:
-        before_key = conn.execute("SELECT short_code FROM Presets WHERE id=?", (ref["before_preset_id"],)).fetchone()
-        after_key = conn.execute("SELECT short_code FROM Presets WHERE id=?", (ref["after_preset_id"],)).fetchone()
-        def recorded_key(preset_id):
-            if preset_id is None:
-                return None
-            for change in changes:
-                if change["table"] != "Presets":
-                    continue
-                for image in (change["before"], change["after"]):
-                    if image is not None and image["id"] == preset_id:
-                        return image["short_code"]
-            return None
         conn.execute("""INSERT INTO Case_Content_Reference_Changes
                         (revision_id,case_id,reference_kind,before_preset_id,before_preset_key,after_preset_id,after_preset_key)
                         VALUES (?,?,?,?,?,?,?)""",
                      (revision_id, ref["case_id"], ref["reference_kind"], ref["before_preset_id"],
-                      before_key[0] if before_key else recorded_key(ref["before_preset_id"]), ref["after_preset_id"],
-                      after_key[0] if after_key else recorded_key(ref["after_preset_id"])))
+                      ref["before_preset_key"], ref["after_preset_id"], ref["after_preset_key"]))
     return revision_id
 
 
@@ -1582,15 +1766,14 @@ def _apply_generalized_review(review, *, db_name=None):
                 source = _read_generalized_audit(conn, inverse_id)
                 if source["source_hash"] != review.data["inverse_source_hash"] or source["changes"] != review.changes:
                     raise StaleReviewError("The revision audit changed since review. Prepare a new inverse review.")
+                _check_general_pending_removals(conn, source["changes"])
                 operations, refs = None, source["references"]
         if operations is None:
             with _access_scope(conn, set(_GENERAL_TABLES) | {"sqlite_sequence"}):
                 _general_apply_images(conn, review.changes)
             with _access_scope(conn, {"Cases"}):
                 for ref in refs:
-                    row = conn.execute("SELECT preset_id,status FROM Cases WHERE id=?", (ref["case_id"],)).fetchone()
-                    if row is None or row["preset_id"] != ref["before_preset_id"] or row["status"] != "validated":
-                        raise ChangeError("Revert refused: a validated Case reference changed.")
+                    _validate_general_case_reference(conn, ref, inverse=True)
                     conn.execute("UPDATE Cases SET preset_id=? WHERE id=?", (ref["after_preset_id"], ref["case_id"]))
         else:
             with _access_scope(conn, {"Cases"}):
@@ -1603,10 +1786,7 @@ def _apply_generalized_review(review, *, db_name=None):
             applied = _general_changes(before_rows, _general_rows(conn))
             if not _same_general_changes(applied, review.changes) or refs != review.data["case_references"]:
                 raise ChangeError("The candidate differs from the reviewed result. Run a new review.")
-            content_snapshot.validate_content_snapshot(content_snapshot.snapshot_from_connection(conn))
-            _validate_stored_field_configuration(conn); _validate_general_configuration(conn)
-            content_editing.validate_content_templates(conn); content_editing.validate_standalone_content(conn)
-            content_editing._validate_discrete_branches(conn); _capture(conn, candidate=True)
+            _validate_general_final_graph(conn); _capture(conn, candidate=True)
             if content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(conn)) != review.candidate_snapshot_hash:
                 raise ChangeError("The candidate differs from the reviewed result. Run a new review.")
         with _access_scope(conn, {"Content_Revisions", "Content_Changes", "Case_Content_Reference_Changes", "sqlite_sequence"}, insert_only=True):
@@ -1651,11 +1831,44 @@ def _read_generalized_audit(conn, revision_id):
             if images[0] == images[1]: raise ValueError("empty")
             changes.append({"table": table, "key": key, "operation": "revert",
                             "before": images[1], "after": images[0]})
-        inverse_refs = []
+        preset_images = [change for change in changes if change["table"] == "Presets"]
+        inverse_refs, reference_cases = [], set()
         for ref in refs:
-            if ref["reference_kind"] != "preset_id": raise ValueError("reference kind")
+            if (ref["reference_kind"] != "preset_id" or type(ref["case_id"]) is not int
+                    or ref["case_id"] <= 0 or ref["case_id"] in reference_cases):
+                raise ValueError("reference identity")
+            reference_cases.add(ref["case_id"])
+            before_id, after_id = ref["before_preset_id"], ref["after_preset_id"]
+            before_key, after_key = ref["before_preset_key"], ref["after_preset_key"]
+            if before_id is not None and after_id is None:
+                matches = [change["after"] for change in preset_images
+                           if change["before"] is None and change["after"] is not None
+                           and change["after"]["id"] == before_id
+                           and change["after"]["short_code"] == before_key]
+                inverse_before, inverse_after = None, matches[0] if len(matches) == 1 else None
+            elif before_id is None and after_id is not None:
+                matches = [change["before"] for change in preset_images
+                           if change["before"] is not None and change["after"] is None
+                           and change["before"]["id"] == after_id
+                           and change["before"]["short_code"] == after_key]
+                inverse_before, inverse_after = matches[0] if len(matches) == 1 else None, None
+            else:
+                matches = []
+                inverse_before = inverse_after = None
+            if len(matches) != 1:
+                raise ValueError("reference Preset identity")
+            # Tie this Case to one exact Preset audit image, not simply any
+            # Preset record that happens to belong to this revision.
+            identity = inverse_before or inverse_after
+            case = conn.execute("""SELECT preset_short_code_snapshot
+                                   FROM Cases WHERE id=?""", (ref["case_id"],)).fetchone()
+            if case is None or case["preset_short_code_snapshot"] != identity["short_code"]:
+                raise ValueError("reference Case identity")
             inverse_refs.append({"case_id": ref["case_id"], "reference_kind": "preset_id",
-                                 "before_preset_id": ref["after_preset_id"], "after_preset_id": ref["before_preset_id"]})
+                                 "before_preset_id": after_id, "before_preset_key": after_key,
+                                 "before_preset_name": inverse_before["name"] if inverse_before else None,
+                                 "after_preset_id": before_id, "after_preset_key": before_key,
+                                 "after_preset_name": inverse_after["name"] if inverse_after else None})
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
         raise ChangeError("Revert refused: invalid or unavailable audit data.", local=str(error)) from None
     return {"revision": dict(revision), "changes": changes, "references": inverse_refs,
@@ -1694,20 +1907,16 @@ def _review_generalized_inverse(candidate, revision_id):
     guard = local_review_guard(candidate)
     with _access_scope(candidate):
         before_presets, before_pending = _capture(candidate)
+        _check_general_pending_removals(candidate, inverse["changes"])
     with _access_scope(candidate, set(_GENERAL_TABLES) | {"sqlite_sequence"}):
         _general_apply_images(candidate, inverse["changes"])
     # Reattachment happens after its Preset is recreated; detachment (rare in
     # an inverse) happened before deletion in the original apply path.
     for ref in inverse["references"]:
-        row = candidate.execute("SELECT preset_id,status FROM Cases WHERE id=?", (ref["case_id"],)).fetchone()
-        if row is None or row["preset_id"] != ref["before_preset_id"] or row["status"] != "validated":
-            raise ChangeError("Revert refused: a validated Case reference changed.")
+        _validate_general_case_reference(candidate, ref, inverse=True)
         candidate.execute("UPDATE Cases SET preset_id=? WHERE id=?", (ref["after_preset_id"], ref["case_id"]))
     with _access_scope(candidate):
-        content_snapshot.validate_content_snapshot(content_snapshot.snapshot_from_connection(candidate))
-        _validate_stored_field_configuration(candidate); _validate_general_configuration(candidate)
-        content_editing.validate_content_templates(candidate); content_editing.validate_standalone_content(candidate)
-        content_editing._validate_discrete_branches(candidate)
+        _validate_general_final_graph(candidate)
         after_presets, after_pending = _capture(candidate, candidate=True)
         result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
     presets = [{"code": code, "affected": before_presets.get(code) != after_presets.get(code),
@@ -1715,9 +1924,10 @@ def _review_generalized_inverse(candidate, revision_id):
                 "output_changed": (before_presets.get(code) or {}).get("report") != (after_presets.get(code) or {}).get("report"),
                 "before": before_presets.get(code), "after": after_presets.get(code)}
                for code in sorted(set(before_presets) | set(after_presets))]
+    pending = _general_pending_impact(before_pending, after_pending)
     payload = {"engine": "generalized_v1", "summary": f"Reverted revision {revision_id}", "operations": [],
                "changes": inverse["changes"], "case_references": inverse["references"], "presets": presets,
-               "unaffected_presets": sum(not item["affected"] for item in presets), "pending_cases": [],
+               "unaffected_presets": sum(not item["affected"] for item in presets), "pending_cases": pending,
                "validated_pending_count": len(after_pending), "warnings": [], "branch_warnings": [],
                "standalone": [], "before_standalone": [], "inverse_revision_id": revision_id,
                "inverse_source_hash": inverse["source_hash"]}

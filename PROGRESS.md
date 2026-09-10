@@ -7,6 +7,18 @@ record from earlier rounds.
 
 ## Current status
 
+**Stage 6 checkpoint 2 remediation — complete locally and awaiting approval.**
+The independent review's blocking findings are addressed without extending
+into Checkpoint 3: generalized inverses now refuse pending-dependent removals
+and show pending impact; final-graph validation checks usable Presets, Quick
+Type ownership/types, table-row ownership, relationship order, and effective
+defaults; and Case-reference changes are limited to complete validated-Case
+detachments accompanying that Preset's reviewed deletion. Audit replay binds
+the reference IDs and frozen keys to the exact deleted/recreated Preset image.
+The generalized multi-column no-op check now refuses only when every supplied
+value is unchanged. Seventeen isolated candidate tests, including adversarial
+coverage for these findings, pass; this remediation is uncommitted.
+
 **Stage 6 checkpoint 2 — complete, manually regression-reviewed, and ready
 to commit.** `content_studio.py`
 now translates guided-form actions into internal stable-key operations without

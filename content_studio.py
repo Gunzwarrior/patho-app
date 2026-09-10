@@ -67,9 +67,8 @@ def case_preset_reference(case_id, before_preset_id, after_preset_id):
     """
     if type(case_id) is not int or case_id <= 0:
         raise StudioIntentError("Case reference needs a valid Case ID.")
-    if any(value is not None and (type(value) is not int or value <= 0)
-           for value in (before_preset_id, after_preset_id)):
-        raise StudioIntentError("Case reference needs valid Preset IDs.")
+    if type(before_preset_id) is not int or before_preset_id <= 0 or after_preset_id is not None:
+        raise StudioIntentError("A Case reference may only detach an existing Preset.")
     return {"op": "case_preset_reference", "case_id": case_id,
             "before_preset_id": before_preset_id, "after_preset_id": after_preset_id}
 
