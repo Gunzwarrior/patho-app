@@ -1419,14 +1419,45 @@ def _validate_general_configuration(conn):
     SQLite foreign keys cannot express every one of those logical ownership
     relationships, so this is deliberately candidate-wide.
     """
+    # Active orphan/ad-hoc Blocks are eligible for new work just like Blocks
+    # reached through a Preset.  Validate their availability graph globally;
+    # checking only active Presets would allow a future ad-hoc composition to
+    # expose archived Fields or Snippets.
+    for block in conn.execute("SELECT id FROM Blocks WHERE is_archived=0"):
+        inactive_fields = conn.execute(
+            """SELECT 1 FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+               WHERE bf.block_id=? AND f.is_archived=1 LIMIT 1""", (block["id"],)
+        ).fetchone()
+        template_sources = [row[0] for row in conn.execute(
+            """SELECT macro_template FROM Blocks WHERE id=?
+               UNION ALL SELECT micro_template FROM Blocks WHERE id=?
+               UNION ALL SELECT conclusion_template FROM Blocks WHERE id=?
+               UNION ALL SELECT context_template FROM Blocks WHERE id=?
+               UNION ALL SELECT title_fragment_template FROM Blocks WHERE id=?
+               UNION ALL SELECT conclusion_label_template FROM Blocks WHERE id=?""",
+            (block["id"],) * 6,
+        )]
+        template_sources.extend(row[0] for row in conn.execute(
+            """SELECT f.conclusion_addendum_template FROM Block_Fields bf
+               JOIN Fields f ON f.id=bf.field_id WHERE bf.block_id=?""", (block["id"],)
+        ))
+        archived_snippets = database._snippet_shortcuts(template_sources)
+        if inactive_fields or any(
+            row["is_archived"] for shortcut in archived_snippets
+            if (row := conn.execute("SELECT is_archived FROM Snippets WHERE shortcut=?", (shortcut,)).fetchone())
+        ):
+            raise ChangeError("An active Block cannot resolve archived Fields or Snippets.")
+
     preset_blocks = {}
-    for preset in conn.execute("SELECT id FROM Presets"):
+    for preset in conn.execute("SELECT id FROM Presets WHERE is_archived=0"):
         links = [dict(row) for row in conn.execute(
-            """SELECT pb.*, b.is_table FROM Preset_Blocks pb JOIN Blocks b ON b.id=pb.block_id
+            """SELECT pb.*, b.is_table, b.is_archived AS block_is_archived FROM Preset_Blocks pb JOIN Blocks b ON b.id=pb.block_id
                WHERE pb.preset_id=? ORDER BY pb.sort_order""", (preset["id"],)
         )]
         if not links:
             raise ChangeError("A Preset must retain at least one Block.")
+        if any(link["block_is_archived"] for link in links):
+            raise ChangeError("An active Preset cannot resolve archived Blocks.")
         positions = [link["sort_order"] for link in links]
         display = [link["display_order"] for link in links]
         # These are instance identifiers / display positions, not list array
@@ -1438,7 +1469,7 @@ def _validate_general_configuration(conn):
         for block in database.get_preset_blocks_on_connection(conn, preset["id"]):
             _check_widget_defaults(block)
 
-    for preset in conn.execute("SELECT id FROM Presets"):
+    for preset in conn.execute("SELECT id FROM Presets WHERE is_archived=0"):
         tokens = []
         for token in conn.execute("SELECT * FROM Quick_Type_Tokens WHERE preset_id=? ORDER BY sort_order", (preset["id"],)):
             token = dict(token)
@@ -1450,7 +1481,7 @@ def _validate_general_configuration(conn):
                 """SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
                    WHERE bf.block_id=? AND f.key=?""", (target["block_id"], token["field_key"])
             ).fetchone()
-            if field is None:
+            if field is None or field["is_archived"]:
                 raise ChangeError("Quick Type token targets an unavailable Field.")
             field = dict(field)
             if token["token_kind"] == "measurement":
@@ -1467,13 +1498,16 @@ def _validate_general_configuration(conn):
         quicktype.validate_quick_type_config(tokens)
 
     rows_seen = set()
-    for row in conn.execute("""SELECT pbr.*, b.is_table,
+    for row in conn.execute("""SELECT pbr.*, b.is_table, p.is_archived AS preset_is_archived,
                                       EXISTS(SELECT 1 FROM Preset_Blocks pb
                                              WHERE pb.preset_id=pbr.preset_id AND pb.block_id=pbr.block_id)
                                              AS has_owner
                                FROM Preset_Block_Rows pbr
-                               JOIN Blocks b ON b.id=pbr.block_id"""):
+                               JOIN Blocks b ON b.id=pbr.block_id
+                               JOIN Presets p ON p.id=pbr.preset_id"""):
         row = dict(row)
+        if row["preset_is_archived"]:
+            continue
         identity = (row["preset_id"], row["block_id"], row["sort_order"])
         if identity in rows_seen or not row["is_table"] or not row["has_owner"]:
             raise ChangeError("Table row ownership is invalid.")
@@ -1494,7 +1528,7 @@ def _validate_general_configuration(conn):
                 raise ChangeError("Table row has no effective Field default.")
             contract.field_value(field, _native_stored(field, value))
 
-    for block in conn.execute("SELECT id FROM Blocks"):
+    for block in conn.execute("SELECT id FROM Blocks WHERE is_archived=0"):
         bindings = [dict(row) for row in conn.execute("""SELECT f.key, bf.sort_order FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
                                                         WHERE bf.block_id=?""", (block["id"],))]
         fields = {row["key"] for row in bindings}
@@ -1508,7 +1542,7 @@ def _validate_general_configuration(conn):
             for key, values in ((rule["field_a_key"], rule["field_a_values"]),
                                 (rule["field_b_key"], rule["field_b_values"])):
                 field = conn.execute("SELECT * FROM Fields WHERE key=?", (key,)).fetchone()
-                if field is None:
+                if field is None or field["is_archived"]:
                     raise ChangeError("Consistency rule Field is unavailable.")
                 for value in values:
                     contract.field_value(dict(field), value)
@@ -1682,6 +1716,13 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
             if content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate)) != base_hash:
                 raise contract.PackageError("stale")
             guard = local_review_guard(candidate)
+            # Lifecycle intents are expanded on the private candidate before
+            # anything is written: archive has its upward closure, restore
+            # includes required archived dependencies, and deletion lists its
+            # mechanical cleanup/detachments.  This is deliberately enforced
+            # below the future UI layer as well as exposed by content_studio.
+            import content_studio
+            operations = _general_normalize(content_studio.expand_lifecycle_operations(operations, candidate))
             with _access_scope(candidate):
                 before_rows = _general_rows(candidate)
                 before_presets, before_pending = _capture(candidate)
@@ -1718,6 +1759,8 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
     except (ChangeError, contract.PackageError):
         raise
     except Exception as error:
+        if error.__class__.__name__ == "StudioIntentError":
+            raise ChangeError(str(error)) from None
         raise ChangeError("Content Studio candidate could not be prepared.", local=str(error)) from None
 
 
@@ -1760,6 +1803,9 @@ def _apply_generalized_review(review, *, db_name=None):
             if inverse_id is None:
                 operations = _general_normalize(review.operations)
                 if operations != review.operations:
+                    raise ChangeError("This review is invalid. Run a new review.")
+                import content_studio
+                if _general_normalize(content_studio.expand_lifecycle_operations(operations, conn)) != operations:
                     raise ChangeError("This review is invalid. Run a new review.")
                 refs = _general_case_references(conn, operations)
             else:

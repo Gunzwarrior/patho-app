@@ -8,6 +8,8 @@ only read the fixture database.
 import pytest
 import content_changes
 import content_editing
+import content_snapshot
+import content_studio
 import database as db_module
 import composition
 from test_stage5_packages import graph, run
@@ -50,11 +52,56 @@ def _button_by_label(app, label):
     return next(widget for widget in app.button if widget.label == label)
 
 
+def _snapshot_hash(path):
+    return content_snapshot.content_snapshot_hash(content_snapshot.export_content_snapshot(path))
+
+
 def _reopen_case(app, case_number):
     app.session_state["_reopen_case_number"] = case_number
     app.session_state["_do_case_reopen"] = True
     app.run()
     assert not app.exception
+
+
+def test_reopen_archived_pending_preset_is_case_local_not_new_choice(mutable_workspace, mutable_db):
+    preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
+    assert db_module.save_case("ARCHIVED-REOPEN", preset["id"], "", {}, "<p>draft</p>")
+    content_editing.record_initial_snapshot("a" * 64)
+    review = content_studio.review(
+        [content_studio.operation("archive", "Presets", "dai")], _snapshot_hash(mutable_db),
+        summary="archive pending preset", db_name=mutable_db,
+    )
+    content_changes.apply_review(review, db_name=mutable_db)
+
+    _reopen_case(mutable_workspace, "ARCHIVED-REOPEN")
+    selector = mutable_workspace.selectbox(key="preset_select")
+    assert selector.value == preset["id"] and "Appendice (dai)" in selector.options
+    mutable_workspace.session_state["_do_workspace_reset"] = True
+    mutable_workspace.run()
+    assert "Appendice (dai)" not in mutable_workspace.selectbox(key="preset_select").options
+
+
+def test_reopen_pending_case_resolves_archived_ad_hoc_block_under_active_preset(mutable_workspace, mutable_db):
+    """Saved composition, rather than Preset lifecycle state, authorizes legacy resolution."""
+    dai = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
+    ad_hoc = next(block for block in db_module.get_preset_blocks(_preset_id("vb"))
+                  if block["key"] == "vesicule_biliaire")
+    structured = {
+        "block_instances": [{"block_id": ad_hoc["block_id"], "instance_no": 700}],
+        "blocks": {"vesicule_biliaire#700": {}},
+    }
+    assert db_module.save_case("ACTIVE-PRESET-ARCHIVED-AD-HOC", dai["id"], "", structured, "<p>draft</p>")
+    content_editing.record_initial_snapshot("a" * 64)
+    review = content_studio.review(
+        [content_studio.operation("archive", "Blocks", "vesicule_biliaire")], _snapshot_hash(mutable_db),
+        summary="archive cross-preset ad hoc block", db_name=mutable_db,
+    )
+    content_changes.apply_review(review, db_name=mutable_db)
+    assert db_module.get_preset_by_id(dai["id"])["is_archived"] == 0
+
+    _reopen_case(mutable_workspace, "ACTIVE-PRESET-ARCHIVED-AD-HOC")
+
+    assert mutable_workspace.session_state["_case_block_instances"] == structured["block_instances"]
 
 
 def test_package_decimal_zero_preview_matches_fresh_workspace(mutable_db):
@@ -374,6 +421,34 @@ class TestSaveAndSafetyGates:
         assert any("frozen" in info.value for info in mutable_workspace.info)
         assert any("frozen report" in markdown.value for markdown in mutable_workspace.markdown)
         assert not any("CURRENT TEMPLATE MUST NOT RENDER" in markdown.value for markdown in mutable_workspace.markdown)
+
+    def test_deleted_preset_validated_case_reopens_frozen_and_cannot_return_to_pending(self, mutable_workspace, mutable_db):
+        preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
+        frozen_html = "<p>frozen after preset deletion</p>"
+        assert db_module.save_case(
+            "VALIDATED-DELETED-PRESET-UI", preset["id"], "", {}, frozen_html, status="validated"
+        )
+        content_editing.record_initial_snapshot("a" * 64)
+        review = content_studio.review(
+            [content_studio.operation("delete", "Presets", "dai")],
+            _snapshot_hash(mutable_db), summary="delete validated case preset", db_name=mutable_db,
+        )
+        content_changes.apply_review(review, db_name=mutable_db)
+        assert db_module.get_case_by_number("VALIDATED-DELETED-PRESET-UI")["preset_id"] is None
+
+        _reopen_case(mutable_workspace, "VALIDATED-DELETED-PRESET-UI")
+
+        assert any("frozen after preset deletion" in markdown.value for markdown in mutable_workspace.markdown)
+        assert not any("references a preset that no longer exists" in error.value for error in mutable_workspace.error)
+        generation = mutable_workspace.session_state["_form_generation"]
+        mutable_workspace.text_input(key=f"return_pending_reason_{generation}").set_value("needs a live draft").run()
+        mutable_workspace.checkbox(key=f"return_pending_confirm_{generation}").set_value(True).run()
+        _button_by_label(mutable_workspace, "↩️ Return to Pending").click().run()
+
+        saved = db_module.get_case_by_number("VALIDATED-DELETED-PRESET-UI")
+        assert saved["status"] == "validated"
+        assert saved["rendered_html"] == frozen_html
+        assert any("Could not return this case to pending" in error.value for error in mutable_workspace.error)
 
     def test_new_case_button_leaves_frozen_validated_view(self, mutable_workspace):
         preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")

@@ -72,10 +72,19 @@ def render_report(conn, preset, blocks, overrides, *, clinical_info="", structur
     }
 
 
-def render_block_entry(block, values, total, conn=None, strict=False):
+def render_block_entry(block, values, total, conn=None, strict=False, snippet_resolver=None):
     """Workspace and previews share header, body, conclusion and rule evaluation."""
     values = widget_values(block, values)
-    resolver = None if conn is None else lambda key: _snippet_from_connection(conn, key)
+    if snippet_resolver is not None:
+        resolver = snippet_resolver
+    elif conn is not None:
+        resolver = lambda key: _snippet_from_connection(conn, key)
+    else:
+        def resolver(key):
+            snippet = db.get_snippet_by_shortcut(
+                key, include_archived=bool(block.get("_allow_archived_dependencies"))
+            )
+            return snippet["expansion"] if snippet else f"[SNIPPET NOT FOUND: {key}]"
     micro, conclusion = rendering.render_block(block, values, total, resolver, strict)
     header, _, _ = rendering.render_context_fragments(block, values, resolver, strict)
     return (

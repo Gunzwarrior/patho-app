@@ -273,6 +273,49 @@ def migrate_schema(db_name=None):
             conn.execute(
                 "INSERT INTO Schema_Migrations (name) VALUES (?)", (stage6_history_repair_marker,)
             )
+
+        # Explicit saved composition now fingerprints the presence of its
+        # exact Preset_Block link, so a later unlink/relink is acknowledged
+        # even when its overrides are empty. An old-format match proves
+        # freshness only for legacy composition (no saved instances): its
+        # instance list was derived from the link graph itself. An explicit
+        # composition did not persist whether an exact empty-override link
+        # ever existed, so it is irreducibly ambiguous and must remain stale.
+        # Validated Cases and their frozen history are intentionally never
+        # touched.
+        link_fingerprint_marker = "stage6_explicit_preset_link_fingerprint_v2"
+        if not conn.execute(
+            "SELECT 1 FROM Schema_Migrations WHERE name = ?", (link_fingerprint_marker,)
+        ).fetchone():
+            prior_unsafe_marker = conn.execute(
+                "SELECT 1 FROM Schema_Migrations WHERE name = ?",
+                ("stage6_explicit_preset_link_fingerprint_v1",),
+            ).fetchone()
+            for case in conn.execute(
+                "SELECT id,preset_id,structured_input,content_fingerprint FROM Cases WHERE status='pending'"
+            ).fetchall():
+                try:
+                    structured = json.loads(case["structured_input"] or "{}")
+                    if structured.get("block_instances") is not None:
+                        # A database that ran the superseded v1 migration may
+                        # already carry an unsafe rebaseline. Clear only its
+                        # metadata so the normal fingerprint comparison fails
+                        # closed; otherwise retain the old hash, which also
+                        # differs from the new link-aware calculation.
+                        if prior_unsafe_marker:
+                            conn.execute("UPDATE Cases SET content_fingerprint=NULL WHERE id=?", (case["id"],))
+                        continue
+                    legacy = compute_case_content_fingerprint(
+                        case["preset_id"], structured, conn, include_preset_link=False
+                    )
+                    if legacy != case["content_fingerprint"]:
+                        continue
+                    current = compute_case_content_fingerprint(case["preset_id"], structured, conn)
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if current != legacy:
+                    conn.execute("UPDATE Cases SET content_fingerprint=? WHERE id=?", (current, case["id"]))
+            conn.execute("INSERT INTO Schema_Migrations (name) VALUES (?)", (link_fingerprint_marker,))
         conn.commit()
     finally:
         conn.close()
@@ -295,10 +338,18 @@ def load_table_as_df(table_name):
     return df
 
 
-def get_all_presets():
-    """Returns all presets, ordered for a browsable dropdown (category, then name)."""
+def get_all_presets(include_archived=False):
+    """Return Presets suitable for a new selection by default.
+
+    Archived content is deliberately still addressable by stable ID for a
+    saved draft, but must not leak back into the new-case or Quick Type
+    pickers.  Callers reconstructing a persisted Case opt in explicitly.
+    """
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM Presets ORDER BY category, name").fetchall()
+    query = "SELECT * FROM Presets"
+    if not include_archived:
+        query += " WHERE is_archived = 0"
+    rows = conn.execute(query + " ORDER BY category, name").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -316,7 +367,7 @@ def get_preset_by_id_on_connection(conn, preset_id):
     return dict(row) if row else None
 
 
-def get_preset_blocks(preset_id):
+def get_preset_blocks(preset_id, *, include_archived=False):
     """
     Returns the ordered list of blocks for a preset. Each block dict is enriched
     with 'fields': an ordered list of resolved field dicts, where the value for
@@ -333,13 +384,15 @@ def get_preset_blocks(preset_id):
            FROM Preset_Blocks pb
            JOIN Blocks b ON b.id = pb.block_id
            WHERE pb.preset_id = ?
-           ORDER BY pb.sort_order""",
-        (preset_id,),
+             AND (? OR b.is_archived = 0)
+           ORDER BY pb.display_order, pb.sort_order""",
+        (preset_id, include_archived),
     ).fetchall()
 
     blocks = []
     for pb in pb_rows:
         block = dict(pb)
+        block["_allow_archived_dependencies"] = bool(include_archived)
         preset_overrides = json.loads(block["field_overrides"]) if block["field_overrides"] else {}
 
         field_rows = conn.execute(
@@ -349,8 +402,9 @@ def get_preset_blocks(preset_id):
                FROM Block_Fields bf
                JOIN Fields f ON f.id = bf.field_id
                WHERE bf.block_id = ?
+                 AND (? OR f.is_archived = 0)
                ORDER BY bf.sort_order""",
-            (block["block_id"],),
+            (block["block_id"], include_archived),
         ).fetchall()
 
         resolved_fields = []
@@ -388,21 +442,23 @@ def get_preset_blocks_on_connection(conn, preset_id):
     pb_rows = conn.execute(
         """SELECT pb.block_id, pb.sort_order, pb.field_overrides, b.*
            FROM Preset_Blocks pb JOIN Blocks b ON b.id = pb.block_id
-           WHERE pb.preset_id = ? ORDER BY pb.sort_order""", (preset_id,)
+           WHERE pb.preset_id = ? ORDER BY pb.display_order, pb.sort_order""", (preset_id,)
     ).fetchall()
     return [_resolved_block_on_connection(conn, dict(row), preset_id, row["sort_order"])
             for row in pb_rows]
 
 
-def get_block_on_connection(conn, block_id, preset_id=None, instance_no=None):
+def get_block_on_connection(conn, block_id, preset_id=None, instance_no=None, *, include_archived=True):
     """Load one Block with fields for a saved composed-case instance."""
-    row = conn.execute("SELECT b.id AS block_id, b.* FROM Blocks b WHERE b.id = ?", (block_id,)).fetchone()
+    row = conn.execute("SELECT b.id AS block_id, b.* FROM Blocks b WHERE b.id = ? AND (? OR b.is_archived = 0)",
+                       (block_id, include_archived)).fetchone()
     if not row:
         return None
     return _resolved_block_on_connection(conn, dict(row), preset_id, instance_no)
 
 
 def _resolved_block_on_connection(conn, block, preset_id, instance_no):
+    block.setdefault("_allow_archived_dependencies", True)
     overrides = {}
     if preset_id is not None and instance_no is not None:
         row = conn.execute(
@@ -431,10 +487,11 @@ def _resolved_block_on_connection(conn, block, preset_id, instance_no):
     return block
 
 
-def get_all_blocks():
+def get_all_blocks(include_archived=False):
     """Non-table Blocks available for ad hoc case composition."""
     conn = get_db_connection()
-    rows = conn.execute("SELECT id, key, name FROM Blocks WHERE is_table = 0 ORDER BY name").fetchall()
+    rows = conn.execute("SELECT id, key, name FROM Blocks WHERE is_table = 0 AND (? OR is_archived = 0) ORDER BY name",
+                        (include_archived,)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
@@ -602,14 +659,16 @@ def _pending_case_count_for_block_ids(conn, block_ids, pending_rows):
     return impacted
 
 
-def get_block_by_id(block_id):
+def get_block_by_id(block_id, *, include_archived=True):
     """One bare Block with Field/Block_Field defaults, never Preset overrides."""
     conn = get_db_connection()
-    row = conn.execute("SELECT b.id AS block_id, b.* FROM Blocks b WHERE b.id = ?", (block_id,)).fetchone()
+    row = conn.execute("SELECT b.id AS block_id, b.* FROM Blocks b WHERE b.id = ? AND (? OR b.is_archived = 0)",
+                       (block_id, include_archived)).fetchone()
     if not row:
         conn.close()
         return None
     block = dict(row)
+    block["_allow_archived_dependencies"] = bool(include_archived)
     field_rows = conn.execute(
         """SELECT bf.*, f.key AS field_key, f.label AS field_label, f.type AS field_type,
                   f.options AS field_options, f.default_value AS field_default,
@@ -710,10 +769,11 @@ def get_conclusion_group_label(block_keys):
     return row["combined_label"] if row else None
 
 
-def get_snippet_by_shortcut(shortcut):
+def get_snippet_by_shortcut(shortcut, *, include_archived=False):
     """Looks up a single Snippet by its shortcut key. Returns a dict or None."""
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM Snippets WHERE shortcut = ?", (shortcut,)).fetchone()
+    row = conn.execute("SELECT * FROM Snippets WHERE shortcut = ? AND (? OR is_archived = 0)",
+                       (shortcut, include_archived)).fetchone()
     conn.close()
     return dict(row) if row else None
 
@@ -814,7 +874,7 @@ def _snippet_shortcuts(templates):
     return template_analysis.snippet_shortcuts(templates)
 
 
-def compute_case_content_fingerprint(preset_id, structured_input, conn=None):
+def compute_case_content_fingerprint(preset_id, structured_input, conn=None, *, include_preset_link=True):
     """Hash only the currently-rendering content relevant to one Case.
 
     Saved composition is authoritative, including order and duplicate
@@ -833,7 +893,7 @@ def compute_case_content_fingerprint(preset_id, structured_input, conn=None):
         instances = data.get("block_instances")
         if instances is None:
             instances = [dict(row) for row in conn.execute(
-                "SELECT block_id, sort_order AS instance_no FROM Preset_Blocks WHERE preset_id = ? ORDER BY sort_order",
+                "SELECT block_id, sort_order AS instance_no FROM Preset_Blocks WHERE preset_id = ? ORDER BY display_order, sort_order",
                 (preset_id,),
             )]
         blocks = []
@@ -865,9 +925,15 @@ def compute_case_content_fingerprint(preset_id, structured_input, conn=None):
                 (preset_id, block_id, instance.get("instance_no")),
             ).fetchone()
             block_data["fields"] = [dict(row) for row in field_rows]
-            block_data["preset_field_overrides"] = (
-                json.loads(pb["field_overrides"]) if pb and pb["field_overrides"] else {}
-            )
+            # Explicit saved composition owns its specimen order, but it can
+            # still inherit the exact matching Preset_Block relationship's
+            # overrides.  Preserve whether that relationship exists as well:
+            # unlinking/relinking it is a real pending-draft dependency even
+            # where its effective override object happens to be empty.
+            preset_overrides = json.loads(pb["field_overrides"]) if pb and pb["field_overrides"] else {}
+            if include_preset_link:
+                block_data["preset_link"] = {"field_overrides": preset_overrides} if pb else None
+            block_data["preset_field_overrides"] = preset_overrides
             blocks.append(block_data)
         snippets = []
         if all_shortcuts:
@@ -919,14 +985,28 @@ def get_case_status_history(case_number):
 
 
 def return_case_to_pending(case_number, reason):
-    """The only allowed validated -> pending transition, with an audit row."""
+    """The only allowed validated -> pending transition, with an audit row.
+
+    A validated HTML artifact survives permanent content deletion, but a live
+    draft must be reconstructable.  Preflight the exact saved structured
+    inputs inside this transaction before changing status; archived rows are
+    intentionally still resolvable by that path, deleted rows are not.
+    """
     if not reason or not reason.strip():
         return False
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        case = conn.execute("SELECT id, status FROM Cases WHERE case_number = ?", (case_number,)).fetchone()
+        case = conn.execute("SELECT * FROM Cases WHERE case_number = ?", (case_number,)).fetchone()
         if not case or case["status"] != "validated":
+            return False
+        try:
+            import editor_preview
+            # The helper intentionally rejects validated artifacts; use an
+            # in-memory pending view solely for reconstruction preflight.
+            editor_preview.render_saved_case(conn, {**dict(case), "status": "pending"}, strict=True)
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            conn.rollback()
             return False
         conn.execute(
             "UPDATE Cases SET status = 'pending', pending_reason = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",

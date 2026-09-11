@@ -46,7 +46,7 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-376 tests currently exist; the Stage 5 completion run passed in bounded
+414 tests currently exist; the Stage 6 checkpoint 3 run passed in bounded
 terminal shards as documented below.
 
 ## Structure
@@ -67,6 +67,8 @@ patho-app/
     test_stage5_transactions.py # atomic Apply, stale guards and audited inverses
     test_stage5_ui.py        # package Editor flow and restricted report HTML
     test_stage6_schema.py    # additive lifecycle/order storage and v1/v2 compatibility
+    test_stage6_candidates.py # generalized internal candidate/audit/inverse coverage
+    test_stage6_lifecycle.py # lifecycle closure, archived resolution and deletion safety
     golden_helpers.py        # shared render-a-preset-at-defaults helper
     golden_fixtures/         # frozen known-good plain-text output
     regenerate_golden.py     # deliberate, human-reviewed fixture updates
@@ -434,6 +436,34 @@ semantic cleanup breakage (Preset, Quick Type, table-row and default paths),
 Case-reference transition/audit-identity refusal, and inverse rollback after
 materialisation failure. Focused Stage 6 candidates, Stage 2/4/schema, and
 Stage 5 package/transaction compatibility selections pass.
+
+## Stage 6 checkpoint 3 — lifecycle and archived resolution
+
+`test_stage6_lifecycle.py` proves upward archive closure, reverse restore
+prerequisites, persisted-pending deletion blockers, active new-work exclusion,
+archived pending-case reconstruction (including Snippets), validated Preset
+detachment/Worklist fallback/inverse, refused reconstruction on return to
+pending after permanent deletion, and the `display_order` split between legacy
+default composition and explicit saved composition. Workspace AppTests prove
+that an archived Preset appears only while reopening its own pending Case and
+is removed by the next fresh-case reset; an active-Preset pending Case still
+resolves an archived ad-hoc/cross-Preset Block; and a validated Case detached
+by permanent Preset deletion still opens as its frozen report while its
+attempted return to pending is refused without changing the artifact. Candidate
+tests also require every active standalone Block to have active Field/Snippet
+dependencies. Lifecycle tests freeze explicit-composition link/unlink impact,
+executable-plan summary detachments, and the pending-Case deletion-eligibility
+Apply race. Fingerprint-migration tests permit automatic upgrade only for
+provably safe legacy no-instance drafts; they preserve already-stale drafts,
+leave ambiguous explicit drafts unacknowledged, fail closed if the superseded
+v1 baseline ran, and never touch validated Cases/history.
+
+Focused Stage 2 safety/lifecycle coverage passed **29 tests in 5.94 s**. The
+full isolated suite passed **414 tests in 259.52 s**. Changed Python files compiled
+and `git diff --check` passed. Tests use only temporary databases; no seed
+content, golden fixture, operational database, or accepted review artifact was
+changed. An isolated temporary-database Streamlit boot returned HTTP 200 for
+`/`, `/workspace`, `/worklist`, `/editor`, and `/manager`, then was removed.
 
 ### Final contract hardening, regression, and real-model acceptance
 

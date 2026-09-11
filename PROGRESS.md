@@ -7,6 +7,57 @@ record from earlier rounds.
 
 ## Current status
 
+**Stage 6 checkpoint 3 — complete and approved for commit.** The
+candidate service now expands every base lifecycle action through the approved
+read-only Content Studio planner: archive follows the upward active-dependency
+closure, restoration brings back archived prerequisites, and deletion refuses
+persisted pending dependencies while explicitly cleaning owned configuration
+and detaching every validated Case reference for a Preset deletion. The final
+graph accepts only usable active Presets/Quick Type/table/consistency paths;
+archived data and relationships remain physically intact for saved drafts.
+
+Normal Workspace and Quick Type selection now expose active Presets/Blocks
+only. Reopening a pending Case injects its archived Preset just for that case
+generation and resolves archived Blocks, Fields and Snippets by their saved
+identities; a new-case reset removes it again. `display_order` now controls
+new/default resolution while saved explicit instance lists retain their order.
+Archive-only changes leave pending fingerprints unchanged; actual legacy
+default-order changes surface ordinary pending impact. Validated → pending
+preflights full reconstruction inside its transaction and refuses without a
+status change when permanent deletion made it impossible. Worklist continues
+to use frozen Preset labels after detachment. Reopening any validated Case now
+takes the frozen-artifact path before live Preset lookup, so a permanently
+deleted Preset cannot hide its validated report; its attempted return to
+pending reaches the existing reconstruction preflight and remains refused.
+
+CP3 review remediation makes saved pending composition—not Preset archive
+state—the archived-resolution authority, validates every active Block's
+Field/Snippet availability even when orphaned, and fingerprints explicit
+Preset-Block link presence so unlink/relink requires draft acknowledgement.
+Lifecycle summaries now distinguish direct dependents, archive closure,
+restore prerequisites, deletion cleanup, validated detachments, blockers, and
+refusal reasons; validated detachments appear only when an executable Preset
+deletion plan actually includes them; shared candidate expansion still
+enforces them. The explicit deletion-eligibility
+race is guarded at Apply by the existing pending-set local guard. Legacy
+fingerprint migration now upgrades only no-instance compositions whose old
+fingerprint matches current old-format content. Every explicit composition is
+left requiring acknowledgement because its historic link presence cannot be
+proved; a database that ran the superseded v1 baseline is explicitly failed
+closed for those drafts.
+
+`tests/test_stage6_lifecycle.py` adds focused lifecycle summary, explicit-link
+impact, conservative fingerprint-baseline, and deletion-race tests; Workspace
+AppTests cover archived Preset and active-Preset/archived-ad-hoc reopening;
+candidate tests cover orphan active Block dependency rejection. Focused Stage
+2 safety/lifecycle coverage passed 29 tests; the final isolated suite passed
+414 tests in 259.52 s. Changed Python files compile and `git diff --check`
+passes.
+No operational database, seed content, golden fixtures, or accepted review
+artifact was opened or changed. An isolated temporary-database Streamlit boot
+returned HTTP 200 for all five routes, then its server/database were removed.
+Checkpoint 4 has not begun.
+
 **Stage 6 checkpoint 2 remediation — complete locally and awaiting approval.**
 The independent review's blocking findings are addressed without extending
 into Checkpoint 3: generalized inverses now refuse pending-dependent removals

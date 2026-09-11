@@ -32,7 +32,7 @@ def _preserve_fields_for_composition(blocks, form_generation):
     }
 
 
-def resolve_case_blocks(preset_blocks, block_instances):
+def resolve_case_blocks(preset_blocks, block_instances, *, include_archived=False):
     """Attach immutable instance identity and saved display order to Blocks.
 
     Stage 0 only accepts the instances derived from a Preset: therefore an
@@ -49,7 +49,7 @@ def resolve_case_blocks(preset_blocks, block_instances):
     for instance in block_instances:
         block = defaults.get((instance["block_id"], instance["instance_no"]))
         if not block:
-            block = db.get_block_by_id(instance["block_id"])
+            block = db.get_block_by_id(instance["block_id"], include_archived=include_archived)
         if not block:
             raise ValueError(
                 f"Block instance {instance['block_id']}#{instance['instance_no']} "
@@ -226,6 +226,22 @@ if st.session_state.pop("_do_case_reopen", False):
 
     if not case:
         st.session_state["_reopen_error"] = f"⚠️ No case found with number '{case_number_to_load}'."
+    elif case["status"] == "validated":
+        # A validated report is a frozen artifact.  Reopening it must not
+        # resolve its former live Preset or any of its dependencies: a later
+        # permanent delete intentionally detaches ``preset_id`` while keeping
+        # the report and frozen identity available for review.
+        _clear_case_scoped_state()
+        gen = st.session_state["_form_generation"]
+        st.session_state[f"case_id_{gen}"] = case["case_number"]
+        st.session_state[f"clin_info_{gen}"] = case["clinical_info"] or ""
+        st.session_state["_loaded_case_number"] = case["case_number"]
+        st.session_state["_validated_case"] = case
+        st.session_state["_saved_content_fingerprint"] = case.get("content_fingerprint")
+        st.session_state["_saved_rendered_html"] = case.get("rendered_html") or ""
+        st.session_state["_reopen_success"] = (
+            f"📂 Case '{case['case_number']}' opened as a frozen validated record."
+        )
     else:
         preset = db.get_preset_by_id(case["preset_id"])
         if not preset:
@@ -242,25 +258,18 @@ if st.session_state.pop("_do_case_reopen", False):
             st.session_state["preset_select"] = preset["id"]
             st.session_state["_last_selected_preset_id"] = preset["id"]
 
-            if case["status"] == "validated":
-                # A validated report is an artifact, not a live rendering.
-                # Keep only its saved HTML available until an explicit audited
-                # transition returns it to pending.
-                st.session_state["_validated_case"] = case
-                st.session_state["_reopen_success"] = f"📂 Case '{case['case_number']}' opened as a frozen validated record."
-                # The page stops before live Workspace widgets below; the
-                # remaining restoration is harmless state preparation if the
-                # case is explicitly returned to pending on a later rerun.
-
             st.session_state["_saved_content_fingerprint"] = case.get("content_fingerprint")
             st.session_state["_saved_rendered_html"] = case.get("rendered_html") or ""
 
-            preset_blocks = db.get_preset_blocks(preset["id"])
+            # A saved pending Case retains its archived dependency graph.  Its
+            # Preset is injected only into this generation below; it never
+            # becomes a generally selectable new-case option.
+            preset_blocks = db.get_preset_blocks(preset["id"], include_archived=True)
             block_instances = case["structured_input"].get(
                 "block_instances", composition.derive_block_instances(preset_blocks)
             )
             try:
-                case_blocks = resolve_case_blocks(preset_blocks, block_instances)
+                case_blocks = resolve_case_blocks(preset_blocks, block_instances, include_archived=True)
             except (KeyError, TypeError, ValueError) as error:
                 st.session_state["_reopen_error"] = (
                     f"⚠️ Case '{case_number_to_load}' has an unavailable block instance: {error}"
@@ -448,6 +457,12 @@ c1, c2, c3 = st.columns([1, 2, 1])
 with c1: case_id = st.text_input("📁 Case ID", key=f"case_id_{form_gen}")
 with c2:
     presets = db.get_all_presets()
+    _loaded_pending = st.session_state.get("_loaded_case_number")
+    _selected_for_saved_case = st.session_state.get("preset_select")
+    if _loaded_pending and _selected_for_saved_case is not None:
+        _saved_preset = db.get_preset_by_id(_selected_for_saved_case)
+        if _saved_preset and _saved_preset.get("is_archived"):
+            presets.append(_saved_preset)
     presets_by_id = {preset["id"]: preset for preset in presets}
     # Streamlit serialises selectbox display strings to the browser even when
     # the Python-side value is the stable Preset ID. If a Preset is renamed in
@@ -549,11 +564,20 @@ st.markdown("---")
 
 if selected_preset_id is not None:
     preset = presets_by_id[selected_preset_id]
-    preset_blocks = db.get_preset_blocks(preset["id"])
+    # Saved pending composition, not the lifecycle state of its Preset, is the
+    # authority for resolving historical dependencies.  A Case may have an
+    # active Preset but an archived ad-hoc/cross-Preset Block in its explicit
+    # saved instances.  New work never sets ``_loaded_case_number``.
+    _reopening_saved_pending = bool(st.session_state.get("_loaded_case_number"))
+    preset_blocks = db.get_preset_blocks(preset["id"], include_archived=_reopening_saved_pending)
     if "_case_block_instances" not in st.session_state:
         st.session_state["_case_block_instances"] = composition.derive_block_instances(preset_blocks)
     block_instances = st.session_state["_case_block_instances"]
-    blocks = resolve_case_blocks(preset_blocks, block_instances)
+    blocks = resolve_case_blocks(preset_blocks, block_instances, include_archived=_reopening_saved_pending)
+
+    def _workspace_snippet(shortcut):
+        snippet = db.get_snippet_by_shortcut(shortcut, include_archived=_reopening_saved_pending)
+        return snippet["expansion"] if snippet else f"[SNIPPET NOT FOUND: {shortcut}]"
 
     with st.expander("🧩 Compose specimens"):
         st.caption("Réordonnez les spécimens ou retirez ceux qui ne font pas partie de ce cas.")
@@ -664,6 +688,7 @@ if selected_preset_id is not None:
         preset, blocks,
         [block_ctx_overrides.get((b["block_id"], b["instance_no"]), {}) for b in blocks],
         st.session_state.get(f"clin_info_{form_gen}", ""),
+        resolver=_workspace_snippet,
     )
     if disabled_title:
         st.session_state[f"final_title_edit_{form_gen}"] = auto_title
@@ -756,7 +781,7 @@ if selected_preset_id is not None:
         # three are already folded into `overrides` by this point. See
         # consistency.py / PROGRESS.md for the full design reasoning.
         micro_entry, conclusion_entry, warnings = editor_preview.render_block_entry(
-            block, overrides, total_specimens,
+            block, overrides, total_specimens, snippet_resolver=_workspace_snippet,
         )
         all_consistency_warnings.extend(warnings)
         micro_blocks.append(micro_entry)
@@ -831,6 +856,7 @@ if selected_preset_id is not None:
 
     raw_compiled_micro, raw_compiled_conc, conflicts = editor_preview.compile_report_parts(
         micro_blocks, conclusion_entries, st.session_state.get("wildcard_notes", []),
+        resolver=_workspace_snippet,
     )
     if conflicts:
         st.warning(

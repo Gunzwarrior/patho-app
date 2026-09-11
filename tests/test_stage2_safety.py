@@ -86,6 +86,90 @@ def test_fingerprint_schema_upgrade_runs_once_without_masking_later_content_chan
     assert database.get_case_by_number("FP-MIGRATION-1")["content_fingerprint"] == upgraded
 
 
+def test_preset_link_fingerprint_upgrade_is_conservative_for_legacy_pending_cases(mutable_db):
+    gastric = _preset("gt")
+    appendix = _preset("dai")
+    blocks = database.get_preset_blocks(gastric["id"])
+    safe_legacy = {}
+    explicit = {"block_instances": [{"block_id": blocks[0]["block_id"], "instance_no": blocks[0]["sort_order"]}]}
+    assert database.save_case("LINK-FP-SAFE-LEGACY", appendix["id"], "", safe_legacy, "<p>safe</p>")
+    assert database.save_case("LINK-FP-AMBIGUOUS", gastric["id"], "", explicit, "<p>ambiguous</p>")
+    assert database.save_case("LINK-FP-STALE", appendix["id"], "", safe_legacy, "<p>stale</p>")
+    assert database.save_case("LINK-FP-VALIDATED", gastric["id"], "", explicit, "<p>frozen</p>", status="validated")
+    conn = database.get_db_connection()
+    safe_legacy_fingerprint = database.compute_case_content_fingerprint(
+        appendix["id"], safe_legacy, conn, include_preset_link=False
+    )
+    safe_current = database.compute_case_content_fingerprint(appendix["id"], safe_legacy, conn)
+    ambiguous_legacy = database.compute_case_content_fingerprint(
+        gastric["id"], explicit, conn, include_preset_link=False
+    )
+    # Reviewer reproduction: the exact relationship existed with empty
+    # overrides, was removed before migration, and old-format hashing cannot
+    # observe that removal because the explicit saved instance remains.
+    conn.execute(
+        "DELETE FROM Preset_Blocks WHERE preset_id=? AND block_id=? AND sort_order=?",
+        (gastric["id"], blocks[0]["block_id"], blocks[0]["sort_order"]),
+    )
+    assert database.compute_case_content_fingerprint(
+        gastric["id"], explicit, conn, include_preset_link=False
+    ) == ambiguous_legacy
+    ambiguous_current = database.compute_case_content_fingerprint(gastric["id"], explicit, conn)
+    assert ambiguous_current != ambiguous_legacy
+    conn.execute("UPDATE Cases SET content_fingerprint=? WHERE case_number='LINK-FP-SAFE-LEGACY'", (safe_legacy_fingerprint,))
+    conn.execute("UPDATE Cases SET content_fingerprint=? WHERE case_number='LINK-FP-AMBIGUOUS'", (ambiguous_legacy,))
+    conn.execute("UPDATE Cases SET content_fingerprint='already-stale' WHERE case_number='LINK-FP-STALE'")
+    validated_before = dict(conn.execute(
+        "SELECT rendered_html,content_fingerprint FROM Cases WHERE case_number='LINK-FP-VALIDATED'"
+    ).fetchone())
+    history_before = dict(conn.execute(
+        "SELECT rendered_html,content_fingerprint FROM Case_Validation_History "
+        "WHERE case_id=(SELECT id FROM Cases WHERE case_number='LINK-FP-VALIDATED')"
+    ).fetchone())
+    conn.execute("DELETE FROM Schema_Migrations WHERE name='stage6_explicit_preset_link_fingerprint_v2'")
+    conn.commit()
+    conn.close()
+
+    database.migrate_schema(mutable_db)
+
+    assert database.get_case_by_number("LINK-FP-SAFE-LEGACY")["content_fingerprint"] == safe_current
+    # The old fingerprint matches after the invisible unlink, but migration
+    # must leave it mismatched from the new link-aware fingerprint.
+    assert database.get_case_by_number("LINK-FP-AMBIGUOUS")["content_fingerprint"] == ambiguous_legacy
+    assert database.get_case_by_number("LINK-FP-STALE")["content_fingerprint"] == "already-stale"
+    assert dict(database.get_case_by_number("LINK-FP-VALIDATED"))["rendered_html"] == validated_before["rendered_html"]
+    conn = database.get_db_connection()
+    assert dict(conn.execute(
+        "SELECT rendered_html,content_fingerprint FROM Cases WHERE case_number='LINK-FP-VALIDATED'"
+    ).fetchone()) == validated_before
+    assert dict(conn.execute(
+        "SELECT rendered_html,content_fingerprint FROM Case_Validation_History "
+        "WHERE case_id=(SELECT id FROM Cases WHERE case_number='LINK-FP-VALIDATED')"
+    ).fetchone()) == history_before
+    conn.close()
+
+    database.migrate_schema(mutable_db)
+    assert database.get_case_by_number("LINK-FP-AMBIGUOUS")["content_fingerprint"] == ambiguous_legacy
+
+
+def test_preset_link_fingerprint_v2_invalidates_explicit_case_rebaselined_by_v1(mutable_db):
+    gastric = _preset("gt")
+    block = database.get_preset_blocks(gastric["id"])[0]
+    explicit = {"block_instances": [{"block_id": block["block_id"], "instance_no": block["sort_order"]}]}
+    assert database.save_case("LINK-FP-V1-AMBIGUOUS", gastric["id"], "", explicit, "<p>draft</p>")
+    conn = database.get_db_connection()
+    # Simulate the superseded v1 migration having recorded its unsafe
+    # link-aware baseline. v2 cannot recover history, so it must fail closed.
+    conn.execute("INSERT OR IGNORE INTO Schema_Migrations(name) VALUES ('stage6_explicit_preset_link_fingerprint_v1')")
+    conn.execute("DELETE FROM Schema_Migrations WHERE name='stage6_explicit_preset_link_fingerprint_v2'")
+    conn.commit()
+    conn.close()
+
+    database.migrate_schema(mutable_db)
+
+    assert database.get_case_by_number("LINK-FP-V1-AMBIGUOUS")["content_fingerprint"] is None
+
+
 def test_validated_case_is_immutable_until_explicit_audited_return(mutable_db):
     preset = _preset("dai")
     blocks = database.get_preset_blocks(preset["id"])

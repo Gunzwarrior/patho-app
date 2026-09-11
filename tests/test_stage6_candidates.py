@@ -85,7 +85,9 @@ def test_archive_restore_and_revert_preserve_physical_row(mutable_db):
     unlock()
     before = row(mutable_db, "SELECT * FROM Snippets WHERE shortcut='absence_malignite'")
     archived = review(mutable_db, [content_studio.operation("archive", "Snippets", "absence_malignite")])
-    assert archived.changes[0]["before"] == before
+    snippet_change = next(change for change in archived.changes
+                          if change["table"] == "Snippets" and change["key"] == "absence_malignite")
+    assert snippet_change["before"] == before
     revision = content_changes.apply_review(archived, db_name=mutable_db)
     assert row(mutable_db, "SELECT is_archived FROM Snippets WHERE shortcut='absence_malignite'")["is_archived"] == 1
 
@@ -159,6 +161,56 @@ def test_general_configuration_accepts_table_row_with_nullable_preset_overrides(
         content_changes._validate_general_configuration(conn)
     finally:
         conn.close()
+
+
+def test_final_graph_rejects_active_standalone_block_with_archived_snippet(mutable_db):
+    """An orphan Block is still new work and cannot resolve archived content."""
+    unlock()
+    content_changes.apply_review(review(mutable_db, [
+        content_studio.operation("create", "Snippets", "orphan_archived_snippet", {
+            "expansion": "Archived standalone phrase", "category": None,
+        }),
+    ]), db_name=mutable_db)
+    content_changes.apply_review(review(mutable_db, [
+        content_studio.operation("archive", "Snippets", "orphan_archived_snippet"),
+    ]), db_name=mutable_db)
+
+    with pytest.raises(content_changes.ChangeError, match="active Block cannot resolve archived"):
+        review(mutable_db, [
+            content_studio.operation("create", "Blocks", "orphan_archived_snippet_block", {
+                "name": "Orphan archived snippet", "macro_template": "Macro.",
+                "micro_template": "{{ snippet('orphan_archived_snippet') }}",
+                "conclusion_template": "Conclusion.", "context_template": None,
+                "title_fragment_template": None, "conclusion_label_template": None,
+            }),
+        ])
+
+
+def test_final_graph_rejects_active_standalone_block_with_archived_field(mutable_db):
+    """Field availability is checked even when no active Preset reaches the Block."""
+    unlock()
+    content_changes.apply_review(review(mutable_db, [
+        content_studio.operation("create", "Fields", "orphan_archived_field", {
+            "label": "Archived orphan Field", "type": "text", "options": None,
+            "default_value": "", "conclusion_addendum_template": None,
+        }),
+    ]), db_name=mutable_db)
+    content_changes.apply_review(review(mutable_db, [
+        content_studio.operation("archive", "Fields", "orphan_archived_field"),
+    ]), db_name=mutable_db)
+
+    with pytest.raises(content_changes.ChangeError, match="active Block cannot resolve archived"):
+        review(mutable_db, [
+            content_studio.operation("create", "Blocks", "orphan_archived_field_block", {
+                "name": "Orphan archived Field", "macro_template": "Macro.",
+                "micro_template": "Micro.", "conclusion_template": "Conclusion.",
+                "context_template": None, "title_fragment_template": None,
+                "conclusion_label_template": None,
+            }),
+            content_studio.operation("link", "Block_Fields", {
+                "block_key": "orphan_archived_field_block", "field_key": "orphan_archived_field",
+            }, {"sort_order": 0, "label_override": None, "default_override": None, "context_section": False}),
+        ])
 
 
 def test_standalone_validated_preset_detach_is_refused(mutable_db):
@@ -334,13 +386,13 @@ def test_multi_column_update_allows_one_unchanged_value(mutable_db):
     assert row(mutable_db, "SELECT expansion FROM Snippets WHERE shortcut='absence_malignite'")["expansion"] == "Updated absence phrase."
 
 
-def test_case_reference_requires_complete_matching_preset_deletion(mutable_db):
+def test_preset_deletion_expands_to_complete_matching_case_detachments(mutable_db):
     unlock()
     first = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="DETACH-ONE", status="validated"))
-    second = save_synthetic_case(mutable_db, number="DETACH-TWO", status="validated")
+    second = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="DETACH-TWO", status="validated"))
     preset, incomplete = preset_deletion_intents(mutable_db, first)
-    with pytest.raises(content_changes.ChangeError, match="Every validated Case"):
-        review(mutable_db, incomplete)
+    prepared = review(mutable_db, incomplete)
+    assert {ref["case_id"] for ref in prepared.data["case_references"]} == {first["id"], second["id"]}
     other = row(mutable_db, "SELECT id FROM Presets WHERE id<>? ORDER BY id LIMIT 1", (preset["id"],))["id"]
     raw_reattach = {"op": "case_preset_reference", "case_id": second["id"],
                     "before_preset_id": preset["id"], "after_preset_id": other}
