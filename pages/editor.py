@@ -8,6 +8,7 @@ import content_editing
 import content_changes
 import content_snapshot
 import change_packages
+import content_studio
 import database as db
 from editor_preview import render_preset_defaults
 from report_presentation import restricted_report_html
@@ -343,6 +344,383 @@ def _clear_confirmation_widgets(prefix):
             st.session_state.pop(key, None)
 
 
+# Content Studio ------------------------------------------------------------
+#
+# Keep this state intentionally distinct from the optional AI-package review.
+# A guided draft is local to its selected entity and is always replaced by a
+# newly prepared immutable candidate before Apply.
+
+def _clear_studio_review():
+    for key in ("_editor_studio_review", "_editor_studio_signature",
+                "_editor_studio_review_form_generation",
+                "_editor_studio_error", "_editor_studio_local_error"):
+        st.session_state.pop(key, None)
+    # Confirmation is the only approval-bearing review widget. Report selector
+    # state is harmless without the immutable review and is left for Streamlit
+    # to clean up after this rerun (removing it synchronously leaves stale
+    # elements in AppTest's render tree).
+    _clear_confirmation_widgets("editor_studio_review_")
+
+
+def _studio_signature(kind, target, values):
+    return json.dumps({"kind": kind, "target": target, "values": values},
+                      ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _prepare_studio_review(intents, signature, summary):
+    _clear_studio_review()
+    try:
+        snapshot = content_snapshot.export_content_snapshot()
+        review = content_studio.review(
+            intents, content_snapshot.content_snapshot_hash(snapshot), summary=summary,
+        )
+    except (content_studio.StudioIntentError, content_changes.ChangeError,
+            content_editing.ContentEditError, change_packages.PackageError) as error:
+        st.session_state["_editor_studio_error"] = str(error)
+        st.session_state["_editor_studio_local_error"] = getattr(error, "local", None)
+    else:
+        st.session_state["_editor_studio_review"] = review
+        st.session_state["_editor_studio_signature"] = signature
+        # This is intentionally separate from the review-display generation.
+        # Any form reset invalidates a frozen candidate, even if a future
+        # caller forgets to clear it before advancing the draft generation.
+        st.session_state["_editor_studio_review_form_generation"] = (
+            st.session_state.get("_editor_studio_form_generation", 0)
+        )
+        st.session_state["_editor_studio_generation"] = (
+            st.session_state.get("_editor_studio_generation", 0) + 1
+        )
+    st.rerun()
+
+
+def _show_studio_review(signature, writes_enabled):
+    review = st.session_state.get("_editor_studio_review")
+    if review is None:
+        return False
+    if (st.session_state.get("_editor_studio_review_form_generation")
+            != st.session_state.get("_editor_studio_form_generation", 0)):
+        _clear_studio_review()
+        return False
+    # A selection change must never leave a review for another stable entity
+    # visible. Once frozen, the draft is hidden, so its old values need not
+    # equal the form's initial-value fingerprint on the next rerun.
+    try:
+        review_target = json.loads(st.session_state.get("_editor_studio_signature", "{}"))["target"]
+        current_target = json.loads(signature)["target"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        review_target = current_target = None
+    if review_target != current_target:
+        _clear_studio_review()
+        return False
+    generation = st.session_state.get("_editor_studio_generation", 0)
+    prefix = f"editor_studio_review_{generation}"
+    st.subheader("Frozen Content Studio review", anchor=False)
+    _show_full_review(review, prefix)
+    if st.button("Edit draft", key=f"{prefix}_edit"):
+        _clear_studio_review()
+        st.rerun()
+    confirmed = st.checkbox(
+        "I confirm this exact reviewed candidate and its local pending-Case impact",
+        key=f"{prefix}_confirm",
+    )
+    if not writes_enabled:
+        st.warning("Apply is locked until the separate recovery snapshot gate above is complete.")
+    if st.button("Apply reviewed Content Studio change", key=f"{prefix}_apply",
+                 disabled=not (confirmed and writes_enabled)):
+        try:
+            revision_id = content_changes.apply_review(review)
+        except content_changes.StaleReviewError as error:
+            _clear_studio_review()
+            st.session_state["_editor_error"] = f"Not applied: {error} Current values were reloaded; prepare a new review."
+        except (content_changes.ChangeError, content_editing.ContentEditError) as error:
+            _clear_studio_review()
+            st.session_state["_editor_error"] = f"Not applied: {error}"
+        else:
+            _clear_loaded_entities()
+            _clear_studio_review()
+            st.session_state["_editor_studio_form_generation"] = (
+                st.session_state.get("_editor_studio_form_generation", 0) + 1
+            )
+            st.session_state["_editor_message"] = f"Applied as content revision {revision_id}."
+        st.rerun()
+    return True
+
+
+def _filter_rows(rows, mode):
+    if mode == "Active":
+        return [row for row in rows if not row.get("is_archived")]
+    if mode == "Archived":
+        return [row for row in rows if row.get("is_archived")]
+    return rows
+
+
+def _entity_caption(row, key_name, label_name):
+    archived = " · archived" if row.get("is_archived") else ""
+    return f"{row[label_name]} (`{row[key_name]}` · ID {row['id']}){archived}"
+
+
+def _field_default_widget(field_type, options, value, key):
+    """Render the same typed default intent used by the candidate validator."""
+    if field_type == "checkbox":
+        current = str(value).lower() in {"1", "true"}
+        return st.checkbox("Default value", value=current, key=key)
+    if field_type == "select":
+        if not options:
+            st.error("A select Field needs options before it can have a default.")
+            return None
+        selected = value if value in options else options[0]
+        return st.selectbox("Default value", options, index=options.index(selected), key=key)
+    if field_type == "number":
+        try:
+            current = int(value)
+        except (TypeError, ValueError):
+            current = 0
+        return st.number_input("Default value", min_value=0, value=current, step=1, key=key)
+    if field_type == "decimal":
+        try:
+            current = float(value)
+        except (TypeError, ValueError):
+            current = 0.0
+        return st.number_input("Default value", min_value=0.0, value=current,
+                               key=key, help="Use a non-negative decimal.")
+    return st.text_input("Default value", "" if value is None else str(value), key=key)
+
+
+def _parse_select_options(raw):
+    options = [item.strip() for item in raw.replace("\n", ",").split(",")]
+    return [item for item in options if item]
+
+
+def _lifecycle_panel(table, row, signature, writes_enabled):
+    action = "Restore" if row.get("is_archived") else "Archive"
+    plan = content_studio.lifecycle_plan(action.lower(), table,
+                                         row["key"] if table != "Snippets" else row["shortcut"])
+    st.subheader("Availability and deletion", anchor=False)
+    if plan["direct_dependencies"]:
+        st.caption("Direct dependents: " + ", ".join(
+            f"{item['table']}.{item['key']}" for item in plan["direct_dependencies"]
+        ))
+    if plan["archive_closure"] or plan["restore_prerequisites"]:
+        items = plan["archive_closure"] or plan["restore_prerequisites"]
+        st.caption("This reviewed action also affects: " + ", ".join(
+            f"{item['table']}.{item['key']}" for item in items
+        ))
+    lifecycle_signature = _studio_signature("lifecycle", {"table": table, "key": plan["target"]["key"]}, plan)
+    if st.button(f"Prepare {action} review", key=f"editor_studio_{table}_{row['id']}_{action.lower()}",
+                 disabled=not writes_enabled):
+        _prepare_studio_review(plan["operations"], lifecycle_signature,
+                                f"{action} {table}.{plan['target']['key']}")
+    delete_plan = content_studio.lifecycle_plan("delete", table, plan["target"]["key"])
+    if delete_plan["refusal_reasons"]:
+        st.info("Permanent deletion unavailable: " + " ".join(delete_plan["refusal_reasons"]))
+        for prerequisite in delete_plan.get("deletion_prerequisites", []):
+            st.caption(
+                "Prerequisite edit: remove the Field from "
+                f"`{prerequisite['block_key']}.{prerequisite['template_column']}`."
+            )
+        if delete_plan["pending_blockers"]:
+            st.caption("Pending Cases: " + ", ".join(item["case_number"] for item in delete_plan["pending_blockers"]))
+    else:
+        if delete_plan["mechanical_deletion_cleanup"]:
+            st.caption("Deletion cleanup: " + ", ".join(
+                f"{item['action']} {item['table']}" for item in delete_plan["mechanical_deletion_cleanup"]
+            ))
+        delete_signature = _studio_signature("lifecycle", {"table": table, "key": plan["target"]["key"]}, delete_plan)
+        if st.button("Prepare permanent deletion review", key=f"editor_studio_{table}_{row['id']}_delete",
+                     disabled=not writes_enabled):
+            _prepare_studio_review(delete_plan["operations"], delete_signature,
+                                    f"Delete {table}.{plan['target']['key']}")
+
+
+def _field_studio(rows, mode, writes_enabled):
+    st.subheader("Fields", anchor=False)
+    selectable = _filter_rows(rows, mode)
+    choices = {row["id"]: row for row in selectable}
+    generation = st.session_state.get("_editor_studio_form_generation", 0)
+    create_mode = st.checkbox("Create a new Field", key="editor_studio_field_create",
+                              on_change=_clear_studio_review)
+    if create_mode:
+        signature = _studio_signature("field-create", "new", {"generation": generation})
+        if _show_studio_review(signature, writes_enabled):
+            return
+        # A widget inside ``st.form`` cannot rerun until the form is submitted.
+        # Keep the type picker outside it so changing type immediately rebuilds
+        # the form with the appropriate typed default control; distinct keys
+        # also avoid carrying a text widget's state into a checkbox/select.
+        field_type = st.selectbox(
+            "Field type", ["text", "number", "decimal", "checkbox", "select"],
+            key=f"editor_studio_field_type_{generation}",
+            on_change=_clear_studio_review,
+        )
+        options_raw = ""
+        if field_type == "select":
+            options_raw = st.text_area(
+                "Select options (one per line or comma-separated)",
+                key=f"editor_studio_field_options_{generation}",
+            )
+        options = _parse_select_options(options_raw) if field_type == "select" else []
+        with st.form(f"editor_studio_field_create_{generation}"):
+            key = st.text_input("Stable key")
+            label = st.text_input("Label")
+            default = _field_default_widget(
+                field_type, options, None, f"editor_studio_field_create_default_{field_type}"
+            )
+            addendum = st.text_area("Conclusion addendum template (optional; context: value)")
+            prepare = st.form_submit_button("Prepare Field review", disabled=not writes_enabled)
+        values = {"key": key, "label": label, "type": field_type, "options": options or None,
+                  "default_value": default, "conclusion_addendum_template": addendum or None}
+        if prepare:
+            if field_type == "select" and (not options or len(options) != len(set(options))):
+                st.error("New select Fields require nonblank, unique options.")
+            elif default in {None, ""}:
+                st.error("New Fields need a usable standalone default.")
+            else:
+                signature = _studio_signature("field-create", "new", values)
+                _prepare_studio_review([content_studio.operation("create", "Fields", key, values)], signature,
+                                        f"Create Field.{key}")
+        return
+    if not choices:
+        st.info("No Fields match this lifecycle filter.")
+        return
+    field_id = st.selectbox("Field", list(choices),
+                            format_func=lambda ident: _entity_caption(choices[ident], "key", "label"),
+                            key="editor_studio_field_select", on_change=_clear_studio_review)
+    field = choices[field_id]
+    draft = {"label": field["label"], "default_value": field["default_value"],
+             "conclusion_addendum_template": field.get("conclusion_addendum_template")}
+    signature = _studio_signature("field-edit", {"table": "Fields", "key": field["key"]}, draft)
+    if _show_studio_review(signature, writes_enabled):
+        return
+    token = f"{field['id']}_{generation}"
+    # NULL is meaningful: it must not be rendered as a typed zero/false and
+    # then accidentally become a content change while editing another value.
+    # Keep this switch outside the form so a deliberate set/unset rerenders the
+    # typed widget before Prepare is clicked.
+    # Stage 3 compatibility intentionally requires an established nonblank
+    # discrete/numeric default. Do not advertise an impossible clear action.
+    may_unset_default = field["type"] in {"text", "decimal"} or field["default_value"] in {None, ""}
+    if may_unset_default:
+        no_default = st.checkbox(
+            "No global default", value=field["default_value"] is None,
+            key=f"editor_studio_field_no_default_{token}",
+            on_change=_clear_studio_review,
+        )
+    else:
+        no_default = False
+        st.caption("This established global default is required for this Field type and cannot be cleared.")
+    with st.form(f"editor_studio_field_edit_{token}"):
+        st.caption(f"Stable key: `{field['key']}` · type: `{field['type']}` (both locked)")
+        if field["type"] == "select": st.caption("Options (locked): " + ", ".join(json.loads(field["options"] or "[]")))
+        label = st.text_input("Label", field["label"], key=f"editor_studio_field_label_{token}")
+        if no_default:
+            st.caption("This Field inherits no global default; Block or Preset overrides may still supply one.")
+            default = None
+        else:
+            default = _field_default_widget(field["type"], json.loads(field["options"] or "[]"),
+                                            field["default_value"], f"editor_studio_field_default_{token}")
+        addendum = st.text_area("Conclusion addendum template (optional; context: value)",
+                                 field.get("conclusion_addendum_template") or "", key=f"editor_studio_field_addendum_{token}")
+        prepare = st.form_submit_button("Prepare Field review", disabled=not writes_enabled)
+    values = {"label": label, "default_value": default, "conclusion_addendum_template": addendum or None}
+    if prepare:
+        signature = _studio_signature("field-edit", {"table": "Fields", "key": field["key"]}, values)
+        _prepare_studio_review([content_studio.operation("update", "Fields", field["key"], values)], signature,
+                                f"Edit Field.{field['key']}")
+    _lifecycle_panel("Fields", field, signature, writes_enabled)
+
+
+def _snippet_studio(rows, mode, writes_enabled):
+    st.subheader("Snippets", anchor=False)
+    selectable = _filter_rows(rows, mode); choices = {row["id"]: row for row in selectable}
+    generation = st.session_state.get("_editor_studio_form_generation", 0)
+    create_mode = st.checkbox("Create a new Snippet", key="editor_studio_snippet_create",
+                              on_change=_clear_studio_review)
+    if create_mode:
+        signature = _studio_signature("snippet-create", "new", {"generation": generation})
+        if _show_studio_review(signature, writes_enabled): return
+        with st.form(f"editor_studio_snippet_create_{generation}"):
+            shortcut = st.text_input("Shortcut")
+            expansion = st.text_area("Expansion")
+            category = st.text_input("Category (optional)")
+            prepare = st.form_submit_button("Prepare Snippet review", disabled=not writes_enabled)
+        values = {"expansion": expansion, "category": category or None}
+        if prepare:
+            signature = _studio_signature("snippet-create", "new", values)
+            _prepare_studio_review([content_studio.operation("create", "Snippets", shortcut, values)], signature,
+                                    f"Create Snippet.{shortcut}")
+        return
+    if not choices:
+        st.info("No Snippets match this lifecycle filter."); return
+    snippet_id = st.selectbox("Snippet", list(choices),
+                              format_func=lambda ident: _entity_caption(choices[ident], "shortcut", "shortcut"),
+                              key="editor_studio_snippet_select", on_change=_clear_studio_review)
+    snippet = choices[snippet_id]
+    draft = {"expansion": snippet["expansion"], "category": snippet.get("category")}
+    signature = _studio_signature("snippet-edit", {"table": "Snippets", "key": snippet["shortcut"]}, draft)
+    if _show_studio_review(signature, writes_enabled): return
+    token = f"{snippet['id']}_{generation}"
+    with st.form(f"editor_studio_snippet_edit_{token}"):
+        st.caption(f"Stable shortcut: `{snippet['shortcut']}` (locked)")
+        expansion = st.text_area("Expansion", snippet["expansion"], key=f"editor_studio_snippet_expansion_{token}")
+        category = st.text_input("Category (optional)", snippet.get("category") or "", key=f"editor_studio_snippet_category_{token}")
+        prepare = st.form_submit_button("Prepare Snippet review", disabled=not writes_enabled)
+    values = {"expansion": expansion, "category": category or None}
+    if prepare:
+        signature = _studio_signature("snippet-edit", {"table": "Snippets", "key": snippet["shortcut"]}, values)
+        _prepare_studio_review([content_studio.operation("update", "Snippets", snippet["shortcut"], values)], signature,
+                                f"Edit Snippet.{snippet['shortcut']}")
+    _lifecycle_panel("Snippets", snippet, signature, writes_enabled)
+
+
+def _group_label_studio(writes_enabled):
+    labels = db.get_all_conclusion_group_labels()
+    all_blocks = db.get_all_editor_blocks()
+    active_blocks = [row for row in all_blocks if not row.get("is_archived")]
+    choices = {row["block_key_set"]: row for row in labels}
+    st.subheader("Conclusion group labels", anchor=False)
+    st.caption("A label changes merged conclusion wording; it is not lifecycle content.")
+    selected_key = st.selectbox("Existing label", ["__new__", *choices],
+                                format_func=lambda key: "Create a new group label" if key == "__new__" else f"{choices[key]['combined_label']} ({key})",
+                                key="editor_studio_group_select", on_change=_clear_studio_review)
+    current = choices.get(selected_key)
+    selected_blocks = current["block_key_set"].split(",") if current else []
+    # Retained labels can legitimately name archived Blocks for pending-case
+    # rendering.  Keep those existing members selectable for this one label,
+    # but never offer archived Blocks for a new/unrelated relationship.
+    block_by_key = {row["key"]: row for row in all_blocks}
+    blocks = [*active_blocks]
+    for key in selected_blocks:
+        row = block_by_key.get(key)
+        if row is not None and row not in blocks:
+            blocks.append(row)
+    blocks.sort(key=lambda row: row["key"])
+    generation = st.session_state.get("_editor_studio_form_generation", 0)
+    draft = {"blocks": sorted(selected_blocks), "label": current["combined_label"] if current else "", "existing": selected_key}
+    signature = _studio_signature("group-label", selected_key, draft)
+    if _show_studio_review(signature, writes_enabled): return
+    with st.form(f"editor_studio_group_{selected_key}_{generation}"):
+        block_keys = st.multiselect("Blocks", [row["key"] for row in blocks], default=selected_blocks,
+                                    format_func=lambda key: next(row["name"] + f" ({key})" for row in blocks if row["key"] == key))
+        combined = st.text_input("Combined conclusion label", current["combined_label"] if current else "")
+        prepare = st.form_submit_button("Prepare group-label review", disabled=not writes_enabled)
+    canonical = ",".join(sorted(block_keys)); values = {"combined_label": combined}
+    if prepare:
+        if not canonical or not combined.strip():
+            st.error("Choose at least one Block and provide a combined label.")
+        else:
+            if current and canonical != current["block_key_set"]:
+                intents = [content_studio.operation("unlink", "Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]}),
+                           content_studio.operation("link", "Conclusion_Group_Labels", {"block_key_set": canonical}, values)]
+            else:
+                intents = [content_studio.operation("update" if current else "link", "Conclusion_Group_Labels", {"block_key_set": canonical}, values)]
+            signature = _studio_signature("group-label", selected_key, {"blocks": sorted(block_keys), "label": combined, "existing": selected_key})
+            _prepare_studio_review(intents, signature, f"{'Edit' if current else 'Create'} conclusion group label {canonical}")
+    if current and st.button("Prepare group-label deletion review", key=f"editor_studio_group_delete_{current['id']}", disabled=not writes_enabled):
+        signature = _studio_signature("group-label-delete", current["block_key_set"], {})
+        _prepare_studio_review([content_studio.operation("unlink", "Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]})], signature,
+                                f"Delete conclusion group label {current['block_key_set']}")
+
+
 def _show_package_error():
     feedback = st.session_state.get("_editor_ai_feedback")
     if not feedback:
@@ -603,11 +981,6 @@ def _revisions():
                 st.error(str(local))
 
 
-if st.session_state.pop("_editor_reset_new_snippet", False):
-    st.session_state["_editor_new_snippet_generation"] = (
-        st.session_state.get("_editor_new_snippet_generation", 0) + 1
-    )
-
 if st.session_state.pop("_editor_ai_clear_confirmation", False):
     _clear_confirmation_widgets("editor_ai_review_")
 if st.session_state.pop("_editor_inverse_clear_confirmation", False):
@@ -632,21 +1005,45 @@ writes_enabled = _snapshot_gate()
 presets, blocks, fields, snippets = db.get_all_presets(), db.get_all_editor_blocks(), db.get_all_fields(), db.get_all_snippets()
 section = st.radio(
     "Editor section",
-    ["Presets", "Blocks", "Fields", "Snippets", "AI package", "Recent revisions"],
+    ["Content Studio", "Presets", "Blocks", "AI package", "Recent revisions"],
     key="editor_section",
+    on_change=_clear_studio_review,
     horizontal=True,
     label_visibility="collapsed",
     width="stretch",
 )
 
-if section == "Presets":
+if section == "Content Studio":
+    st.header("Content Studio", anchor=False)
+    st.caption("Draft changes become a frozen review before they can be applied. Stable keys and Field type/options are immutable.")
+    mode = st.radio("Lifecycle filter", ["Active", "Archived", "All"], horizontal=True,
+                    key="editor_studio_filter", on_change=_clear_studio_review)
+    studio_kind = st.radio("Content Studio area", ["Fields", "Snippets", "Group labels"], horizontal=True,
+                           key="editor_studio_kind", on_change=_clear_studio_review)
+    studio_error = st.session_state.pop("_editor_studio_error", None)
+    if studio_error:
+        st.error(f"Review was not prepared: {studio_error}")
+        studio_local_error = st.session_state.pop("_editor_studio_local_error", None)
+        if studio_local_error is not None:
+            with st.expander("Local candidate refusal details — session only"):
+                st.error(str(studio_local_error))
+    all_fields = db.get_all_fields(include_archived=True)
+    all_snippets = db.get_all_snippets(include_archived=True)
+    if studio_kind == "Fields":
+        _field_studio(all_fields, mode, writes_enabled)
+    elif studio_kind == "Snippets":
+        _snippet_studio(all_snippets, mode, writes_enabled)
+    else:
+        _group_label_studio(writes_enabled)
+
+elif section == "Presets":
     if presets:
         preset_by_id = {row["id"]: row for row in presets}
         preset_id = st.selectbox("Preset", list(preset_by_id), format_func=lambda ident: _preset_label(preset_by_id[ident]), key="editor_preset_select")
         preset = preset_by_id[preset_id]
         st.caption(f"{preset.get('category') or 'Uncategorised'} · shortcut: `{preset['short_code']}`")
         st.info(f"Impact: {db.get_preset_pending_case_count(preset_id)} pending case(s) currently saved with this Preset.")
-        if writes_enabled: _edit_preset(preset)
+        st.info("Preset authoring moves to Content Studio in Checkpoint 6. This checkpoint keeps Presets read-only.")
         st.subheader("Ordered Blocks", anchor=False)
         for position, block in enumerate(db.get_preset_usage(preset_id), 1):
             with st.expander(f"{position}. {block['name']} (`{block['key']}`)"):
@@ -662,52 +1059,11 @@ elif section == "Blocks":
         block = block_by_id[block_id]; usage = db.get_block_usage(block_id)
         st.caption(f"key: `{block['key']}` · table: {'yes' if block['is_table'] else 'no'} · site label: {block.get('site_label') or '—'} · conclusion group: {block.get('conclusion_group') or '—'}")
         st.info(f"Impact: {usage['pending_case_count']} pending case(s) may use this Block.")
-        if writes_enabled and not block["is_table"]:
-            _edit_block(block)
-        elif writes_enabled:
-            st.info("Table Blocks remain read-only in Stage 3.")
+        st.info("Block authoring moves to Content Studio in Checkpoint 5. This checkpoint keeps Blocks read-only.")
         st.subheader("Templates", anchor=False); _show_templates(block)
         st.subheader("Fields used", anchor=False); _show_rows(usage["fields"], "This Block has no Fields.")
         st.subheader("Used by Presets", anchor=False); _show_rows(usage["presets"], "No Preset currently uses this Block.")
     else: st.info("No Blocks are configured.")
-
-elif section == "Fields":
-    if fields:
-        field_by_id = {row["id"]: row for row in fields}
-        field_id = st.selectbox("Field", list(field_by_id), format_func=lambda ident: f"{field_by_id[ident]['label']} ({field_by_id[ident]['key']})", key="editor_field_select")
-        field = field_by_id[field_id]; usage = db.get_field_usage(field_id)
-        st.caption(f"key: `{field['key']}` · type: `{field['type']}`")
-        if field.get("options"): st.write(f"Options (read-only): {', '.join(json.loads(field['options']))}")
-        st.info(f"Impact: {usage['pending_case_count']} pending case(s) may use this Field.")
-        if writes_enabled: _edit_field(field)
-        st.subheader("Used by Blocks", anchor=False); _show_rows(usage["blocks"], "No Block currently uses this Field.")
-        st.subheader("Reachable from Presets", anchor=False); _show_rows(usage["presets"], "No Preset currently reaches this Field.")
-    else: st.info("No Fields are configured.")
-
-elif section == "Snippets":
-    if snippets:
-        by_shortcut = {row["shortcut"]: row for row in snippets}
-        shortcut = st.selectbox("Snippet", list(by_shortcut), format_func=lambda value: f"{value} — {by_shortcut[value].get('category') or 'Uncategorised'}", key="editor_snippet_select")
-        snippet = by_shortcut[shortcut]; usage = db.get_snippet_usage(shortcut)
-        st.info(f"Impact: {usage['pending_case_count']} pending case(s) may use this Snippet.")
-        if writes_enabled: _edit_snippet(snippet)
-        st.subheader("Called by Blocks", anchor=False); _show_rows(usage["blocks"], "No Block currently calls this Snippet.")
-        st.subheader("Called by Field addenda", anchor=False); _show_rows(usage["fields"], "No Field addendum currently calls this Snippet.")
-    else: st.info("No Snippets are configured.")
-    if writes_enabled:
-        st.subheader("Create new Snippet", anchor=False)
-        generation = st.session_state.get("_editor_new_snippet_generation", 0)
-        with st.form(f"editor_new_snippet_{generation}"):
-            shortcut = st.text_input("Shortcut", key=f"editor_new_snippet_shortcut_{generation}")
-            expansion = st.text_area("Expansion", key=f"editor_new_snippet_expansion_{generation}")
-            category = st.text_input("Category (optional)", key=f"editor_new_snippet_category_{generation}")
-            if st.form_submit_button("Create Snippet"):
-                try: result = content_editing.create_snippet(shortcut, expansion, category)
-                except content_editing.ContentEditError as error: st.error(f"Not created: {error}")
-                else:
-                    st.session_state["_editor_message"] = f"Snippet created as content revision {result['revision_id']}."
-                    st.session_state["_editor_reset_new_snippet"] = True
-                    st.rerun()
 
 elif section == "AI package":
     _ai_package_section(writes_enabled)

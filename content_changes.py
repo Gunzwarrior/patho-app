@@ -1320,12 +1320,22 @@ def _general_update_from_intent(conn, op):
         allowed = {"sort_order"} if table == "Block_Fields" else {"display_order"} if table == "Preset_Blocks" else set()
         if set(values) != allowed:
             raise ChangeError("This Content Studio relationship cannot be reordered.")
+    if table == "Fields" and "default_value" in values:
+        candidate_field = {**before, **values}
+        requested = values["default_value"]
+        stored = _field_storage(candidate_field, requested, "content_studio.default", nullable_global=True)
+        # Widgets expose native values, while historic SQLite storage retains
+        # compatible spellings such as checkbox "0"/"1" and decimal "8".
+        # Preserve that exact physical spelling when the native value did not
+        # change, otherwise a label-only edit would create a fake default edit.
+        try:
+            unchanged_default = _native_stored(candidate_field, before["default_value"]) == requested
+        except (TypeError, ValueError):
+            unchanged_default = False
+        values["default_value"] = before["default_value"] if unchanged_default else stored
     if all(before[name] == value for name, value in values.items()):
         raise ChangeError("Content Studio operation has no persisted change.")
     candidate = {**before, **values}
-    if table == "Fields" and "default_value" in values:
-        values["default_value"] = _field_storage(candidate, values["default_value"], "content_studio.default", nullable_global=True)
-        candidate["default_value"] = values["default_value"]
     if table in {"Preset_Blocks", "Preset_Block_Rows"} and isinstance(values.get("field_overrides"), dict):
         values["field_overrides"] = contract.canonical_json(values["field_overrides"]).strip()
     if table == "Quick_Type_Tokens" and isinstance(values.get("lookup_table"), dict):

@@ -14,6 +14,7 @@ import json
 import sqlite3
 
 import content_changes
+import content_editing
 import content_snapshot
 import database
 
@@ -291,8 +292,11 @@ def _delete_operations(conn, table, row):
             ops.append(operation("unlink", "Block_Fields", {"block_key": key, "field_key": found["key"]}))
         for found in conn.execute("""SELECT r.*,b.key AS block_key FROM Field_Consistency_Rules r
                                     JOIN Blocks b ON b.id=r.block_id WHERE r.block_id=?""", (row["id"],)):
-            ops.append(operation("unlink", "Field_Consistency_Rules", {name: json.loads(found[name]) if name.endswith("_values") else found[name]
-                                                                            for name in _GENERAL_RULE_KEY}))
+            # Relationship identities use their physical canonical JSON text.
+            # Decoding the two value arrays here made a planner-produced key
+            # incompatible with the candidate service's exact audit identity.
+            ops.append(operation("unlink", "Field_Consistency_Rules",
+                                 {name: found[name] for name in _GENERAL_RULE_KEY}))
         for found in conn.execute("SELECT block_key_set FROM Conclusion_Group_Labels"):
             if key in found["block_key_set"].split(","):
                 ops.append(operation("unlink", "Conclusion_Group_Labels", {"block_key_set": found["block_key_set"]}))
@@ -304,8 +308,8 @@ def _delete_operations(conn, table, row):
         for found in conn.execute("""SELECT r.*,b.key AS block_key FROM Field_Consistency_Rules r
                                     JOIN Blocks b ON b.id=r.block_id
                                     WHERE r.field_a_key=? OR r.field_b_key=?""", (key, key)):
-            ops.append(operation("unlink", "Field_Consistency_Rules", {name: json.loads(found[name]) if name.endswith("_values") else found[name]
-                                                                            for name in _GENERAL_RULE_KEY}))
+            ops.append(operation("unlink", "Field_Consistency_Rules",
+                                 {name: found[name] for name in _GENERAL_RULE_KEY}))
         for found in conn.execute("SELECT p.short_code,b.key,pb.sort_order,pb.field_overrides FROM Preset_Blocks pb JOIN Presets p ON p.id=pb.preset_id JOIN Blocks b ON b.id=pb.block_id"):
             overrides = json.loads(found["field_overrides"] or "{}")
             if key in overrides:
@@ -321,6 +325,38 @@ def _delete_operations(conn, table, row):
 
 
 _GENERAL_RULE_KEY = ("block_key", "field_a_key", "field_a_values", "field_b_key", "field_b_values", "message")
+
+
+def _field_deletion_prerequisites(conn, row):
+    """Templates that must be edited before a Field can be removed.
+
+    Deletion may mechanically unlink a Field binding, but it must never rewrite
+    a clinical template.  Detect both normal and decimal display aliases here
+    so the guided UI can refuse early with a useful prerequisite rather than
+    offering a review which can only fail final-graph validation.
+    """
+    names = {row["key"], f"{row['key']}_display"}
+    callers = []
+    for found in conn.execute("""SELECT DISTINCT b.* FROM Blocks b
+                                 JOIN Block_Fields bf ON bf.block_id=b.id
+                                 WHERE bf.field_id=?""", (row["id"],)):
+        block = dict(found)
+        for column in (
+            "macro_template", "micro_template", "conclusion_template", "context_template",
+            "title_fragment_template", "conclusion_label_template",
+        ):
+            source = block.get(column)
+            if not source:
+                continue
+            try:
+                variables, _ = content_editing._template_variables(source)
+            except content_editing.ContentEditError:
+                # A pre-existing invalid template remains the candidate
+                # validator's authoritative refusal; do not hide it here.
+                continue
+            if names & variables:
+                callers.append((block["key"], column))
+    return callers
 
 
 def lifecycle_plan(action, table, key, *, db_name=None, conn=None):
@@ -344,6 +380,12 @@ def lifecycle_plan(action, table, key, *, db_name=None, conn=None):
         if action == "delete" and blockers:
             refusal_reasons.append(
                 "Permanent deletion is unavailable while persisted pending Cases depend on it; prepare archive instead."
+            )
+        prerequisites = _field_deletion_prerequisites(conn, row) if action == "delete" and table == "Fields" else []
+        if prerequisites:
+            refusal_reasons.append(
+                "Permanent deletion requires editing these Block templates first: " +
+                ", ".join(f"{key}.{column}" for key, column in prerequisites) + "."
             )
         closure = _archive_closure(conn, table, row) if action == "archive" else []
         restore = _restore_dependencies(conn, table, row) if action == "restore" else []
@@ -374,6 +416,9 @@ def lifecycle_plan(action, table, key, *, db_name=None, conn=None):
                 if any(item["op"] == "case_preset_reference" for item in delete_ops) else []
             ),
             "mechanical_deletion_cleanup": cleanup,
+            "deletion_prerequisites": [
+                {"block_key": key, "template_column": column} for key, column in prerequisites
+            ],
             "refusal_reasons": refusal_reasons,
             "operations": ops,
         }

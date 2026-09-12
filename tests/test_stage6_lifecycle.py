@@ -148,6 +148,49 @@ def test_delete_eligibility_race_rejects_apply_when_a_pending_case_appears(mutab
     assert _preset("dai")["id"] == pending["preset_id"]
 
 
+def test_field_deletion_reports_template_prerequisite_before_review(mutable_db):
+    _unlock()
+    plan = content_studio.lifecycle_plan("delete", "Fields", "thyroid_cytology_pattern", db_name=mutable_db)
+    assert plan["operations"] == []
+    assert {(item["block_key"], item["template_column"])
+            for item in plan["deletion_prerequisites"]} == {
+                ("thyroid_cytology", "micro_template"),
+                ("thyroid_cytology", "conclusion_template"),
+            }
+    assert "requires editing these Block templates first" in plan["refusal_reasons"][0]
+
+
+def test_cleanup_rule_keys_remain_canonical_and_unused_field_deletes(mutable_db):
+    _unlock()
+    conn = connection(mutable_db)
+    try:
+        field = dict(conn.execute("SELECT * FROM Fields WHERE key='appendicite_type'").fetchone())
+        block = dict(conn.execute("SELECT * FROM Blocks WHERE key='appendice'").fetchone())
+        field_ops = content_studio._delete_operations(conn, "Fields", field)
+        block_ops = content_studio._delete_operations(conn, "Blocks", block)
+    finally:
+        conn.close()
+    for operations in (field_ops, block_ops):
+        rule = next(item for item in operations if item["table"] == "Field_Consistency_Rules")
+        assert isinstance(rule["key"]["field_a_values"], str)
+        assert isinstance(rule["key"]["field_b_values"], str)
+
+    created = _review(mutable_db, [content_studio.operation("create", "Fields", "unused_delete_probe", {
+        "label": "Unused deletion probe", "type": "text", "options": None,
+        "default_value": "present", "conclusion_addendum_template": None,
+    })])
+    content_changes.apply_review(created, db_name=mutable_db)
+    plan = content_studio.lifecycle_plan("delete", "Fields", "unused_delete_probe", db_name=mutable_db)
+    assert not plan["refusal_reasons"]
+    deleted = _review(mutable_db, plan["operations"])
+    content_changes.apply_review(deleted, db_name=mutable_db)
+    conn = connection(mutable_db)
+    try:
+        assert conn.execute("SELECT 1 FROM Fields WHERE key='unused_delete_probe'").fetchone() is None
+    finally:
+        conn.close()
+
+
 def test_archive_block_keeps_legacy_and_ad_hoc_pending_compositions_renderable(mutable_db):
     _unlock()
     preset = _preset("dai")

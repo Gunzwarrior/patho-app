@@ -504,10 +504,15 @@ def get_all_editor_blocks():
     return [dict(row) for row in rows]
 
 
-def get_all_fields():
-    """Returns every Field for the read-only Editor."""
+def get_all_fields(include_archived=True):
+    """Returns Fields for the Editor/Content Studio.
+
+    The historic Editor showed everything, so retain that default while letting
+    the Studio's lifecycle filter ask for active rows only.
+    """
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM Fields ORDER BY label, key").fetchall()
+    rows = conn.execute("SELECT * FROM Fields WHERE (? OR is_archived = 0) ORDER BY label, key",
+                        (include_archived,)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
@@ -778,11 +783,22 @@ def get_snippet_by_shortcut(shortcut, *, include_archived=False):
     return dict(row) if row else None
 
 
-def get_all_snippets():
+def get_all_snippets(include_archived=True):
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM Snippets ORDER BY category, shortcut").fetchall()
+    rows = conn.execute("SELECT * FROM Snippets WHERE (? OR is_archived = 0) ORDER BY category, shortcut",
+                        (include_archived,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_all_conclusion_group_labels():
+    """Return group-label configuration in its canonical stable-key order."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM Conclusion_Group_Labels ORDER BY block_key_set"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def add_snippet(shortcut, expansion, category):

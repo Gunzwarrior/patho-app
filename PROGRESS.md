@@ -56,7 +56,28 @@ passes.
 No operational database, seed content, golden fixtures, or accepted review
 artifact was opened or changed. An isolated temporary-database Streamlit boot
 returned HTTP 200 for all five routes, then its server/database were removed.
-Checkpoint 4 has not begun.
+**Stage 6 checkpoint 4 — complete, independently reviewed, and browser
+verified.** The Editor now opens on Content Studio, where Fields,
+Snippets, and conclusion group labels use the shared content candidate service
+only: create/edit/lifecycle actions prepare a frozen review, require explicit
+confirmation, and Apply atomically. The old immediate-save Field/Snippet UI
+paths are gone; Presets and Blocks remain intentionally read-only until their
+own checkpoints. Content Studio provides Active/Archived/All filters,
+stable-ID selectors with archive badges, typed Field defaults (including a
+type picker outside the form so a new select Field can establish its options
+before choosing a default), immutable keys/types/options, canonical group-key
+sets, and archive/restore/deletion-eligibility panels.
+
+`tests/test_stage6_ui.py` covers the no-write frozen-review boundary, the
+separate confirmed Apply action, typed-default rebuild, decimal review, and
+archived filter/badge. Existing Editor AppTests were migrated to assert the
+new single authoring path. The focused CP4/Editor/lifecycle/Stage 5 UI and
+candidate selections passed after remediation; the final isolated suite passed
+**428 tests**. Changed Python files compile and `git diff --check` passes.
+Completed browser verification covered typed Fields, addendum-linked Snippet
+lifecycle, archived group labels, report review, and stale-review behaviour.
+No operational database, seed content, golden fixtures, or accepted-review
+artifact was opened or changed.
 
 **Stage 6 checkpoint 2 remediation — complete locally and awaiting approval.**
 The independent review's blocking findings are addressed without extending
