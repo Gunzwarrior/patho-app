@@ -32,6 +32,10 @@ class StaleReviewError(ChangeError):
     pass
 
 
+class StaleDraftReviewError(ChangeError):
+    """A guided draft assertion does not match the review's source snapshot."""
+
+
 @dataclass(frozen=True)
 class ReviewResult:
     """Immutable server-held result; JSON-backed properties return fresh copies.
@@ -519,6 +523,8 @@ def _standalone_previews(conn, operations):
             + [f.get("conclusion_addendum_template") for f in block["fields"]]
         ))
     for op in operations:
+        if "table" not in op or op.get("op") in _GENERAL_ASSERTIONS:
+            continue
         table, key = op["table"], op["key"]
         if table not in ("Fields", "Blocks", "Snippets"):
             continue
@@ -1063,6 +1069,9 @@ _GENERAL_KEYS = {
     "Conclusion_Group_Labels": ("block_key_set",),
 }
 _GENERAL_ACTIONS = frozenset({"create", "update", "archive", "restore", "delete", "link", "unlink", "reorder"})
+_GENERAL_ASSERTION = "assert_block_draft"
+_GENERAL_FIELD_ASSERTION = "assert_field_endpoints"
+_GENERAL_ASSERTIONS = frozenset({_GENERAL_ASSERTION, _GENERAL_FIELD_ASSERTION})
 _GENERAL_PHYSICAL_COLUMNS = {
     "Fields": ("id", "key", "label", "type", "is_archived", "options", "default_value", "conclusion_addendum_template"),
     "Blocks": ("id", "key", "name", "is_archived", "is_table", "site_label", "conclusion_group", "macro_template", "micro_template", "conclusion_template", "context_template", "title_fragment_template", "conclusion_label_template"),
@@ -1172,6 +1181,38 @@ def _general_normalize(operations):
         if not isinstance(operation, dict):
             raise ChangeError("Content Studio operations are invalid.")
         action, table, key = operation.get("op"), operation.get("table"), operation.get("key")
+        if action == _GENERAL_ASSERTION:
+            if (set(operation) != {"op", "table", "key", "baseline", "copied_rules_baseline"}
+                    or table != "Blocks" or not isinstance(key, str) or not key
+                    or not isinstance(operation["baseline"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", operation["baseline"])
+                    or (operation["copied_rules_baseline"] is not None and (
+                        not isinstance(operation["copied_rules_baseline"], str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", operation["copied_rules_baseline"])
+                    ))):
+                raise ChangeError("Content Studio Block draft assertion is invalid.")
+            marker = (action, key)
+            if marker in targets:
+                raise ChangeError("Content Studio targets must be unique.")
+            targets.add(marker)
+            cleaned.append(dict(operation))
+            continue
+        if action == _GENERAL_FIELD_ASSERTION:
+            field_keys = operation.get("field_keys")
+            if (set(operation) != {"op", "field_keys", "baseline"}
+                    or not isinstance(field_keys, list) or not field_keys
+                    or any(not isinstance(field_key, str) or not field_key for field_key in field_keys)
+                    or field_keys != sorted(set(field_keys))
+                    or not isinstance(operation.get("baseline"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", operation["baseline"])):
+                raise ChangeError("Content Studio Field endpoint assertion is invalid.")
+            marker = (action, tuple(field_keys))
+            if marker in targets:
+                raise ChangeError("Content Studio targets must be unique.")
+            targets.add(marker)
+            cleaned.append({"op": action, "field_keys": list(field_keys),
+                            "baseline": operation["baseline"]})
+            continue
         if action == "case_preset_reference":
             if set(operation) != {"op", "case_id", "before_preset_id", "after_preset_id"}:
                 raise ChangeError("Content Studio Case reference is invalid.")
@@ -1216,6 +1257,7 @@ def _general_normalize(operations):
         cleaned.append(clean)
     # Makes review input order irrelevant while preserving source action data.
     def phase(operation):
+        if operation["op"] in _GENERAL_ASSERTIONS: return -2
         if operation["op"] == "case_preset_reference": return -1
         if operation["op"] == "create": return 0 if operation["table"] in content_snapshot.BASE_TABLES else 3
         if operation["op"] in {"update", "archive", "restore", "reorder"}: return 1
@@ -1264,7 +1306,19 @@ def _general_insert_from_intent(conn, op):
         values.update(_general_endpoint_ids(conn, table, key))
         if table == "Block_Fields":
             values.setdefault("label_override", None); values.setdefault("default_override", None); values.setdefault("context_section", 0)
+            block = conn.execute("SELECT is_archived,is_table FROM Blocks WHERE id=?", (values["block_id"],)).fetchone()
             field = conn.execute("SELECT * FROM Fields WHERE id=?", (values["field_id"],)).fetchone()
+            if block is None or field is None or block["is_archived"] or block["is_table"]:
+                raise ChangeError("Block Field endpoints must be active non-table content.")
+            if values["label_override"] is not None and (not isinstance(values["label_override"], str)
+                                                          or not values["label_override"].strip()):
+                raise ChangeError("Block Field label override cannot be blank.")
+            if type(values["context_section"]) is bool:
+                values["context_section"] = int(values["context_section"])
+            if values["context_section"] not in (0, 1):
+                raise ChangeError("Block Field context-section state is invalid.")
+            if type(values.get("sort_order")) is not int or values["sort_order"] < 0:
+                raise ChangeError("Block Field order is invalid.")
             if values["default_override"] is not None:
                 values["default_override"] = _field_storage(dict(field), values["default_override"], "content_studio.default_override")
         elif table == "Preset_Blocks":
@@ -1302,6 +1356,8 @@ def _general_update_from_intent(conn, op):
         raise ChangeError("Field type and options require a separate reviewed migration.")
     if table == "Blocks" and "is_table" in values:
         raise ChangeError("Block table state is immutable.")
+    if table == "Blocks" and before["is_table"]:
+        raise ChangeError("Table Blocks are read-only in Content Studio.")
     if table == "Preset_Blocks" and "sort_order" in values:
         raise ChangeError("Preset instance identity is immutable.")
     immutable_relation_columns = {
@@ -1320,6 +1376,24 @@ def _general_update_from_intent(conn, op):
         allowed = {"sort_order"} if table == "Block_Fields" else {"display_order"} if table == "Preset_Blocks" else set()
         if set(values) != allowed:
             raise ChangeError("This Content Studio relationship cannot be reordered.")
+    if table == "Block_Fields":
+        block = conn.execute("SELECT is_archived,is_table FROM Blocks WHERE id=?", (before["block_id"],)).fetchone()
+        field = conn.execute("SELECT * FROM Fields WHERE id=?", (before["field_id"],)).fetchone()
+        if block is None or field is None or block["is_archived"] or block["is_table"]:
+            raise ChangeError("Block Field endpoints must be active non-table content.")
+        if "label_override" in values and values["label_override"] is not None and (
+                not isinstance(values["label_override"], str) or not values["label_override"].strip()):
+            raise ChangeError("Block Field label override cannot be blank.")
+        if "context_section" in values:
+            if type(values["context_section"]) is bool:
+                values["context_section"] = int(values["context_section"])
+            if values["context_section"] not in (0, 1):
+                raise ChangeError("Block Field context-section state is invalid.")
+        if "sort_order" in values and (type(values["sort_order"]) is not int or values["sort_order"] < 0):
+            raise ChangeError("Block Field order is invalid.")
+        if "default_override" in values and values["default_override"] is not None:
+            values["default_override"] = _field_storage(dict(field), values["default_override"],
+                                                          "content_studio.default_override")
     if table == "Fields" and "default_value" in values:
         candidate_field = {**before, **values}
         requested = values["default_value"]
@@ -1372,7 +1446,7 @@ def _general_delete_from_intent(conn, table, key):
 def _general_materialize(conn, operations):
     """Apply an internal intent list in deterministic FK-safe phases."""
     for op in operations:
-        if op["op"] == "case_preset_reference":
+        if op["op"] == "case_preset_reference" or op["op"] in _GENERAL_ASSERTIONS:
             continue
         action, table, key = op["op"], op["table"], op["key"]
         before = _general_row(conn, table, key)
@@ -1539,11 +1613,30 @@ def _validate_general_configuration(conn):
             contract.field_value(field, _native_stored(field, value))
 
     for block in conn.execute("SELECT id FROM Blocks WHERE is_archived=0"):
+        block_row = dict(conn.execute("SELECT * FROM Blocks WHERE id=?", (block["id"],)).fetchone())
         bindings = [dict(row) for row in conn.execute("""SELECT f.key, bf.sort_order FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
                                                         WHERE bf.block_id=?""", (block["id"],))]
         fields = {row["key"] for row in bindings}
         if len({row["sort_order"] for row in bindings}) != len(bindings):
             raise ChangeError("Block Field order is invalid.")
+        if not block_row["is_table"]:
+            context_fields = [dict(row) for row in conn.execute(
+                """SELECT f.key,f.type,bf.context_section FROM Block_Fields bf
+                   JOIN Fields f ON f.id=bf.field_id WHERE bf.block_id=?""", (block["id"],)
+            )]
+            context_keys = {row["key"] for row in context_fields if row["context_section"]}
+            context_aliases = context_keys | {
+                f"{row['key']}_display" for row in context_fields
+                if row["context_section"] and row["type"] == "decimal"
+            }
+            if "fragments" in context_keys:
+                context_aliases.add("fragment_text")
+            for column in ("context_template", "title_fragment_template"):
+                source = block_row[column]
+                if source:
+                    variables, _ = content_editing._template_variables(source)
+                    if variables - context_aliases - {"snippet"}:
+                        raise ChangeError("Context and title templates may use only context-section Fields.")
         rules = []
         for rule in conn.execute("SELECT * FROM Field_Consistency_Rules WHERE block_id=?", (block["id"],)):
             rule = dict(rule)
@@ -1716,13 +1809,37 @@ def _general_pending_impact(before_pending, after_pending):
              "before": before_pending[case_id], "after": after}
             for case_id, after in after_pending.items()
             if before_pending[case_id].get("fingerprint") != after["fingerprint"]
-            or "error" in before_pending[case_id]]
+             or "error" in before_pending[case_id]]
+
+
+def _validate_general_assertions(conn, operations):
+    """Bind guided draft operations to this exact review/apply source."""
+    import content_studio
+    for operation in operations:
+        try:
+            if operation["op"] == _GENERAL_ASSERTION:
+                content_studio._assert_block_draft_baseline(
+                    conn, operation["key"], operation["baseline"],
+                    operation["copied_rules_baseline"],
+                )
+            elif operation["op"] == _GENERAL_FIELD_ASSERTION:
+                content_studio._assert_field_endpoints(
+                    conn, operation["field_keys"], operation["baseline"]
+                )
+        except content_studio.StaleBlockDraftError as error:
+            raise StaleDraftReviewError(str(error)) from None
 
 
 def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=None):
     operations = _general_normalize(operations)
     try:
         with _candidate_copy(db_name) as candidate:
+            # Check source-bound draft guards on the review's own immutable
+            # database image before the broader snapshot check. This both
+            # identifies a changed Block precisely and covers a write racing
+            # between the caller's snapshot export and this candidate copy.
+            with _access_scope(candidate):
+                _validate_general_assertions(candidate, operations)
             if content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate)) != base_hash:
                 raise contract.PackageError("stale")
             guard = local_review_guard(candidate)
@@ -1750,6 +1867,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                     raise ChangeError("Content Studio operation has no persisted change.")
                 _validate_general_final_graph(candidate)
                 after_presets, after_pending = _capture(candidate, candidate=True)
+                standalone = _standalone_previews(candidate, operations)
                 result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
             presets = []
             for code in sorted(set(before_presets) | set(after_presets)):
@@ -1763,7 +1881,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                        "changes": changes, "case_references": refs, "presets": presets,
                        "unaffected_presets": sum(not item["affected"] for item in presets),
                        "pending_cases": pending, "validated_pending_count": len(after_pending),
-                       "warnings": [], "branch_warnings": [], "standalone": [], "before_standalone": [],
+                       "warnings": [], "branch_warnings": [], "standalone": standalone, "before_standalone": [],
                        "inverse_revision_id": None, "inverse_source_hash": None}
             return _issued_review(None, base_hash, result_hash, guard, contract.canonical_json(payload))
     except (ChangeError, contract.PackageError):
@@ -1817,6 +1935,7 @@ def _apply_generalized_review(review, *, db_name=None):
                 import content_studio
                 if _general_normalize(content_studio.expand_lifecycle_operations(operations, conn)) != operations:
                     raise ChangeError("This review is invalid. Run a new review.")
+                _validate_general_assertions(conn, operations)
                 refs = _general_case_references(conn, operations)
             else:
                 source = _read_generalized_audit(conn, inverse_id)

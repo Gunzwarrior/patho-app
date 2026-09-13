@@ -202,8 +202,13 @@ def _show_report(report, heading):
 
 
 def _show_operations(review):
-    st.subheader(f"Normalized operations ({len(review.operations)})", anchor=False)
-    for position, operation in enumerate(review.operations, 1):
+    # Draft assertions are immutable review guards, not proposed database
+    # mutations. They remain inside the signed/frozen review for Apply but do
+    # not displace the user-facing operation widgets.
+    operations = [operation for operation in review.operations
+                  if operation.get("op") not in {"assert_block_draft", "assert_field_endpoints"}]
+    st.subheader(f"Normalized operations ({len(operations)})", anchor=False)
+    for position, operation in enumerate(operations, 1):
         key = operation["key"]
         identity = key if isinstance(key, str) else ", ".join(f"{k}={v}" for k, v in key.items())
         with st.expander(f"{position}. {operation['op']} {operation['table']} — {identity}"):
@@ -378,6 +383,13 @@ def _prepare_studio_review(intents, signature, summary):
             content_editing.ContentEditError, change_packages.PackageError) as error:
         st.session_state["_editor_studio_error"] = str(error)
         st.session_state["_editor_studio_local_error"] = getattr(error, "local", None)
+        if isinstance(error, content_changes.StaleDraftReviewError):
+            # The assertion was checked on the review's own snapshot. Fresh
+            # widget keys now load that persisted source instead of retaining
+            # values from the refused draft.
+            st.session_state["_editor_studio_form_generation"] = (
+                st.session_state.get("_editor_studio_form_generation", 0) + 1
+            )
     else:
         st.session_state["_editor_studio_review"] = review
         st.session_state["_editor_studio_signature"] = signature
@@ -670,6 +682,203 @@ def _snippet_studio(rows, mode, writes_enabled):
         _prepare_studio_review([content_studio.operation("update", "Snippets", snippet["shortcut"], values)], signature,
                                 f"Edit Snippet.{snippet['shortcut']}")
     _lifecycle_panel("Snippets", snippet, signature, writes_enabled)
+
+
+def _block_binding_default(field, value, key):
+    """One explicit inherit/override control for a Block_Field default."""
+    inherited = st.checkbox("Inherit Field default", value=value is None,
+                            key=f"{key}_inherit", on_change=_clear_studio_review)
+    if inherited:
+        return None
+    return _field_default_widget(field["type"], json.loads(field["options"] or "[]"),
+                                 value if value is not None else field["default_value"], f"{key}_value")
+
+
+def _block_studio(rows, fields, mode, writes_enabled):
+    """CP5's single-draft Block editor.
+
+    Relationship widgets intentionally live beside the template form rather
+    than in a separate save path.  Their values are handed to
+    ``block_draft_operations`` only when the one Prepare button is pressed.
+    """
+    st.subheader("Blocks", anchor=False)
+    generation = st.session_state.get("_editor_studio_form_generation", 0)
+    action = st.radio("Block action", ["Edit existing Block", "Create a new Block", "Duplicate existing Block"],
+                      horizontal=True, key="editor_studio_block_action", on_change=_clear_studio_review)
+    # The lifecycle filter applies to every source picker.  In particular,
+    # ``All``/``Archived`` must make archived Blocks visible in Studio rather
+    # than silently resembling a restricted inventory.  Archived Blocks are
+    # never valid duplicate sources: restore them first, then duplicate the
+    # active configuration.
+    selectable = _filter_rows(rows, mode)
+    archived_non_table = [row for row in rows if row.get("is_archived") and not row.get("is_table")]
+    if mode == "Active" and archived_non_table:
+        names = ", ".join(row["name"] for row in archived_non_table)
+        st.caption(
+            f"{names} {'is' if len(archived_non_table) == 1 else 'are'} archived and hidden by the Active filter. "
+            "Choose Archived or All to prepare a reviewed restore."
+        )
+    if action == "Create a new Block":
+        block, source_key, stable_key = None, None, "new"
+    else:
+        if not selectable:
+            st.info("No Blocks are available for this action.")
+            return
+        choices = {row["id"]: row for row in selectable}
+        block_id = st.selectbox("Source Block" if action == "Duplicate existing Block" else "Block", list(choices),
+                                format_func=lambda ident: _entity_caption(choices[ident], "key", "name"),
+                                key="editor_studio_block_select", on_change=_clear_studio_review)
+        block, source_key, stable_key = choices[block_id], choices[block_id]["key"], choices[block_id]["key"]
+        if block["is_table"]:
+            st.info("Table Blocks are read-only. Table row authoring remains outside Stage 6.")
+            _show_templates(block)
+            _show_rows(db.get_block_usage(block["id"])["fields"], "This Block has no Fields.")
+            return
+        if block.get("is_archived"):
+            st.info("This Block is archived. Restore it before editing or duplicating it.")
+            # Archived Blocks return before the editable draft below.  Give a
+            # lifecycle review its own display gate here; otherwise the
+            # Restore button can freeze a valid candidate which this branch
+            # immediately hides on its rerun.
+            restore_plan = content_studio.lifecycle_plan("restore", "Blocks", block["key"])
+            restore_signature = _studio_signature(
+                "lifecycle", {"table": "Blocks", "key": block["key"]}, restore_plan
+            )
+            if _show_studio_review(restore_signature, writes_enabled):
+                return
+            _lifecycle_panel("Blocks", block, restore_signature, writes_enabled)
+            return
+
+    defaults = ({
+        "name": "", "site_label": None, "conclusion_group": None,
+        "macro_template": "", "micro_template": "", "conclusion_template": "",
+        "context_template": None, "title_fragment_template": None, "conclusion_label_template": None,
+    } if block is None else {name: block.get(name) for name in (
+        "name", "site_label", "conclusion_group", "macro_template", "micro_template",
+        "conclusion_template", "context_template", "title_fragment_template", "conclusion_label_template",
+    )})
+    existing_bindings = [] if block is None else db.get_block_usage(block["id"])["fields"]
+    active_fields = [field for field in fields if not field.get("is_archived")]
+    field_by_key = {field["key"]: field for field in active_fields}
+    existing_by_key = {binding["key"]: binding for binding in existing_bindings}
+    binding_default = [binding["key"] for binding in existing_bindings if binding["key"] in field_by_key]
+    baseline = None
+    if block is not None:
+        # Do not recalculate this as widgets rerun: it is the exact Block plus
+        # Block_Fields image this draft was loaded from.  A changed image must
+        # reset stale widget state rather than produce rollback operations.
+        # Edit and Duplicate deliberately share widgets, so they must also
+        # share the baseline for this loaded draft generation. Recapturing a
+        # baseline on action change would bless older retained widget values.
+        baseline_key = f"_editor_studio_block_baseline_{block['id']}_{generation}"
+        if baseline_key not in st.session_state:
+            st.session_state[baseline_key] = content_studio.block_draft_baseline(block, existing_bindings)
+        baseline = st.session_state[baseline_key]
+    draft_signature = {"action": action, "key": stable_key, "generation": generation}
+    if _show_studio_review(_studio_signature("block", {"table": "Blocks", "key": stable_key}, draft_signature), writes_enabled):
+        return
+
+    key_token = f"editor_studio_block_{stable_key}_{generation}"
+    if action == "Create a new Block" or action == "Duplicate existing Block":
+        key = st.text_input("Stable key", value="", key=f"{key_token}_new_key")
+    else:
+        key = block["key"]
+        st.caption(f"Stable key: `{key}` (locked)")
+
+    selected = st.multiselect("Bound Fields", list(field_by_key), default=binding_default,
+                              format_func=lambda field_key: f"{field_by_key[field_key]['label']} ({field_key})",
+                              key=f"{key_token}_fields", on_change=_clear_studio_review)
+    order_key = f"{key_token}_order"
+    previous = st.session_state.get(order_key, binding_default)
+    order = [field_key for field_key in previous if field_key in selected] + [
+        field_key for field_key in selected if field_key not in previous
+    ]
+    st.session_state[order_key] = order
+    if order:
+        move_key = f"{key_token}_move"
+        # A multiselect removal can leave its companion selectbox's session
+        # value pointing at the just-removed Field. Repair that state before
+        # Streamlit constructs the selectbox or evaluates its Up/Down state.
+        if st.session_state.get(move_key) not in order:
+            st.session_state[move_key] = order[0]
+        move = st.selectbox("Field to move", order,
+                            format_func=lambda field_key: field_by_key[field_key]["label"], key=move_key)
+        move_index = order.index(move)  # guarded by the reset above
+        up, down = st.columns(2)
+        if up.button("Move Field up", key=f"{key_token}_up", disabled=move_index == 0):
+            index = move_index; order[index - 1], order[index] = order[index], order[index - 1]
+            st.session_state[order_key] = order; _clear_studio_review(); st.rerun()
+        if down.button("Move Field down", key=f"{key_token}_down", disabled=move_index == len(order) - 1):
+            index = move_index; order[index + 1], order[index] = order[index], order[index + 1]
+            st.session_state[order_key] = order; _clear_studio_review(); st.rerun()
+    bindings = []
+    for position, field_key in enumerate(order):
+        field = field_by_key[field_key]
+        old = existing_by_key.get(field_key, {})
+        with st.expander(f"{position + 1}. {field['label']} ({field_key})", expanded=False):
+            label_mode = st.checkbox("Override Field label", value=old.get("label_override") is not None,
+                                     key=f"{key_token}_{field_key}_label_mode", on_change=_clear_studio_review)
+            label = (st.text_input("Label override", old.get("label_override") or "",
+                                   key=f"{key_token}_{field_key}_label") if label_mode else None)
+            default = _block_binding_default(field, old.get("default_override"), f"{key_token}_{field_key}_default")
+            context = st.checkbox("Place in clinical context", value=bool(old.get("context_section")),
+                                  key=f"{key_token}_{field_key}_context", on_change=_clear_studio_review)
+            bindings.append({"field_key": field_key, "label_override": label,
+                             "default_override": default, "context_section": context})
+
+    groups = sorted({row["conclusion_group"] for row in rows if row.get("conclusion_group")})
+    group_options = ["No conclusion group", *groups, "Create a new conclusion group…"]
+    current_group = defaults["conclusion_group"]
+    group_index = group_options.index(current_group) if current_group in group_options else 0
+    # This picker is outside the form so choosing the explicit-new branch
+    # immediately reveals its required name rather than submitting a stale
+    # empty value from the prior form layout.
+    group_choice = st.selectbox("Conclusion group", group_options, index=group_index,
+                                key=f"{key_token}_group", on_change=_clear_studio_review)
+    custom_group = (st.text_input("New conclusion group", key=f"{key_token}_new_group",
+                                  on_change=_clear_studio_review)
+                    if group_choice == group_options[-1] else "")
+    with st.form(f"editor_studio_block_form_{stable_key}_{generation}"):
+        name = st.text_input("Block name", defaults["name"] or "", key=f"{key_token}_name")
+        site_label = st.text_input("Site label (optional)", defaults["site_label"] or "", key=f"{key_token}_site")
+        macro = st.text_area("Macro template", defaults["macro_template"] or "", key=f"{key_token}_macro")
+        micro = st.text_area("Microscopy template", defaults["micro_template"] or "", key=f"{key_token}_micro")
+        conclusion = st.text_area("Conclusion template", defaults["conclusion_template"] or "", key=f"{key_token}_conclusion")
+        context_template = st.text_area("Context template (optional)", defaults["context_template"] or "", key=f"{key_token}_context_template")
+        title = st.text_area("Title fragment template (optional)", defaults["title_fragment_template"] or "", key=f"{key_token}_title")
+        conclusion_label = st.text_area("Conclusion label template (optional)", defaults["conclusion_label_template"] or "", key=f"{key_token}_conclusion_label")
+        prepare = st.form_submit_button("Prepare Block review", disabled=not writes_enabled)
+    group = None if group_choice == "No conclusion group" else custom_group if group_choice == group_options[-1] else group_choice
+    values = {"name": name, "site_label": site_label, "conclusion_group": group,
+              "macro_template": macro, "micro_template": micro, "conclusion_template": conclusion,
+              "context_template": context_template, "title_fragment_template": title,
+              "conclusion_label_template": conclusion_label}
+    if prepare:
+        target_action = "create" if action == "Create a new Block" else "duplicate" if action == "Duplicate existing Block" else "edit"
+        # New/duplicate drafts have no persisted target yet. Bind the frozen
+        # review to the create/source selection (not a transient text widget)
+        # so it survives the rerun that hides the draft.
+        signature = _studio_signature("block", {"table": "Blocks", "key": stable_key}, {"action": target_action, "values": values, "bindings": bindings})
+        if group_choice == group_options[-1] and not custom_group.strip():
+            st.error("Provide a name for the new conclusion group.")
+        else:
+            try:
+                intents = content_studio.block_draft_operations(
+                    target_action, key, values, bindings, source_key=source_key, baseline=baseline
+                )
+            except content_studio.StaleBlockDraftError as error:
+                # New widget keys on the next run force Streamlit to load the
+                # current source rather than retain this tab's stale values.
+                _clear_studio_review()
+                st.session_state["_editor_studio_form_generation"] = generation + 1
+                st.session_state["_editor_studio_error"] = str(error)
+                st.rerun()
+            except content_studio.StudioIntentError as error:
+                st.error(f"Review was not prepared: {error}")
+            else:
+                _prepare_studio_review(intents, signature, f"{target_action.title()} Block.{key}")
+    if block is not None and action == "Edit existing Block":
+        _lifecycle_panel("Blocks", block, _studio_signature("block", {"table": "Blocks", "key": key}, values), writes_enabled)
 
 
 def _group_label_studio(writes_enabled):
@@ -1018,7 +1227,7 @@ if section == "Content Studio":
     st.caption("Draft changes become a frozen review before they can be applied. Stable keys and Field type/options are immutable.")
     mode = st.radio("Lifecycle filter", ["Active", "Archived", "All"], horizontal=True,
                     key="editor_studio_filter", on_change=_clear_studio_review)
-    studio_kind = st.radio("Content Studio area", ["Fields", "Snippets", "Group labels"], horizontal=True,
+    studio_kind = st.radio("Content Studio area", ["Fields", "Blocks", "Snippets", "Group labels"], horizontal=True,
                            key="editor_studio_kind", on_change=_clear_studio_review)
     studio_error = st.session_state.pop("_editor_studio_error", None)
     if studio_error:
@@ -1028,9 +1237,12 @@ if section == "Content Studio":
             with st.expander("Local candidate refusal details — session only"):
                 st.error(str(studio_local_error))
     all_fields = db.get_all_fields(include_archived=True)
+    all_blocks = db.get_all_editor_blocks()
     all_snippets = db.get_all_snippets(include_archived=True)
     if studio_kind == "Fields":
         _field_studio(all_fields, mode, writes_enabled)
+    elif studio_kind == "Blocks":
+        _block_studio(all_blocks, all_fields, mode, writes_enabled)
     elif studio_kind == "Snippets":
         _snippet_studio(all_snippets, mode, writes_enabled)
     else:
@@ -1059,7 +1271,7 @@ elif section == "Blocks":
         block = block_by_id[block_id]; usage = db.get_block_usage(block_id)
         st.caption(f"key: `{block['key']}` · table: {'yes' if block['is_table'] else 'no'} · site label: {block.get('site_label') or '—'} · conclusion group: {block.get('conclusion_group') or '—'}")
         st.info(f"Impact: {usage['pending_case_count']} pending case(s) may use this Block.")
-        st.info("Block authoring moves to Content Studio in Checkpoint 5. This checkpoint keeps Blocks read-only.")
+        st.info("Block authoring is available in Content Studio. This legacy view remains read-only.")
         st.subheader("Templates", anchor=False); _show_templates(block)
         st.subheader("Fields used", anchor=False); _show_rows(usage["fields"], "This Block has no Fields.")
         st.subheader("Used by Presets", anchor=False); _show_rows(usage["presets"], "No Preset currently uses this Block.")

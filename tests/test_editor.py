@@ -100,16 +100,35 @@ def test_new_snippet_form_is_available_only_through_content_studio(mutable_db):
     assert "Create Snippet" not in {widget.label for widget in app.button}
 
 
-def test_blocks_are_read_only_until_checkpoint_five(mutable_db):
+def test_checkpoint_five_enables_non_table_block_studio_but_keeps_tables_and_presets_read_only(mutable_db):
+    # Seed data currently has no table Block, so add one solely to preserve
+    # the CP5 boundary in the browser-facing regression test.
+    conn = db_module.get_db_connection()
+    try:
+        conn.execute("""INSERT INTO Blocks(key,name,is_table,micro_template,conclusion_template)
+                        VALUES ('cp5_table_block','CP5 table Block',1,'Table micro.','Table conclusion.')""")
+        table_id = conn.execute("SELECT id FROM Blocks WHERE key='cp5_table_block'").fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
     app = AppTest.from_file("pages/editor.py")
     app.run()
     app.checkbox(key="editor_initial_snapshot_ack").set_value(True).run()
     app.button(key="editor_enable_direct_editing").click().run()
-    _go_to(app, "Blocks")
 
     assert not app.exception
-    assert any("Checkpoint 5" in item.value for item in app.info)
-    assert "Preview Block changes" not in {widget.label for widget in app.button}
+    app.radio(key="editor_studio_kind").set_value("Blocks").run()
+    assert "Prepare Block review" in {widget.label for widget in app.button}
+
+    # Table Blocks remain visible but have no CP5 authoring/lifecycle action.
+    app.selectbox(key="editor_studio_block_select").set_value(table_id).run()
+    assert any("Table Blocks are read-only" in item.value for item in app.info)
+    assert "Prepare Block review" not in {widget.label for widget in app.button}
+
+    _go_to(app, "Presets")
+    assert any("Checkpoint 6" in item.value for item in app.info)
+    assert not {widget.label for widget in app.button} & {"Save Preset wording", "Preview Preset changes"}
 
 
 def test_editor_section_and_block_selection_persist_across_reruns(mutable_db):

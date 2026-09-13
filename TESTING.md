@@ -46,8 +46,8 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-414 tests currently exist; the Stage 6 checkpoint 3 run passed in bounded
-terminal shards as documented below.
+459 tests currently exist; the Stage 6 checkpoint 5 full isolated run passed
+as documented below.
 
 ## Structure
 
@@ -464,6 +464,23 @@ and `git diff --check` passed. Tests use only temporary databases; no seed
 content, golden fixture, operational database, or accepted review artifact was
 changed. An isolated temporary-database Streamlit boot returned HTTP 200 for
 `/`, `/workspace`, `/worklist`, `/editor`, and `/manager`, then was removed.
+
+## Stage 6 checkpoint 5 — Block Studio and Block Fields
+
+`test_stage6_blocks.py` covers frozen-review Create/Edit/Duplicate workflows,
+immutable keys, non-table-only authoring, exact `Block_Fields` inheritance and
+override storage, Field add/remove/reorder, template-variable coordination,
+pending-Case impact, lifecycle, duplication without Preset relationships, and
+stale review/Apply refusal. Adversarial regressions bind the complete physical
+Block/binding image, every desired Field endpoint, and copied consistency
+rules, including natural-key-identical delete/recreate ABA races before review
+and Apply.
+
+Focused CP5/UI/candidate/lifecycle/editor selections and manual browser checks
+passed. Final independent review closed all blockers, independently verified
+Create/Edit/Duplicate/Apply ABA protection, and approved the checkpoint. The
+full isolated suite passed **459 tests**; relevant Python files compiled and
+diff checks passed. Checkpoint 6 was not started.
 
 ### Final contract hardening, regression, and real-model acceptance
 

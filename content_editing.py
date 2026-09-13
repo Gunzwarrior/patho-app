@@ -295,6 +295,8 @@ def _update(conn, table_name, entity_key, changes):
 
 def _validate_row(table_name, row, original=None):
     if table_name == "Blocks":
+        if not str(row.get("name") or "").strip():
+            raise ContentEditError("Block name cannot be blank.")
         if not str(row.get("micro_template") or "").strip() or not str(row.get("conclusion_template") or "").strip():
             raise ContentEditError("Microscopy and conclusion templates cannot be blank.")
         if not row.get("is_table") and not str(row.get("macro_template") or "").strip():

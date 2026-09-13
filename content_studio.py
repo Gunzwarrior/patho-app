@@ -28,6 +28,10 @@ class StudioIntentError(ValueError):
     """A guided form supplied an incomplete or unsupported intent."""
 
 
+class StaleBlockDraftError(StudioIntentError):
+    """A Block draft no longer matches the Block and bindings it loaded."""
+
+
 def _copy_mapping(value, name):
     if not isinstance(value, dict):
         raise StudioIntentError(f"{name} must be an object.")
@@ -94,6 +98,337 @@ def review(intents, base_snapshot_hash, *, summary="", db_name=None):
 # neither the planner nor its summaries write the operational database.
 
 _BASE_KEY = {"Fields": "key", "Blocks": "key", "Presets": "short_code", "Snippets": "shortcut"}
+
+
+# Stage 6 checkpoint 5 ------------------------------------------------------
+
+_BLOCK_COLUMNS = (
+    "name", "site_label", "conclusion_group", "macro_template", "micro_template",
+    "conclusion_template", "context_template", "title_fragment_template",
+    "conclusion_label_template",
+)
+_BLOCK_FIELD_COLUMNS = ("sort_order", "label_override", "default_override", "context_section")
+
+
+def _none_if_blank(value):
+    return None if value is None or (isinstance(value, str) and not value.strip()) else value
+
+
+def _block_values(draft):
+    """Return the editable non-table Block image from a guided draft."""
+    if not isinstance(draft, dict):
+        raise StudioIntentError("Block draft must be an object.")
+    values = {}
+    for column in _BLOCK_COLUMNS:
+        if column not in draft:
+            raise StudioIntentError(f"Block draft is missing {column}.")
+        value = draft[column]
+        if column in {"name", "macro_template", "micro_template", "conclusion_template"}:
+            if not isinstance(value, str):
+                raise StudioIntentError(f"Block {column} must be text.")
+            if column == "name" and not value.strip():
+                raise StudioIntentError("Block name cannot be blank.")
+        elif value is not None and not isinstance(value, str):
+            raise StudioIntentError(f"Block {column} must be text or empty.")
+        if column in {"site_label", "conclusion_group", "context_template",
+                      "title_fragment_template", "conclusion_label_template"}:
+            value = _none_if_blank(value)
+        values[column] = value
+    return values
+
+
+def _block_field_values(binding, position):
+    if not isinstance(binding, dict) or not isinstance(binding.get("field_key"), str) or not binding["field_key"]:
+        raise StudioIntentError("Every Block Field binding needs an active Field key.")
+    label = binding.get("label_override")
+    # ``None`` is the explicit Use Field label state.  A present blank value
+    # instead means the Override Field label mode was selected without a
+    # usable label; never silently translate that into inheritance.
+    if label is not None and (not isinstance(label, str) or not label.strip()):
+        raise StudioIntentError("Block Field label override cannot be blank.")
+    default = binding.get("default_override")
+    context = binding.get("context_section", False)
+    if type(context) is not bool:
+        raise StudioIntentError("Block Field context-section state must be true or false.")
+    return {
+        "sort_order": position,
+        "label_override": label,
+        "default_override": default,
+        "context_section": context,
+    }
+
+
+def _normal_block_bindings(bindings):
+    if not isinstance(bindings, list):
+        raise StudioIntentError("Block Field bindings must be an ordered list.")
+    result = []
+    seen = set()
+    for position, binding in enumerate(bindings):
+        values = _block_field_values(binding, position)
+        key = binding["field_key"]
+        if key in seen:
+            raise StudioIntentError("A Field can be bound to a Block only once.")
+        seen.add(key)
+        result.append((key, values))
+    return result
+
+
+def _block_draft_image(block, bindings):
+    """Canonical persisted state a guided Block draft is allowed to replace."""
+    block = dict(block)
+
+    def binding_image(row, position):
+        row = dict(row)
+        field_key = row.get("field_key", row.get("key"))
+        # The planner query exposes Block_Fields.field_id directly. The UI's
+        # joined Field rows expose that same identity as Fields.id. Never hash
+        # only the natural key: delete/recreate/rebind under an identical key
+        # is a different persisted relationship endpoint.
+        field_id = row.get("field_id")
+        if field_id is None and row.get("key") == field_key:
+            field_id = row.get("id")
+        block_id = row.get("block_id", block.get("id"))
+        if type(block_id) is not int or type(field_id) is not int:
+            raise StudioIntentError(
+                "Block draft bindings require their loaded physical identities."
+            )
+        return {
+            "block_id": block_id,
+            "field_id": field_id,
+            "field_key": field_key,
+            "sort_order": row.get("sort_order", position),
+            "label_override": row["label_override"],
+            "default_override": row["default_override"],
+            # The UI exposes a bool, whereas SQLite retains 0/1. This is a
+            # physical baseline, so canonicalise only that representation.
+            "context_section": int(row["context_section"])
+            if type(row["context_section"]) is bool else row["context_section"],
+        }
+
+    return {
+        "block": block,
+        # Test/domain callers may supply the same ordered binding shape as
+        # the form (without its redundant persisted sort_order).  Preserve
+        # that order as the physical position in that one case.
+        "bindings": sorted(
+            (binding_image(row, position) for position, row in enumerate(bindings)),
+            key=lambda row: row["field_key"],
+        ),
+    }
+
+
+def block_draft_baseline(block, bindings):
+    """Return the deterministic load baseline for an edit/duplicate draft.
+
+    The base row and relationship rows are deliberately both included.  A
+    metadata-only form must not later erase an override added in another tab.
+    """
+    return content_editing.row_hash(_block_draft_image(block, bindings))
+
+
+def _block_rule_rows(conn, block_id):
+    """Return the exact physical consistency rules copied by Duplicate."""
+    return [dict(row) for row in conn.execute(
+        "SELECT * FROM Field_Consistency_Rules WHERE block_id=? ORDER BY id", (block_id,)
+    )]
+
+
+def _block_rules_baseline(rows):
+    # Wrap the list so row_hash's top-level base-row ``id`` exclusion does not
+    # discard the physical rule identities nested in this source image.
+    return content_editing.row_hash({"rules": list(rows)})
+
+
+def _field_endpoints_baseline(rows):
+    """Hash complete desired Field rows, including their physical IDs."""
+    return content_editing.row_hash({
+        "fields": sorted((dict(row) for row in rows), key=lambda row: row["key"]),
+    })
+
+
+def _assert_field_endpoints(conn, field_keys, baseline):
+    """Require desired binding endpoints to be the Fields planning read."""
+    rows = []
+    for field_key in field_keys:
+        row = conn.execute("SELECT * FROM Fields WHERE key=?", (field_key,)).fetchone()
+        if row is None:
+            raise StaleBlockDraftError(
+                "A Field selected by this Block draft changed since planning. Current values were reloaded."
+            )
+        rows.append(dict(row))
+    if baseline != _field_endpoints_baseline(rows):
+        raise StaleBlockDraftError(
+            "A Field selected by this Block draft changed since planning. Current values were reloaded."
+        )
+
+
+def _assert_block_draft_baseline(conn, source_key, baseline, copied_rules_baseline=None):
+    """Require one source Block and its bindings to match a loaded draft."""
+    if not isinstance(baseline, str) or not baseline:
+        raise StudioIntentError("Block edit and duplicate drafts require their loaded baseline.")
+    try:
+        source = _target(conn, "Blocks", source_key)
+    except StudioIntentError:
+        # A source that existed when the guided draft was loaded but no longer
+        # exists is stale state, not a new lifecycle-planning error.
+        raise StaleBlockDraftError(
+            "This Block or its Field bindings changed since the draft was loaded. Current values were reloaded."
+        ) from None
+    current_rows = {
+        row["field_key"]: dict(row)
+        for row in conn.execute("""SELECT bf.*, f.key AS field_key FROM Block_Fields bf
+                                   JOIN Fields f ON f.id=bf.field_id WHERE bf.block_id=?""", (source["id"],))
+    }
+    if baseline != block_draft_baseline(source, current_rows.values()):
+        raise StaleBlockDraftError(
+            "This Block or its Field bindings changed since the draft was loaded. Current values were reloaded."
+        )
+    if copied_rules_baseline is not None and copied_rules_baseline != _block_rules_baseline(
+            _block_rule_rows(conn, source["id"])):
+        raise StaleBlockDraftError(
+            "This Block or its copied consistency rules changed since duplication was planned. "
+            "Current values were reloaded."
+        )
+    return source, current_rows
+
+
+def block_draft_operations(action, key, draft, bindings, *, source_key=None, baseline=None, db_name=None):
+    """Translate one complete Block form into one reviewed candidate.
+
+    The planner is deliberately read-only.  It owns the otherwise easy to
+    get wrong relationship replacement: templates and every ``Block_Fields``
+    row travel through the candidate service together.  ``duplicate`` copies
+    only the Block and its own Field/rule configuration; Preset composition is
+    intentionally not an implicit relationship of a duplicate.
+    """
+    if action not in {"create", "edit", "duplicate"}:
+        raise StudioIntentError("Block action must be create, edit, or duplicate.")
+    if not isinstance(key, str) or not key.strip():
+        raise StudioIntentError("A Block needs a stable key.")
+    values = _block_values(draft)
+    desired = _normal_block_bindings(bindings)
+    conn = _connection(db_name)
+    try:
+        if action in {"create", "duplicate"}:
+            if conn.execute("SELECT 1 FROM Blocks WHERE key=?", (key,)).fetchone() is not None:
+                raise StudioIntentError("Block key already exists.")
+        if action in {"edit", "duplicate"}:
+            if not isinstance(source_key, str) or not source_key:
+                raise StudioIntentError("An existing Block is required.")
+            source, current_rows = _assert_block_draft_baseline(conn, source_key, baseline)
+            if action == "edit" and key != source_key:
+                raise StudioIntentError("A Block stable key cannot be changed.")
+            if action == "duplicate" and key == source_key:
+                raise StudioIntentError("A duplicate needs a new stable key.")
+            if action == "duplicate" and values["name"] == source["name"]:
+                raise StudioIntentError("A duplicate needs a new Block name.")
+            if source["is_table"]:
+                raise StudioIntentError("Table Blocks are read-only in Content Studio.")
+            if source["is_archived"]:
+                raise StudioIntentError("Restore an archived Block before editing or duplicating it.")
+        else:
+            source, current_rows = None, {}
+
+        active_fields = {row["key"]: dict(row) for row in conn.execute(
+            "SELECT * FROM Fields WHERE is_archived=0"
+        )}
+        missing = sorted(field_key for field_key, _ in desired if field_key not in active_fields)
+        if missing:
+            raise StudioIntentError("Block Fields must be active: " + ", ".join(missing) + ".")
+        # Existing SQLite overrides use the historic text representation.
+        # A duplicated Block must preserve their Field-type meaning without
+        # asking the generic writer to treat (for example) "2" as a native
+        # number widget value.
+        normalized_desired = []
+        for field_key, binding_values in desired:
+            binding_values = dict(binding_values)
+            if binding_values["default_override"] is not None:
+                try:
+                    binding_values["default_override"] = content_changes._native_stored(
+                        active_fields[field_key], binding_values["default_override"]
+                    )
+                except (TypeError, ValueError):
+                    raise StudioIntentError("Block Field default override is invalid for its Field type.") from None
+            normalized_desired.append((field_key, binding_values))
+        desired = normalized_desired
+
+        desired_field_keys = sorted(field_key for field_key, _ in desired)
+        field_assertion = ([{
+            "op": "assert_field_endpoints",
+            "field_keys": desired_field_keys,
+            "baseline": _field_endpoints_baseline(
+                active_fields[field_key] for field_key in desired_field_keys
+            ),
+        }] if desired_field_keys else [])
+        source_rules = _block_rule_rows(conn, source["id"]) if action == "duplicate" else []
+        source_assertion = ([{
+            "op": "assert_block_draft", "table": "Blocks", "key": source_key,
+            "baseline": baseline,
+            "copied_rules_baseline": _block_rules_baseline(source_rules) if action == "duplicate" else None,
+        }] if source is not None else [])
+        assertions = source_assertion + field_assertion
+        if action in {"create", "duplicate"}:
+            operations = assertions + [operation("create", "Blocks", key, values)]
+            for field_key, binding_values in desired:
+                operations.append(operation("link", "Block_Fields", {
+                    "block_key": key, "field_key": field_key,
+                }, binding_values))
+            if action == "duplicate":
+                for rule in source_rules:
+                    rule_key = {
+                        "block_key": key,
+                        "field_a_key": rule["field_a_key"],
+                        "field_a_values": rule["field_a_values"],
+                        "field_b_key": rule["field_b_key"],
+                        "field_b_values": rule["field_b_values"],
+                        "message": rule["message"],
+                    }
+                    rule_values = {name: rule[name] for name in (
+                        "field_a_key", "field_a_values", "field_b_key", "field_b_values", "message",
+                    )}
+                    operations.append(operation("link", "Field_Consistency_Rules", rule_key, rule_values))
+            return operations
+
+        desired_by_key = dict(desired)
+        operations = assertions + [operation("update", "Blocks", key, values)]
+        for field_key in sorted(set(current_rows) - set(desired_by_key)):
+            operations.append(operation("unlink", "Block_Fields", {"block_key": key, "field_key": field_key}))
+        for field_key, binding_values in desired:
+            old = current_rows.get(field_key)
+            if old is None:
+                operations.append(operation("link", "Block_Fields", {
+                    "block_key": key, "field_key": field_key,
+                }, binding_values))
+                continue
+            old_values = {column: old[column] for column in _BLOCK_FIELD_COLUMNS}
+            # SQLite stores BOOLEAN as an integer; compare the guided state
+            # rather than emitting a false update for every checkbox. It also
+            # retains numeric/checkbox defaults as text, while guided widgets
+            # use native values; compare both sides in that native Field type
+            # so a metadata-only edit is not preceded by a false no-op link.
+            old_values["context_section"] = bool(old_values["context_section"])
+            if old_values["default_override"] is not None:
+                try:
+                    old_values["default_override"] = content_changes._native_stored(
+                        active_fields[field_key], old_values["default_override"]
+                    )
+                except (TypeError, ValueError):
+                    raise StudioIntentError("Stored Block Field default override is invalid.") from None
+            if old_values != binding_values:
+                changed = {name: binding_values[name] for name in binding_values
+                           if old_values[name] != binding_values[name]}
+                operations.append(operation(
+                    "reorder" if set(changed) == {"sort_order"}
+                    else "update",
+                    "Block_Fields", {"block_key": key, "field_key": field_key}, changed,
+                ))
+        # Avoid manufacturing a no-op Block update when only relationships
+        # changed. The candidate engine rejects no-op updates by design.
+        if all(source[column] == values[column] for column in _BLOCK_COLUMNS):
+            operations.pop(len(assertions))
+        return operations
+    finally:
+        conn.close()
 
 
 def _connection(db_name):

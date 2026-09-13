@@ -79,6 +79,24 @@ lifecycle, archived group labels, report review, and stale-review behaviour.
 No operational database, seed content, golden fixtures, or accepted-review
 artifact was opened or changed.
 
+**Stage 6 checkpoint 5 — complete, independently reviewed, remediated, and
+approved for commit.** Supported non-table Blocks now use the frozen Content
+Studio review → confirmation → Apply workflow for create, edit, duplicate,
+lifecycle, and coordinated `Block_Fields` changes. Stable keys and table
+Blocks remain read-only; duplication copies only Block-owned configuration,
+not Preset relationships. Complete physical Block/binding identities, every
+desired Field endpoint, and copied consistency rules are bound into
+non-mutating candidate assertions, closing stale-draft, TOCTOU, and endpoint
+ABA paths while preserving typed override storage and post-review Apply
+guards.
+
+`tests/test_stage6_blocks.py` covers Block authoring, duplication, binding
+add/remove/reorder, override semantics, template coordination, lifecycle,
+pending impact, and adversarial stale-source/identity races. Manual browser
+verification and final independent review passed; the final isolated suite
+passed **459 tests**. Changed Python files compile and diff checks pass.
+Checkpoint 6 has not begun.
+
 **Stage 6 checkpoint 2 remediation — complete locally and awaiting approval.**
 The independent review's blocking findings are addressed without extending
 into Checkpoint 3: generalized inverses now refuse pending-dependent removals
