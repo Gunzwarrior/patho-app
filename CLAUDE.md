@@ -215,9 +215,11 @@ reconsider, not just re-explain.
   path: guided changes, AI packages, and reviewed inverses all use frozen
   review → confirmation → Apply; no legacy one-click revert remains. Destructive
   reviews compare validated-Case reconstruction before/after and warn only for
-  newly unavailable future Return-to-pending paths. Stage 7 Quick
-  Type/consistency-rule authoring is still out of scope; see PROGRESS.md and
-  EDITOR_UI_PROPOSAL.md for current status and scope.
+  newly unavailable future Return-to-pending paths. Stage 7 Quick Type,
+  consistency-rule authoring, and bulk intake remain unimplemented but now
+  have an approved contract in `STAGE7_IMPLEMENTATION_PLAN.md`; use that plan
+  and `PROGRESS.md` for current scope/status rather than reconstructing it from
+  the older roadmap alone.
   **A persistent automated test suite is a decided prerequisite/companion —
   see TESTING.md** for the full plan, philosophy, and checkpoint-by-
   checkpoint status (final Stage 6 acceptance: 493 isolated tests). Every round's
