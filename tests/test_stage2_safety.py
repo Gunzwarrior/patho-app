@@ -7,6 +7,9 @@ import sqlite3
 import subprocess
 
 import content_snapshot
+import content_changes
+import content_editing
+import content_studio
 import database
 import init_db
 
@@ -321,7 +324,36 @@ def test_snapshot_round_trip_preserves_content_ids_and_composed_case(mutable_db)
     assert [row["id"] for row in conn.execute("SELECT id FROM Quick_Type_Tokens ORDER BY id")] == before_quick_type_ids
     conn.close()
     assert database.get_case_by_number("COMPOSED-SNAPSHOT-1")["structured_input"] == composed
-    assert database.get_snippet_by_shortcut("temporary") is None
+
+
+def test_snapshot_restore_preserves_detached_validated_case_without_live_reconstruction(mutable_db):
+    content_editing.record_initial_snapshot("a" * 64)
+    preset = _preset("dai")
+    structured = _case_input(database.get_preset_blocks(preset["id"]))
+    assert database.save_case("DETACHED-VALIDATED-RESTORE", preset["id"], "", structured,
+                              "<p>frozen detached artifact</p>", status="validated")
+    deletion = content_studio.review(
+        [content_studio.operation("delete", "Presets", "dai")],
+        content_snapshot.content_snapshot_hash(content_snapshot.export_content_snapshot()),
+        summary="detach validated Preset for recovery",
+    )
+    content_changes.apply_review(deletion)
+    detached_before = dict(database.get_case_by_number("DETACHED-VALIDATED-RESTORE"))
+    assert detached_before["preset_id"] is None
+    snapshot = content_snapshot.export_content_snapshot()
+
+    # Force the restore candidate to make a real content change; the frozen
+    # Case must remain byte-for-byte intact and must not be live-rendered.
+    conn = database.get_db_connection()
+    conn.execute("INSERT INTO Snippets (shortcut, expansion, category) VALUES (?, ?, ?)",
+                 ("restore_detached_temporary", "temporary", None))
+    conn.commit(); conn.close()
+    ok, error = content_snapshot.restore_content_snapshot(snapshot)
+    assert ok, error
+    assert content_snapshot.content_snapshot_hash(content_snapshot.export_content_snapshot()) == \
+        content_snapshot.content_snapshot_hash(snapshot)
+    assert dict(database.get_case_by_number("DETACHED-VALIDATED-RESTORE")) == detached_before
+    assert database.get_snippet_by_shortcut("restore_detached_temporary") is None
 
 
 def test_snapshot_refuses_changes_to_content_needed_by_saved_case(mutable_db):

@@ -7,6 +7,41 @@ record from earlier rounds.
 
 ## Current status
 
+**Stage 6 checkpoint 7 — accepted and complete.** Editor has one reachable human authoring surface:
+Content Studio. The remaining unused one-row direct-save/preview helpers were
+removed, so manual Fields, Snippets, Blocks, Presets, relationships, lifecycle
+actions, AI packages, and reviewed inverses all retain the frozen review →
+confirmation → Apply boundary. The common review renderer now uses neutral
+review language; its recovery-snapshot gate and the backend gate still protect
+every Apply. Table Blocks/table-bearing Presets remain read-only, and Stage 7
+Quick Type and consistency-rule authoring remain absent.
+
+CP7 adds source-level regressions proving that the Editor embeds no legacy
+direct writer, alongside the existing UI/transaction coverage for lifecycle,
+inheritance, pending acknowledgement, archived pending resolution, validated
+Preset detachment, stale/two-tab refusal, recovery gating, AI packages, and
+reviewed inverses. Final-review remediation adds signed physical-row draft
+assertions for Field/Snippet/group-label edits; validates the required
+detach → images → attach order for inverse and inverse-of-inverse; preserves
+detached validated artifacts through snapshot recovery without live rendering;
+removes the legacy one-click revision revert; and compares complete before and
+candidate validated-Case graphs so the signed warning counts every new loss of
+Return-to-pending reconstruction (including Block deletion and reviewed
+inverse-of-inverse), rather than special-casing Preset detachments.
+The shared local guard now also digests the complete validated-Case set and
+full reconstruction input rows, so late Case arrival or changes after review
+make both ordinary destructive Apply and reviewed inverse Apply stale without
+exposing Case data in the review payload or audit.
+`TESTING.md` records the supported isolated snapshot-restore drill. Final
+independent acceptance passed the full isolated suite: **493 passed in
+302.06s**. It independently reproduced and correctly rejected a late validated-Case
+review/Apply race; completed the browser matrix; verified validated deletion →
+inverse → inverse-of-inverse, stale-before-Prepare protection, recovery restore
+with canonical hash equality, and boot of the isolated restored database.
+Compilation and `git diff --check` passed; the reviewer found no remaining
+implementation or data-integrity defect. No operational database, golden
+fixture, seed content, or accepted review artifact was modified.
+
 **Stage 6 checkpoint 3 — complete and approved for commit.** The
 candidate service now expands every base lifecycle action through the approved
 read-only Content Studio planner: archive follows the upward active-dependency

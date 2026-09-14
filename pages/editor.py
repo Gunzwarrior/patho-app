@@ -49,80 +49,6 @@ def _show_preview(preset_id):
         st.code(f"MICROSCOPY\n{preview['micro_plain']}\n\nCONCLUSION\n{preview['conclusion_plain']}")
 
 
-def _loaded_entity(table, entity_key):
-    """Keep one form snapshot stable until its target changes or it saves.
-
-    Without this, a concurrent DB edit changes the hash-derived widget keys at
-    the start of the submit rerun, so Streamlit discards the stale submit event
-    before the backend can report the conflict.
-    """
-    state_key = f"_editor_loaded_{table.lower()}"
-    loaded = st.session_state.get(state_key)
-    if loaded is None or loaded["entity_key"] != entity_key:
-        loaded = {
-            "entity_key": entity_key,
-            "entity": content_editing.get_editable_entity(table, entity_key),
-        }
-        st.session_state[state_key] = loaded
-    return loaded["entity"]
-
-
-def _clear_loaded_entities(table=None):
-    tables = [table] if table else ["Blocks", "Fields", "Snippets", "Presets"]
-    for item in tables:
-        st.session_state.pop(f"_editor_loaded_{item.lower()}", None)
-
-
-def _save(table, key, changes, expected_hash):
-    try:
-        result = content_editing.save_edit(table, key, changes, expected_hash)
-    except content_editing.StaleContentError as error:
-        _clear_loaded_entities(table)
-        st.session_state["_editor_error"] = f"Not saved: {error}"
-        st.rerun()
-    except content_editing.ContentEditError as error:
-        st.error(f"Not saved: {error}")
-        return
-    _clear_loaded_entities(table)
-    st.session_state["_editor_message"] = f"Saved as content revision {result['revision_id']}."
-    st.rerun()
-
-
-def _show_candidate_preview(table, key, changes, expected_hash):
-    try:
-        result = content_editing.preview_edit(table, key, changes, expected_hash)
-    except content_editing.StaleContentError as error:
-        _clear_loaded_entities(table)
-        st.session_state["_editor_error"] = f"Cannot preview: {error}"
-        st.rerun()
-    except content_editing.ContentEditError as error:
-        st.error(f"Cannot preview: {error}")
-        return
-    if not result["previews"]:
-        st.info("This change does not alter any configured Preset's default report output.")
-        return
-    st.subheader("Affected default report previews", anchor=False)
-    st.caption("Rollback-only candidate render; no content has been saved.")
-    for preview in result["previews"]:
-        with st.expander(preview["label"], expanded=True):
-            before_col, after_col = st.columns(2)
-            for column, heading, rendered in (
-                (before_col, "Before", preview["before"]),
-                (after_col, "Candidate", preview["after"]),
-            ):
-                with column:
-                    st.markdown(f"**{heading}**")
-                    if rendered.get("error"):
-                        st.error(rendered["error"])
-                    else:
-                        st.code(
-                            f"TITLE\n{rendered['title']}\n\n"
-                            f"MICROSCOPY\n{rendered['micro_plain']}\n\n"
-                            f"CONCLUSION\n{rendered['conclusion_plain']}",
-                            language=None,
-                        )
-
-
 def _snapshot_gate():
     snapshot = content_snapshot.export_content_snapshot()
     payload = content_snapshot.content_snapshot_json(snapshot)
@@ -132,12 +58,12 @@ def _snapshot_gate():
         st.caption(f"Initial manual snapshot recorded at {state['initial_snapshot_at']}. Optional exports remain on demand.")
         st.download_button("Download current content snapshot", payload, "pathopilot-content-snapshot.json", "application/json", key="editor_snapshot_download")
         return True
-    st.warning("Direct editing is locked until you create and save one manual content snapshot.")
+    st.warning("Content changes are locked until you create and save one manual recovery snapshot.")
     st.download_button("Download initial content snapshot", payload, "pathopilot-initial-content-snapshot.json", "application/json", key="editor_initial_snapshot_download")
     acknowledged = st.checkbox("I have saved this initial snapshot outside PathoPilot", key="editor_initial_snapshot_ack")
-    if st.button("Enable safe direct editing", disabled=not acknowledged, key="editor_enable_direct_editing"):
+    if st.button("Enable reviewed content changes", disabled=not acknowledged, key="editor_enable_direct_editing"):
         content_editing.record_initial_snapshot(digest)
-        st.session_state["_editor_message"] = "Initial snapshot recorded. Direct editing is now enabled."
+        st.session_state["_editor_message"] = "Initial recovery snapshot recorded. Reviewed content changes are now enabled."
         st.rerun()
     return False
 
@@ -208,19 +134,35 @@ def _show_operations(review):
     # not displace the user-facing operation widgets.
     operations = [operation for operation in review.operations
                   if operation.get("op") not in {"assert_block_draft", "assert_field_endpoints",
-                                                   "assert_preset_draft", "assert_preset_endpoints"}]
+                                                   "assert_preset_draft", "assert_preset_endpoints",
+                                                   "assert_source_draft"}]
     st.subheader(f"Normalized operations ({len(operations)})", anchor=False)
     for position, operation in enumerate(operations, 1):
-        key = operation["key"]
-        identity = key if isinstance(key, str) else ", ".join(f"{k}={v}" for k, v in key.items())
-        with st.expander(f"{position}. {operation['op']} {operation['table']} — {identity}"):
+        if operation.get("op") == "case_preset_reference":
+            before, after = operation["before_preset_id"], operation["after_preset_id"]
+            if after is None:
+                label = f"Detach validated Case preset — Case ID {operation['case_id']} (Preset ID {before})"
+            else:
+                label = f"Reattach validated Case preset — Case ID {operation['case_id']} (Preset ID {after})"
+        else:
+            key = operation.get("key")
+            identity = (key if isinstance(key, str) else
+                        ", ".join(f"{name}={value}" for name, value in (key or {}).items()))
+            label = f"{operation.get('op', 'operation')} {operation.get('table', 'content')} — {identity}"
+        with st.expander(f"{position}. {label}"):
             if "index" in operation:
                 st.caption(f"Original uploaded operation index: {operation['index']}")
             else:
-                st.caption("Backend-derived inverse operation")
+                st.caption("Content Studio or reviewed-inverse operation")
             values = operation.get("set", operation.get("values", {}))
             if values:
                 _show_mapping(values)
+            if operation.get("op") == "case_preset_reference":
+                _show_mapping({
+                    "case_id": operation["case_id"],
+                    "before_preset_id": operation["before_preset_id"],
+                    "after_preset_id": operation["after_preset_id"],
+                })
 
 
 def _show_changes(review):
@@ -318,7 +260,7 @@ def _show_review_reports(review, key_prefix):
 def _show_full_review(review, key_prefix):
     data = review.data
     st.success("Dry run succeeded. Nothing saved.")
-    st.caption("Package summary")
+    st.caption("Review summary")
     st.code(data["summary"], language=None)
     for warning in data.get("warnings", []):
         st.warning(warning)
@@ -332,7 +274,7 @@ def _show_full_review(review, key_prefix):
         st.code(
             f"Base SHA-256: {review.base_snapshot_hash}\n"
             f"Candidate SHA-256: {review.candidate_snapshot_hash}\n"
-            f"Package SHA-256: {review.package_hash or 'not applicable'}",
+            f"Imported package SHA-256: {review.package_hash or 'not applicable'}",
             language=None,
         )
 
@@ -450,7 +392,6 @@ def _show_studio_review(signature, writes_enabled):
             _clear_studio_review()
             st.session_state["_editor_error"] = f"Not applied: {error}"
         else:
-            _clear_loaded_entities()
             _clear_studio_review()
             st.session_state["_editor_studio_form_generation"] = (
                 st.session_state.get("_editor_studio_form_generation", 0) + 1
@@ -466,6 +407,14 @@ def _filter_rows(rows, mode):
     if mode == "Archived":
         return [row for row in rows if row.get("is_archived")]
     return rows
+
+
+def _simple_source_baseline(table, key, generation):
+    """Keep a simple form bound to the exact row it originally loaded."""
+    state_key = f"_editor_studio_source_baseline_{table}_{key}_{generation}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = content_studio.source_draft_baseline(table, key)
+    return st.session_state[state_key]
 
 
 def _entity_caption(row, key_name, label_name):
@@ -601,6 +550,7 @@ def _field_studio(rows, mode, writes_enabled):
                             format_func=lambda ident: _entity_caption(choices[ident], "key", "label"),
                             key="editor_studio_field_select", on_change=_clear_studio_review)
     field = choices[field_id]
+    baseline = _simple_source_baseline("Fields", field["key"], generation)
     draft = {"label": field["label"], "default_value": field["default_value"],
              "conclusion_addendum_template": field.get("conclusion_addendum_template")}
     signature = _studio_signature("field-edit", {"table": "Fields", "key": field["key"]}, draft)
@@ -639,7 +589,8 @@ def _field_studio(rows, mode, writes_enabled):
     values = {"label": label, "default_value": default, "conclusion_addendum_template": addendum or None}
     if prepare:
         signature = _studio_signature("field-edit", {"table": "Fields", "key": field["key"]}, values)
-        _prepare_studio_review([content_studio.operation("update", "Fields", field["key"], values)], signature,
+        _prepare_studio_review([content_studio.source_draft_assertion("Fields", field["key"], baseline),
+                                content_studio.operation("update", "Fields", field["key"], values)], signature,
                                 f"Edit Field.{field['key']}")
     _lifecycle_panel("Fields", field, signature, writes_enabled)
 
@@ -670,6 +621,7 @@ def _snippet_studio(rows, mode, writes_enabled):
                               format_func=lambda ident: _entity_caption(choices[ident], "shortcut", "shortcut"),
                               key="editor_studio_snippet_select", on_change=_clear_studio_review)
     snippet = choices[snippet_id]
+    baseline = _simple_source_baseline("Snippets", snippet["shortcut"], generation)
     draft = {"expansion": snippet["expansion"], "category": snippet.get("category")}
     signature = _studio_signature("snippet-edit", {"table": "Snippets", "key": snippet["shortcut"]}, draft)
     if _show_studio_review(signature, writes_enabled): return
@@ -682,7 +634,8 @@ def _snippet_studio(rows, mode, writes_enabled):
     values = {"expansion": expansion, "category": category or None}
     if prepare:
         signature = _studio_signature("snippet-edit", {"table": "Snippets", "key": snippet["shortcut"]}, values)
-        _prepare_studio_review([content_studio.operation("update", "Snippets", snippet["shortcut"], values)], signature,
+        _prepare_studio_review([content_studio.source_draft_assertion("Snippets", snippet["shortcut"], baseline),
+                                content_studio.operation("update", "Snippets", snippet["shortcut"], values)], signature,
                                 f"Edit Snippet.{snippet['shortcut']}")
     _lifecycle_panel("Snippets", snippet, signature, writes_enabled)
 
@@ -1161,6 +1114,8 @@ def _group_label_studio(writes_enabled):
             blocks.append(row)
     blocks.sort(key=lambda row: row["key"])
     generation = st.session_state.get("_editor_studio_form_generation", 0)
+    baseline = (_simple_source_baseline("Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]}, generation)
+                if current else None)
     draft = {"blocks": sorted(selected_blocks), "label": current["combined_label"] if current else "", "existing": selected_key}
     signature = _studio_signature("group-label", selected_key, draft)
     if _show_studio_review(signature, writes_enabled): return
@@ -1175,15 +1130,19 @@ def _group_label_studio(writes_enabled):
             st.error("Choose at least one Block and provide a combined label.")
         else:
             if current and canonical != current["block_key_set"]:
-                intents = [content_studio.operation("unlink", "Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]}),
+                intents = [content_studio.source_draft_assertion("Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]}, baseline),
+                           content_studio.operation("unlink", "Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]}),
                            content_studio.operation("link", "Conclusion_Group_Labels", {"block_key_set": canonical}, values)]
             else:
-                intents = [content_studio.operation("update" if current else "link", "Conclusion_Group_Labels", {"block_key_set": canonical}, values)]
+                intents = (([content_studio.source_draft_assertion("Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]}, baseline)]
+                            if current else []) +
+                           [content_studio.operation("update" if current else "link", "Conclusion_Group_Labels", {"block_key_set": canonical}, values)])
             signature = _studio_signature("group-label", selected_key, {"blocks": sorted(block_keys), "label": combined, "existing": selected_key})
             _prepare_studio_review(intents, signature, f"{'Edit' if current else 'Create'} conclusion group label {canonical}")
     if current and st.button("Prepare group-label deletion review", key=f"editor_studio_group_delete_{current['id']}", disabled=not writes_enabled):
         signature = _studio_signature("group-label-delete", current["block_key_set"], {})
-        _prepare_studio_review([content_studio.operation("unlink", "Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]})], signature,
+        _prepare_studio_review([content_studio.source_draft_assertion("Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]}, baseline),
+                                content_studio.operation("unlink", "Conclusion_Group_Labels", {"block_key_set": current["block_key_set"]})], signature,
                                 f"Delete conclusion group label {current['block_key_set']}")
 
 
@@ -1283,83 +1242,12 @@ def _ai_package_section(writes_enabled):
             st.session_state["_editor_ai_clear_confirmation"] = True
             st.session_state["_editor_error"] = f"Not applied: {error}"
         else:
-            _clear_loaded_entities()
             _clear_ai_review()
             st.session_state["_editor_ai_reset_widgets"] = True
             st.session_state["_editor_message"] = (
                 f"Applied as content revision {revision_id}. Review it under Recent revisions."
             )
         st.rerun()
-
-
-def _edit_block(block):
-    entity = _loaded_entity("Blocks", block["key"])
-    token = entity["row_hash"][:12]
-    with st.form(f"editor_block_form_{block['id']}_{token}"):
-        st.caption("Key, name, table mode, site label, and conclusion group are intentionally read-only.")
-        macro = st.text_area("Macro template", entity["macro_template"] or "", key=f"editor_block_macro_{token}")
-        micro = st.text_area("Microscopy template", entity["micro_template"], key=f"editor_block_micro_{token}")
-        conclusion = st.text_area("Conclusion template", entity["conclusion_template"], key=f"editor_block_conclusion_{token}")
-        context = st.text_area("Context template (optional)", entity["context_template"] or "", key=f"editor_block_context_{token}")
-        title = st.text_area("Title fragment template (optional)", entity["title_fragment_template"] or "", key=f"editor_block_title_{token}")
-        label = st.text_area("Conclusion label template (optional)", entity["conclusion_label_template"] or "", key=f"editor_block_label_{token}")
-        preview_requested = st.form_submit_button("Preview Block changes")
-        save_requested = st.form_submit_button("Save Block wording")
-    changes = {"macro_template": macro, "micro_template": micro,
-               "conclusion_template": conclusion, "context_template": context,
-               "title_fragment_template": title, "conclusion_label_template": label}
-    if preview_requested:
-        _show_candidate_preview("Blocks", block["key"], changes, entity["row_hash"])
-    if save_requested:
-        _save("Blocks", block["key"], changes, entity["row_hash"])
-
-
-def _edit_field(field):
-    entity = _loaded_entity("Fields", field["key"])
-    token = entity["row_hash"][:12]
-    with st.form(f"editor_field_form_{field['id']}_{token}"):
-        label = st.text_input("Label", entity["label"], key=f"editor_field_label_{token}")
-        default = st.text_input("Default value", entity["default_value"] or "", key=f"editor_field_default_{token}")
-        addendum = st.text_area("Conclusion addendum template (optional; context: value)", entity["conclusion_addendum_template"] or "", key=f"editor_field_addendum_{token}")
-        preview_requested = st.form_submit_button("Preview Field changes")
-        save_requested = st.form_submit_button("Save Field wording")
-    changes = {"label": label, "default_value": default,
-               "conclusion_addendum_template": addendum}
-    if preview_requested:
-        _show_candidate_preview("Fields", field["key"], changes, entity["row_hash"])
-    if save_requested:
-        _save("Fields", field["key"], changes, entity["row_hash"])
-
-
-def _edit_snippet(snippet):
-    entity = _loaded_entity("Snippets", snippet["shortcut"])
-    token = entity["row_hash"][:12]
-    with st.form(f"editor_snippet_form_{snippet['id']}_{token}"):
-        expansion = st.text_area("Expansion", entity["expansion"], key=f"editor_snippet_expansion_{token}")
-        category = st.text_input("Category (optional)", entity["category"] or "", key=f"editor_snippet_category_{token}")
-        preview_requested = st.form_submit_button("Preview Snippet changes")
-        save_requested = st.form_submit_button("Save Snippet")
-    changes = {"expansion": expansion, "category": category}
-    if preview_requested:
-        _show_candidate_preview("Snippets", snippet["shortcut"], changes, entity["row_hash"])
-    if save_requested:
-        _save("Snippets", snippet["shortcut"], changes, entity["row_hash"])
-
-
-def _edit_preset(preset):
-    entity = _loaded_entity("Presets", preset["short_code"])
-    token = entity["row_hash"][:12]
-    with st.form(f"editor_preset_form_{preset['id']}_{token}"):
-        name = st.text_input("Preset name", entity["name"], key=f"editor_preset_name_{token}")
-        category = st.text_input("Category (optional)", entity["category"] or "", key=f"editor_preset_category_{token}")
-        title = st.text_input("Default title (optional)", entity["default_title"] or "", key=f"editor_preset_title_{token}")
-        preview_requested = st.form_submit_button("Preview Preset changes")
-        save_requested = st.form_submit_button("Save Preset wording")
-    changes = {"name": name, "category": category, "default_title": title}
-    if preview_requested:
-        _show_candidate_preview("Presets", preset["short_code"], changes, entity["row_hash"])
-    if save_requested:
-        _save("Presets", preset["short_code"], changes, entity["row_hash"])
 
 
 def _revisions():
@@ -1374,21 +1262,6 @@ def _revisions():
         identity = revision["summary"] or revision["details"]
         with st.expander(f"Revision {revision['id']}: {identity}"):
             st.caption(revision["details"])
-            if revision.get("result_snapshot_hash") is None:
-                if revision["origin"] not in {"manual_edit", "revision_revert"}:
-                    continue
-                acknowledged = st.checkbox("I understand this is refused if later work conflicts", key=f"editor_revert_confirm_{revision['id']}")
-                if st.button("Revert safely", key=f"editor_revert_{revision['id']}", disabled=not acknowledged):
-                    try:
-                        new_id = content_editing.revert_revision(revision["id"])
-                    except content_editing.ContentEditError as error:
-                        st.error(f"Not reverted: {error}")
-                    else:
-                        _clear_loaded_entities()
-                        st.session_state["_editor_message"] = f"Revision {revision['id']} safely reverted as revision {new_id}."
-                        st.rerun()
-                continue
-
             inverse_generation = st.session_state.get("_editor_inverse_generation", 0)
             prepare_key = f"editor_inverse_prepare_{revision['id']}_{inverse_generation}"
             if st.button("Prepare inverse review", key=prepare_key):
@@ -1415,7 +1288,7 @@ def _revisions():
             prefix = f"editor_inverse_review_{revision['id']}_{review_generation}"
             _show_full_review(inverse, prefix)
             confirmed = st.checkbox(
-                "I confirm this exact inverse review",
+                "I confirm this exact reviewed candidate and its local pending-Case impact",
                 key=f"{prefix}_confirm",
             )
             if st.button("Apply reviewed inverse", key=f"{prefix}_apply", disabled=not confirmed):
@@ -1430,7 +1303,6 @@ def _revisions():
                     st.session_state["_editor_inverse_clear_confirmation"] = True
                     st.session_state["_editor_error"] = f"Not reverted: {error}"
                 else:
-                    _clear_loaded_entities()
                     st.session_state.pop("_editor_inverse_review", None)
                     st.session_state.pop("_editor_inverse_revision", None)
                     st.session_state["_editor_message"] = (

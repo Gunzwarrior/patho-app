@@ -144,7 +144,7 @@ def test_editor_section_and_block_selection_persist_across_reruns(mutable_db):
     assert app.selectbox(key="editor_block_select").value == gallbladder["id"]
 
 
-def test_revert_confirmation_and_action_stay_on_revision_section(mutable_db):
+def test_legacy_revision_uses_reviewed_inverse_and_stays_on_revision_section(mutable_db):
     content_editing.record_initial_snapshot("a" * 64)
     preset = content_editing.get_editable_entity("Presets", "dai")
     revision_id = content_editing.save_edit(
@@ -153,12 +153,15 @@ def test_revert_confirmation_and_action_stay_on_revision_section(mutable_db):
     app = AppTest.from_file("pages/editor.py")
     app.run()
     _go_to(app, "Recent revisions")
-    confirmation = app.checkbox(key=f"editor_revert_confirm_{revision_id}")
+    assert "Revert safely" not in {button.label for button in app.button}
+    prepare = next(button for button in app.button if button.label == "Prepare inverse review")
+    prepare.click().run()
+    confirmation = next(box for box in app.checkbox
+                        if box.label == "I confirm this exact reviewed candidate and its local pending-Case impact")
     confirmation.set_value(True).run()
 
     assert app.radio(key="editor_section").value == "Recent revisions"
-    assert app.checkbox(key=f"editor_revert_confirm_{revision_id}").value is True
-    revert = app.button(key=f"editor_revert_{revision_id}")
+    revert = next(button for button in app.button if button.label == "Apply reviewed inverse")
     assert not revert.disabled
     revert.click().run()
     assert app.radio(key="editor_section").value == "Recent revisions"

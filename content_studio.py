@@ -36,6 +36,10 @@ class StalePresetDraftError(StudioIntentError):
     """A Preset draft no longer matches its loaded composition."""
 
 
+class StaleSourceDraftError(StudioIntentError):
+    """A simple guided draft no longer matches its loaded physical row."""
+
+
 def _copy_mapping(value, name):
     if not isinstance(value, dict):
         raise StudioIntentError(f"{name} must be an object.")
@@ -102,6 +106,44 @@ def review(intents, base_snapshot_hash, *, summary="", db_name=None):
 # neither the planner nor its summaries write the operational database.
 
 _BASE_KEY = {"Fields": "key", "Blocks": "key", "Presets": "short_code", "Snippets": "shortcut"}
+
+# Fields, Snippets, and conclusion-group labels do not have the relationship
+# editing complexity of Blocks/Presets, but their forms still need the same
+# loaded-source identity boundary.  These assertions are deliberately full
+# physical rows: a delete/recreate with the same stable key is stale too.
+_SOURCE_DRAFT_TABLES = frozenset({"Fields", "Snippets", "Conclusion_Group_Labels"})
+
+
+def source_draft_baseline(table, key, *, db_name=None):
+    """Capture the complete physical source image for a simple guided draft."""
+    if table not in _SOURCE_DRAFT_TABLES:
+        raise StudioIntentError("This Content Studio draft does not support a source baseline.")
+    conn = _connection(db_name)
+    try:
+        row = content_changes._general_row(conn, table, key)
+        if row is None:
+            raise StudioIntentError("Content Studio source is unavailable.")
+        return content_editing.row_hash({"table": table, "row": row})
+    finally:
+        conn.close()
+
+
+def _assert_source_draft_baseline(conn, table, key, baseline):
+    if table not in _SOURCE_DRAFT_TABLES or not isinstance(baseline, str) or not baseline:
+        raise StudioIntentError("Content Studio source baseline is invalid.")
+    row = content_changes._general_row(conn, table, key)
+    if row is None or content_editing.row_hash({"table": table, "row": row}) != baseline:
+        raise StaleSourceDraftError(
+            "This content changed since the draft was loaded. Current values were reloaded."
+        )
+
+
+def source_draft_assertion(table, key, baseline):
+    """Return the signed no-write assertion for a loaded simple draft."""
+    if table not in _SOURCE_DRAFT_TABLES:
+        raise StudioIntentError("This Content Studio draft does not support a source baseline.")
+    return {"op": "assert_source_draft", "table": table, "key": copy.deepcopy(key),
+            "baseline": baseline}
 
 
 # Stage 6 checkpoint 5 ------------------------------------------------------

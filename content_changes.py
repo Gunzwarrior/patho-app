@@ -123,8 +123,22 @@ def _candidate_copy(db_name):
         candidate.close()
 
 
+def _validated_case_rows(conn):
+    """Return the complete, ordered input set for reconstruction analysis."""
+    return [dict(row) for row in conn.execute(
+        "SELECT * FROM Cases WHERE status='validated' ORDER BY id"
+    )]
+
+
 def local_review_guard(conn):
-    """Bind content identities, audited ABA, and the complete current pending set."""
+    """Bind local state used by review-only Case and identity analysis.
+
+    Pending rows protect live-report impact and deletion eligibility.  The
+    complete validated rows protect the signed strict-reconstruction warning:
+    they are the exact Case inputs passed to ``render_saved_case`` and keeping
+    the full rows also fails closed if that reconstruction path later consumes
+    another Case column.
+    """
     identities = {
         table: [dict(row) for row in conn.execute(f"SELECT {key}, id FROM {table} ORDER BY {key}")]
         for table, (key, _) in content_snapshot.BASE_TABLES.items()
@@ -137,6 +151,7 @@ def local_review_guard(conn):
     return contract.digest({
         "revision_id": database.current_content_revision_id(conn),
         "identities": identities, "pending": pending,
+        "validated": _validated_case_rows(conn),
     })
 
 
@@ -600,7 +615,7 @@ def _prefix_warnings(conn, operations):
             if (a in new or b in new) and (a.startswith(b) or b.startswith(a))]
 
 
-def _general_review_warnings(conn, operations):
+def _general_review_warnings(conn, operations, before_validated, after_validated):
     """Warnings are part of the signed generalized-review payload."""
     warnings = _prefix_warnings(conn, operations)
     duplicate_sources = {op["key"] for op in operations
@@ -613,7 +628,37 @@ def _general_review_warnings(conn, operations):
             warnings.append(
                 "Quick Type tokens are intentionally not copied to a duplicated Preset; only its bare shortcut is available."
             )
-    return warnings
+    return warnings + _validated_reconstruction_loss_warning(before_validated, after_validated)
+
+
+def _validated_reconstructability(conn):
+    """Whether each frozen validated Case could safely return to pending now.
+
+    This intentionally uses the same strict reconstruction path as
+    ``return_case_to_pending`` while preserving the validated artifact itself.
+    A missing/deleted dependency makes the live draft unavailable, not the
+    frozen report invalid.
+    """
+    result = {}
+    for case in _validated_case_rows(conn):
+        try:
+            editor_preview.render_saved_case(conn, {**case, "status": "pending"}, strict=True)
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            result[case["id"]] = False
+        else:
+            result[case["id"]] = True
+    return result
+
+
+def _validated_reconstruction_loss_warning(before, after):
+    lost = [case_id for case_id, reconstructable in before.items()
+            if reconstructable and not after.get(case_id, False)]
+    if not lost:
+        return []
+    return [
+        f"This reviewed change makes {len(lost)} currently reconstructable validated Case(s) "
+        "unavailable for a future Return to pending. Frozen validated reports remain available."
+    ]
 
 
 def _review_on_connection(candidate, operations, base_hash, *, package_hash=None,
@@ -1090,8 +1135,10 @@ _GENERAL_ASSERTION = "assert_block_draft"
 _GENERAL_FIELD_ASSERTION = "assert_field_endpoints"
 _GENERAL_PRESET_ASSERTION = "assert_preset_draft"
 _GENERAL_PRESET_ENDPOINT_ASSERTION = "assert_preset_endpoints"
+_GENERAL_SOURCE_ASSERTION = "assert_source_draft"
 _GENERAL_ASSERTIONS = frozenset({_GENERAL_ASSERTION, _GENERAL_FIELD_ASSERTION,
-                                 _GENERAL_PRESET_ASSERTION, _GENERAL_PRESET_ENDPOINT_ASSERTION})
+                                 _GENERAL_PRESET_ASSERTION, _GENERAL_PRESET_ENDPOINT_ASSERTION,
+                                 _GENERAL_SOURCE_ASSERTION})
 _GENERAL_PHYSICAL_COLUMNS = {
     "Fields": ("id", "key", "label", "type", "is_archived", "options", "default_value", "conclusion_addendum_template"),
     "Blocks": ("id", "key", "name", "is_archived", "is_table", "site_label", "conclusion_group", "macro_template", "micro_template", "conclusion_template", "context_template", "title_fragment_template", "conclusion_label_template"),
@@ -1261,6 +1308,27 @@ def _general_normalize(operations):
             if marker in targets:
                 raise ChangeError("Content Studio targets must be unique.")
             targets.add(marker); cleaned.append({"op": action, "endpoints": copy.deepcopy(endpoints)}); continue
+        if action == _GENERAL_SOURCE_ASSERTION:
+            if (set(operation) != {"op", "table", "key", "baseline"}
+                    or table not in {"Fields", "Snippets", "Conclusion_Group_Labels"}
+                    or not isinstance(operation["baseline"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", operation["baseline"])):
+                raise ChangeError("Content Studio source draft assertion is invalid.")
+            key_columns = _general_key_columns(table)
+            valid_key = (isinstance(key, str) and bool(key)) if table in content_snapshot.BASE_TABLES else (
+                isinstance(key, dict) and set(key) == set(key_columns)
+                and all(isinstance(value, str) and value for value in key.values())
+            )
+            if not valid_key:
+                raise ChangeError("Content Studio source draft assertion is invalid.")
+            marker = (action, table, _general_audit_key(table, key))
+            if marker in targets:
+                raise ChangeError("Content Studio targets must be unique.")
+            targets.add(marker)
+            cleaned.append({"op": action, "table": table,
+                            "key": dict(key) if isinstance(key, dict) else key,
+                            "baseline": operation["baseline"]})
+            continue
         if action == "case_preset_reference":
             if set(operation) != {"op", "case_id", "before_preset_id", "after_preset_id"}:
                 raise ChangeError("Content Studio Case reference is invalid.")
@@ -1755,13 +1823,13 @@ def _general_case_references(conn, operations):
     return result
 
 
-def _general_apply_case_references(conn, references, *, attaching):
+def _general_apply_case_references(conn, references, *, attaching, inverse=False):
     for ref in references:
         # Detach before a possible Preset deletion; attach only after a
         # possible inverse recreation.  The two phases must not be reversed.
         if (ref["after_preset_id"] is not None) != attaching:
             continue
-        _validate_general_case_reference(conn, ref)
+        _validate_general_case_reference(conn, ref, inverse=inverse)
         conn.execute("UPDATE Cases SET preset_id=? WHERE id=? AND preset_id IS ?",
                      (ref["after_preset_id"], ref["case_id"], ref["before_preset_id"]))
         if conn.execute("SELECT changes()").fetchone()[0] != 1:
@@ -1882,7 +1950,12 @@ def _validate_general_assertions(conn, operations):
                 content_studio._assert_preset_endpoints_baseline(
                     conn, operation["endpoints"]
                 )
-        except (content_studio.StaleBlockDraftError, content_studio.StalePresetDraftError) as error:
+            elif operation["op"] == _GENERAL_SOURCE_ASSERTION:
+                content_studio._assert_source_draft_baseline(
+                    conn, operation["table"], operation["key"], operation["baseline"]
+                )
+        except (content_studio.StaleBlockDraftError, content_studio.StalePresetDraftError,
+                content_studio.StaleSourceDraftError) as error:
             raise StaleDraftReviewError(str(error)) from None
 
 
@@ -1909,6 +1982,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
             with _access_scope(candidate):
                 before_rows = _general_rows(candidate)
                 before_presets, before_pending = _capture(candidate)
+                before_validated = _validated_reconstructability(candidate)
             refs = _general_case_references(candidate, operations)
             with _access_scope(candidate, {"Cases"}):
                 _general_apply_case_references(candidate, refs, attaching=False)
@@ -1923,6 +1997,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                     raise ChangeError("Content Studio operation has no persisted change.")
                 _validate_general_final_graph(candidate)
                 after_presets, after_pending = _capture(candidate, candidate=True)
+                after_validated = _validated_reconstructability(candidate)
                 standalone = _standalone_previews(candidate, operations)
                 result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
             presets = []
@@ -1937,7 +2012,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                        "changes": changes, "case_references": refs, "presets": presets,
                        "unaffected_presets": sum(not item["affected"] for item in presets),
                        "pending_cases": pending, "validated_pending_count": len(after_pending),
-                       "warnings": _general_review_warnings(candidate, operations), "branch_warnings": [], "standalone": standalone, "before_standalone": [],
+                       "warnings": _general_review_warnings(candidate, operations, before_validated, after_validated), "branch_warnings": [], "standalone": standalone, "before_standalone": [],
                        "inverse_revision_id": None, "inverse_source_hash": None}
             return _issued_review(None, base_hash, result_hash, guard, contract.canonical_json(payload))
     except (ChangeError, contract.PackageError):
@@ -2000,12 +2075,12 @@ def _apply_generalized_review(review, *, db_name=None):
                 _check_general_pending_removals(conn, source["changes"])
                 operations, refs = None, source["references"]
         if operations is None:
+            with _access_scope(conn, {"Cases"}):
+                _general_apply_case_references(conn, refs, attaching=False, inverse=True)
             with _access_scope(conn, set(_GENERAL_TABLES) | {"sqlite_sequence"}):
                 _general_apply_images(conn, review.changes)
             with _access_scope(conn, {"Cases"}):
-                for ref in refs:
-                    _validate_general_case_reference(conn, ref, inverse=True)
-                    conn.execute("UPDATE Cases SET preset_id=? WHERE id=?", (ref["after_preset_id"], ref["case_id"]))
+                _general_apply_case_references(conn, refs, attaching=True, inverse=True)
         else:
             with _access_scope(conn, {"Cases"}):
                 _general_apply_case_references(conn, refs, attaching=False)
@@ -2138,17 +2213,18 @@ def _review_generalized_inverse(candidate, revision_id):
     guard = local_review_guard(candidate)
     with _access_scope(candidate):
         before_presets, before_pending = _capture(candidate)
+        before_validated = _validated_reconstructability(candidate)
         _check_general_pending_removals(candidate, inverse["changes"])
+    with _access_scope(candidate, {"Cases"}):
+        _general_apply_case_references(candidate, inverse["references"], attaching=False, inverse=True)
     with _access_scope(candidate, set(_GENERAL_TABLES) | {"sqlite_sequence"}):
         _general_apply_images(candidate, inverse["changes"])
-    # Reattachment happens after its Preset is recreated; detachment (rare in
-    # an inverse) happened before deletion in the original apply path.
-    for ref in inverse["references"]:
-        _validate_general_case_reference(candidate, ref, inverse=True)
-        candidate.execute("UPDATE Cases SET preset_id=? WHERE id=?", (ref["after_preset_id"], ref["case_id"]))
+    with _access_scope(candidate, {"Cases"}):
+        _general_apply_case_references(candidate, inverse["references"], attaching=True, inverse=True)
     with _access_scope(candidate):
         _validate_general_final_graph(candidate)
         after_presets, after_pending = _capture(candidate, candidate=True)
+        after_validated = _validated_reconstructability(candidate)
         result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
     presets = [{"code": code, "affected": before_presets.get(code) != after_presets.get(code),
                 "added": code not in before_presets, "removed": code not in after_presets,
@@ -2159,7 +2235,7 @@ def _review_generalized_inverse(candidate, revision_id):
     payload = {"engine": "generalized_v1", "summary": f"Reverted revision {revision_id}", "operations": [],
                "changes": inverse["changes"], "case_references": inverse["references"], "presets": presets,
                "unaffected_presets": sum(not item["affected"] for item in presets), "pending_cases": pending,
-               "validated_pending_count": len(after_pending), "warnings": [], "branch_warnings": [],
+               "validated_pending_count": len(after_pending), "warnings": _validated_reconstruction_loss_warning(before_validated, after_validated), "branch_warnings": [],
                "standalone": [], "before_standalone": [], "inverse_revision_id": revision_id,
                "inverse_source_hash": inverse["source_hash"]}
     return _issued_review(None, base_hash, result_hash, guard, contract.canonical_json(payload))

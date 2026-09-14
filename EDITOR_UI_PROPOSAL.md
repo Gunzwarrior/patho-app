@@ -1,11 +1,11 @@
 # EDITOR_UI_PROPOSAL.md — Tier 3 Editor UI: post-review design
 
-Status: **Stages 1–5 complete. Their safety design remains frozen; Stage 6 is
-the next planned stage in Thomas's approved product roadmap.**
+Status: **Stages 1–6 are complete. Stage 6 / CP7 is accepted after final
+independent verification; Stage 7 has not begun.**
 
 This is the approved design baseline and forward roadmap. Stages 1–5 record
 the implemented safety foundation and optional reviewed AI workflow. Stages
-6–7 record the remaining product outcomes. Stage 6 now has an approved bounded
+6–7 record the remaining product outcomes. Stage 6 follows its approved bounded
 implementation plan; Stage 7 still needs one before code is written.
 
 Sol’s review identified real blockers in the previous write-capable stages.
@@ -514,7 +514,7 @@ disabled until all Stage 2 safety requirements are implemented and verified.
    Initial packages remain additive/change-only: package deletion and advanced
    configuration are not required here. No AI account or in-app AI connection
    is introduced, and every backend primitive should be reusable by Stage 6.
-6. **Autonomous Content Studio.** Make every ordinary PathoPilot content task
+6. **COMPLETE — Autonomous Content Studio.** Every ordinary PathoPilot content task is
    possible through guided forms without AI or JSON: create, duplicate, edit,
    archive, and safely delete Presets and non-table Blocks; create, edit,
    archive, and safely delete Fields and Snippets; manage `Block_Fields` and
@@ -527,7 +527,12 @@ disabled until all Stage 2 safety requirements are implemented and verified.
    migration, table-Block row authoring, and any other genuinely exceptional
    structure may use explicit advanced checkpoints within the Stage 6 design;
    they may not turn AI into a requirement for maintaining content the app
-   already supports.
+   already supports. All guided changes use the same frozen review →
+   confirmation → Apply path as AI packages and reviewed inverses; the former
+   direct-save Editor path, including legacy one-click revision reverts, has
+   been removed. Simple forms are source-bound like Block/Preset Studio, and
+   destructive reviews explicitly warn, from before/candidate graph comparison,
+   when frozen validated Cases newly lose their future Return-to-pending path.
 7. **Quick Type Studio and bulk pending-case creation.** Make Quick Type the
    core speed path rather than representing common modifier combinations as
    many Presets. Provide guided create/edit/delete/reorder controls for each

@@ -9,6 +9,7 @@ import content_changes
 import content_editing
 import content_snapshot
 import content_studio
+import database
 from test_stage5_packages import connection, save_synthetic_case
 
 
@@ -325,9 +326,173 @@ def test_validated_preset_detachment_and_deletion_restore_ids_on_inverse(mutable
     revision = content_changes.apply_review(prepared, db_name=mutable_db)
     assert row(mutable_db, "SELECT * FROM Presets WHERE id=?", (preset["id"],)) is None
     assert row(mutable_db, "SELECT preset_id FROM Cases WHERE id=?", (case["id"],))["preset_id"] is None
-    content_changes.apply_review(content_changes.review_inverse(revision, db_name=mutable_db), db_name=mutable_db)
+    undo = content_changes.apply_review(content_changes.review_inverse(revision, db_name=mutable_db), db_name=mutable_db)
     assert row(mutable_db, "SELECT * FROM Presets WHERE id=?", (preset["id"],))["short_code"] == preset["short_code"]
     assert row(mutable_db, "SELECT preset_id FROM Cases WHERE id=?", (case["id"],))["preset_id"] == preset["id"]
+    redo_review = content_changes.review_inverse(undo, db_name=mutable_db)
+    assert any(ref["before_preset_id"] == preset["id"] and ref["after_preset_id"] is None
+               for ref in redo_review.data["case_references"])
+    assert any("unavailable for a future Return to pending" in warning for warning in redo_review.data["warnings"])
+    content_changes.apply_review(redo_review, db_name=mutable_db)
+    assert row(mutable_db, "SELECT * FROM Presets WHERE id=?", (preset["id"],)) is None
+    assert row(mutable_db, "SELECT preset_id FROM Cases WHERE id=?", (case["id"],))["preset_id"] is None
+
+
+def test_case_reference_phase_fault_rolls_back_inverse_content_and_detachment(mutable_db, monkeypatch):
+    """A failure after inverse reattachment preparation is one atomic rollback."""
+    unlock()
+    case = freeze_case_preset_identity(
+        mutable_db, save_synthetic_case(mutable_db, number="INVERSE-PHASE-ROLLBACK", status="validated")
+    )
+    _preset, intents = preset_deletion_intents(mutable_db, case)
+    deletion = content_changes.apply_review(review(mutable_db, intents), db_name=mutable_db)
+    inverse = content_changes.review_inverse(deletion, db_name=mutable_db)
+    before = relevant_state(mutable_db)
+    original = content_changes._general_apply_case_references
+
+    def fail_after_reattach(conn, references, *, attaching, inverse=False):
+        original(conn, references, attaching=attaching, inverse=inverse)
+        if attaching and inverse:
+            raise RuntimeError("inverse reattachment phase canary")
+
+    monkeypatch.setattr(content_changes, "_general_apply_case_references", fail_after_reattach)
+    with pytest.raises(content_changes.ChangeError, match="Apply failed"):
+        content_changes.apply_review(inverse, db_name=mutable_db)
+    assert relevant_state(mutable_db) == before
+
+
+def test_block_deletion_warns_for_validated_reconstruction_loss_and_inverse_restores_it(mutable_db):
+    """The warning compares complete before/candidate graphs, not entity type."""
+    unlock()
+    conn = connection(mutable_db)
+    try:
+        preset = dict(conn.execute("SELECT * FROM Presets WHERE short_code='gt'").fetchone())
+        instances = [dict(row) for row in conn.execute(
+            "SELECT block_id,sort_order AS instance_no FROM Preset_Blocks WHERE preset_id=? ORDER BY display_order",
+            (preset["id"],),
+        )]
+    finally:
+        conn.close()
+    assert len(instances) > 1
+    case = freeze_case_preset_identity(mutable_db, save_synthetic_case(
+        mutable_db, code="gt", number="VALIDATED-MULTIBLOCK-BLOCK-DELETE", status="validated",
+        structured={"block_instances": instances, "blocks": {}, "wildcard_notes": [], "master_lock": False},
+    ))
+    deletion = review(mutable_db, [content_studio.operation("delete", "Blocks", "antrum")])
+    assert any("makes 1 currently reconstructable validated Case(s) unavailable for a future Return to pending"
+               in warning for warning in deletion.data["warnings"])
+
+    revision = content_changes.apply_review(deletion, db_name=mutable_db)
+    assert row(mutable_db, "SELECT status,preset_id,rendered_html FROM Cases WHERE id=?", (case["id"],))["status"] == "validated"
+    assert not database.return_case_to_pending("VALIDATED-MULTIBLOCK-BLOCK-DELETE", "must refuse")
+
+    undo = content_changes.apply_review(content_changes.review_inverse(revision, db_name=mutable_db), db_name=mutable_db)
+    conn = connection(mutable_db)
+    try:
+        assert content_changes._validated_reconstructability(conn)[case["id"]] is True
+    finally:
+        conn.close()
+    redo = content_changes.review_inverse(undo, db_name=mutable_db)
+    assert any("makes 1 currently reconstructable validated Case(s) unavailable for a future Return to pending"
+               in warning for warning in redo.data["warnings"])
+
+
+def _gt_explicit_instances(path):
+    conn = connection(path)
+    try:
+        return [dict(found) for found in conn.execute(
+            """SELECT pb.block_id,pb.sort_order AS instance_no
+               FROM Preset_Blocks pb JOIN Presets p ON p.id=pb.preset_id
+               WHERE p.short_code='gt' ORDER BY pb.display_order"""
+        )]
+    finally:
+        conn.close()
+
+
+def test_destructive_review_is_stale_when_affected_validated_case_arrives(mutable_db):
+    """A later validated Case cannot receive a reconstruction loss omitted by review."""
+    unlock()
+    prepared = review(mutable_db, [content_studio.operation("delete", "Blocks", "antrum")])
+    assert not any("Return to pending" in warning for warning in prepared.data["warnings"])
+
+    case = save_synthetic_case(
+        mutable_db, code="gt", number="VALIDATED-ARRIVED-AFTER-REVIEW", status="validated",
+        structured={"block_instances": _gt_explicit_instances(mutable_db), "blocks": {}},
+    )
+    with pytest.raises(content_changes.StaleReviewError, match="Local state changed"):
+        content_changes.apply_review(prepared, db_name=mutable_db)
+
+    assert row(mutable_db, "SELECT status FROM Cases WHERE id=?", (case["id"],))["status"] == "validated"
+    assert row(mutable_db, "SELECT id FROM Blocks WHERE key='antrum'") is not None
+
+
+@pytest.mark.parametrize("column,value", [
+    ("structured_input", '{"block_instances":[],"blocks":{}}'),
+    ("clinical_info", "Changed after the signed warning"),
+    ("preset_id", None),
+    ("case_number", "VALIDATED-RENAMED-AFTER-REVIEW"),
+    ("status", "pending"),
+])
+def test_destructive_review_binds_validated_case_reconstruction_state(
+        mutable_db, column, value):
+    unlock()
+    case = save_synthetic_case(
+        mutable_db, code="gt", number="VALIDATED-INPUT-RACE", status="validated",
+        structured={"block_instances": _gt_explicit_instances(mutable_db), "blocks": {}},
+    )
+    prepared = review(mutable_db, [content_studio.operation("delete", "Blocks", "antrum")])
+    assert any("Return to pending" in warning for warning in prepared.data["warnings"])
+
+    conn = connection(mutable_db)
+    conn.execute(f"UPDATE Cases SET {column}=? WHERE id=?", (value, case["id"]))
+    conn.commit()
+    conn.close()
+    with pytest.raises(content_changes.StaleReviewError, match="Local state changed"):
+        content_changes.apply_review(prepared, db_name=mutable_db)
+
+    assert row(mutable_db, "SELECT id FROM Blocks WHERE key='antrum'") is not None
+
+
+def test_reviewed_destructive_inverse_is_stale_when_validated_case_arrives(mutable_db):
+    unlock()
+    deletion = content_changes.apply_review(
+        review(mutable_db, [content_studio.operation("delete", "Blocks", "antrum")]),
+        db_name=mutable_db,
+    )
+    restoration = content_changes.apply_review(
+        content_changes.review_inverse(deletion, db_name=mutable_db), db_name=mutable_db,
+    )
+    destructive_inverse = content_changes.review_inverse(restoration, db_name=mutable_db)
+    assert not any("Return to pending" in warning for warning in destructive_inverse.data["warnings"])
+
+    save_synthetic_case(
+        mutable_db, code="gt", number="VALIDATED-INVERSE-RACE", status="validated",
+        structured={"block_instances": _gt_explicit_instances(mutable_db), "blocks": {}},
+    )
+    with pytest.raises(content_changes.StaleReviewError, match="Local state changed"):
+        content_changes.apply_review(destructive_inverse, db_name=mutable_db)
+
+    assert row(mutable_db, "SELECT id FROM Blocks WHERE key='antrum'") is not None
+
+
+def test_unchanged_validated_case_state_allows_destructive_apply(mutable_db):
+    unlock()
+    save_synthetic_case(
+        mutable_db, code="gt", number="VALIDATED-UNCHANGED-REVIEW", status="validated",
+        structured={"block_instances": _gt_explicit_instances(mutable_db), "blocks": {}},
+    )
+    prepared = review(mutable_db, [content_studio.operation("delete", "Blocks", "antrum")])
+    assert any("Return to pending" in warning for warning in prepared.data["warnings"])
+
+    content_changes.apply_review(prepared, db_name=mutable_db)
+    assert row(mutable_db, "SELECT id FROM Blocks WHERE key='antrum'") is None
+
+
+def test_validated_reconstruction_warning_only_reports_true_to_false():
+    warning = content_changes._validated_reconstruction_loss_warning
+    assert warning({1: True}, {1: False})
+    assert warning({1: False}, {1: True}) == []
+    assert warning({1: False}, {1: False}) == []
 
 
 def test_generalized_inverse_refuses_pending_dependency_and_reports_pending_impact(mutable_db):

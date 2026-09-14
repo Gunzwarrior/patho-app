@@ -267,7 +267,7 @@ def _validate_shape(snapshot):
 def _case_guard_rows(conn):
     return _rows(
         conn,
-        """SELECT id, case_number, preset_id, structured_input
+        """SELECT id, case_number, status, preset_id, structured_input
            FROM Cases ORDER BY id""",
     )
 
@@ -278,6 +278,11 @@ def _assert_saved_cases_unchanged(current_conn, candidate_conn):
     if current_cases != _case_guard_rows(candidate_conn):
         raise ValueError("Candidate validation unexpectedly altered saved Cases")
     for case in current_cases:
+        # A validated Case is a frozen artifact.  It may intentionally have a
+        # detached Preset after reviewed permanent deletion, so recovery must
+        # preserve it exactly without attempting live reconstruction.
+        if case["status"] != "pending":
+            continue
         structured_input = json.loads(case["structured_input"] or "{}")
         try:
             before = database.compute_case_content_fingerprint(

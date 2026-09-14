@@ -1,7 +1,8 @@
 # Stage 6 implementation plan — Autonomous Content Studio
 
-**Approved working architecture; planning documentation only. No Stage 6
-implementation has begun.**
+**Approved working architecture; planning documentation only. Stage 6 / CP7 is
+accepted and complete; this plan remains the architectural contract, not a
+progress log.**
 
 Authority: `EDITOR_UI_PROPOSAL.md` Stage 6, the Stage 5 completion record in
 `STAGE5_IMPLEMENTATION_PLAN.md`, and the approved planning pass captured here.
@@ -35,6 +36,12 @@ Every Stage 6 form prepares a frozen review, then requires confirmation and a
 separate Apply. Once review mode begins, the draft form is hidden or disabled
 until the user chooses **Edit draft**. This avoids displaying an old review
 beside newly changed widgets.
+
+The local stale-review guard binds the complete pending Case set and the
+complete validated Case rows used by strict Return-to-pending reconstruction.
+Consequently, a signed reconstruction-loss warning is valid only while the
+validated Case set and every reconstruction input remain unchanged. The guard
+is a session-local digest: no Case data enters review provenance or audit.
 
 ## 2. Lifecycle semantics
 
@@ -364,6 +371,8 @@ create/update/link subset.
 - Exact physical before/after images for every content/configuration row.
 - Exact allowed Case-reference changes captured separately.
 - No Case clinical data enters review provenance or audit.
+- The local review guard binds every validated Case and all inputs supplied to
+  strict reconstruction, for ordinary candidates and reviewed inverses.
 - Active Quick Type and consistency configurations are validated even though
   their authoring UIs remain later work.
 - Inverses restore original IDs, display orders, relationships, archive flags,
@@ -376,7 +385,8 @@ create/update/link subset.
 
 - Every operation kind on every supported table.
 - Shuffled intents produce one deterministic candidate.
-- Stale content, audit ABA, pending-set changes, and identity replacement.
+- Stale content, audit ABA, pending- and validated-Case changes, and identity
+  replacement, including destructive reviewed inverses.
 - Fault injection through every materialisation and audit phase.
 - Revert-of-revert.
 - Relationship reorder and override restoration.
@@ -784,6 +794,8 @@ None.
 - Migration from a realistic pre-Stage 6 database copy.
 - Snapshot v1/v2 recovery drills.
 - Two-connection review/Apply races.
+- Validated-Case arrival and reconstruction-input races after destructive
+  candidate and inverse review preparation.
 - Full rollback after Case-reference detachment and after every destructive
   phase.
 - Operational database raw checksum before and after.

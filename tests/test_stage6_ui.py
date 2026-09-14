@@ -41,6 +41,15 @@ def _prepare_snippet(app, shortcut="studio_state_probe"):
     _button(app, "Prepare Snippet review").click().run()
 
 
+def _concurrent_studio_update(table, key, values):
+    review = content_studio.review(
+        [content_studio.operation("update", table, key, values)],
+        content_snapshot.content_snapshot_hash(content_snapshot.export_content_snapshot()),
+        summary="Concurrent Content Studio edit",
+    )
+    content_changes.apply_review(review)
+
+
 def test_content_studio_shell_has_no_legacy_immediate_save_path(mutable_db):
     app = _app(mutable_db)
 
@@ -49,6 +58,17 @@ def test_content_studio_shell_has_no_legacy_immediate_save_path(mutable_db):
     assert "Prepare Field review" in labels
     assert not labels & {"Save Field wording", "Save Snippet", "Create Snippet"}
     assert app.radio(key="editor_studio_filter").value == "Active"
+
+
+def test_editor_has_no_reachable_or_embedded_direct_save_writer():
+    """Stage 6 deliberately has one UI writer: reviewed candidate Apply."""
+    source = open("pages/editor.py", encoding="utf-8").read()
+    assert "content_editing.save_edit(" not in source
+    assert "content_editing.preview_edit(" not in source
+    assert "content_editing.revert_revision(" not in source
+    assert "Save Field wording" not in source
+    assert "Save Block wording" not in source
+    assert "Save Snippet" not in source
 
 
 def test_create_snippet_stops_at_frozen_review_until_apply(mutable_db):
@@ -83,6 +103,85 @@ def test_confirmed_content_studio_review_applies_only_after_the_second_action(mu
     assert saved is not None
     assert saved["expansion"] == "Applied after review"
     assert "_editor_studio_review" not in app.session_state.filtered_state
+
+
+def test_validated_preset_deletion_renders_case_detachment_in_frozen_review(mutable_db):
+    """A generalized Case-reference intent has no ``key`` and must be reviewable."""
+    preset = next(row for row in database.get_all_presets() if row["short_code"] == "dai")
+    structured = {"blocks": {
+        f"{block['key']}#{block['sort_order']}": {}
+        for block in database.get_preset_blocks(preset["id"])
+    }}
+    assert database.save_case("UI-VALIDATED-PRESET-DELETE", preset["id"], "", structured,
+                              "<p>frozen</p>", status="validated")
+
+    app = _app(mutable_db)
+    app.radio(key="editor_studio_kind").set_value("Presets").run()
+    app.selectbox(key="editor_studio_preset_select").set_value(preset["id"]).run()
+    _button(app, "Prepare permanent deletion review").click().run()
+
+    assert not app.exception
+    assert "_editor_studio_review" in app.session_state.filtered_state
+    assert any("Detach validated Case preset" in item.label for item in app.expander)
+    assert any("before_preset_id" in item.value for item in app.markdown)
+    assert any("unavailable for a future Return to pending" in item for item in
+               app.session_state["_editor_studio_review"].data["warnings"])
+    assert any("unavailable for a future Return to pending" in item.value for item in app.warning)
+    assert database.get_case_by_number("UI-VALIDATED-PRESET-DELETE")["preset_id"] == preset["id"]
+
+
+def test_field_stale_draft_before_prepare_refuses_untouched_old_value(mutable_db):
+    app = _app(mutable_db)
+    field = _select_field(app, "appendicite_type")
+    old_label = field["label"]
+    _concurrent_studio_update("Fields", field["key"], {
+        "label": "Concurrent Field label", "default_value": field["default_value"],
+        "conclusion_addendum_template": field["conclusion_addendum_template"],
+    })
+
+    _button(app, "Prepare Field review").click().run()
+
+    assert "_editor_studio_review" not in app.session_state.filtered_state
+    assert database.get_all_fields()[next(i for i, row in enumerate(database.get_all_fields())
+                                           if row["key"] == field["key"])]["label"] == "Concurrent Field label"
+    assert next(widget for widget in app.text_input if widget.label == "Label").value == "Concurrent Field label"
+    assert old_label != "Concurrent Field label"
+    assert any("changed since the draft was loaded" in item.value for item in app.error)
+
+
+def test_snippet_stale_draft_before_prepare_refuses_untouched_old_value(mutable_db):
+    app = _app(mutable_db)
+    app.radio(key="editor_studio_kind").set_value("Snippets").run()
+    snippet = next(row for row in database.get_all_snippets() if row["shortcut"] == "absence_malignite")
+    app.selectbox(key="editor_studio_snippet_select").set_value(snippet["id"]).run()
+    _concurrent_studio_update("Snippets", snippet["shortcut"], {
+        "expansion": "Concurrent snippet expansion", "category": snippet["category"],
+    })
+
+    _button(app, "Prepare Snippet review").click().run()
+
+    assert "_editor_studio_review" not in app.session_state.filtered_state
+    assert database.get_snippet_by_shortcut(snippet["shortcut"])["expansion"] == "Concurrent snippet expansion"
+    assert next(widget for widget in app.text_area if widget.label == "Expansion").value == "Concurrent snippet expansion"
+    assert any("changed since the draft was loaded" in item.value for item in app.error)
+
+
+def test_group_label_stale_draft_before_prepare_refuses_untouched_old_value(mutable_db):
+    app = _app(mutable_db)
+    app.radio(key="editor_studio_kind").set_value("Group labels").run()
+    group = database.get_all_conclusion_group_labels()[0]
+    app.selectbox(key="editor_studio_group_select").set_value(group["block_key_set"]).run()
+    _concurrent_studio_update("Conclusion_Group_Labels", {"block_key_set": group["block_key_set"]}, {
+        "combined_label": "Concurrent group label",
+    })
+
+    _button(app, "Prepare group-label review").click().run()
+
+    assert "_editor_studio_review" not in app.session_state.filtered_state
+    assert next(row for row in database.get_all_conclusion_group_labels()
+                if row["block_key_set"] == group["block_key_set"])["combined_label"] == "Concurrent group label"
+    assert next(widget for widget in app.text_input if widget.label == "Combined conclusion label").value == "Concurrent group label"
+    assert any("changed since the draft was loaded" in item.value for item in app.error)
 
 
 def test_field_type_change_rebuilds_typed_default_before_creation(mutable_db):

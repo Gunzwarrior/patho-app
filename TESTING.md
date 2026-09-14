@@ -46,8 +46,11 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-476 tests currently exist; the Stage 6 checkpoint 6 full isolated acceptance
-run passed as documented below.
+Final independent Stage 6 acceptance: **493 passed in 302.06s** in the full
+isolated suite. The reviewer also completed the browser matrix, reproduced and
+rejected the late validated-Case review/Apply race, verified deletion → inverse
+→ inverse-of-inverse and stale-before-Prepare protection, restored a snapshot
+with canonical hash equality, and booted the isolated restored database.
 
 ## Structure
 
@@ -498,6 +501,68 @@ Final independent acceptance passed the full isolated suite (**476 passed**)
 and focused verification (**76 passed**). Independent retesting confirmed the
 endpoint ABA/rebasing failure is fixed. Compilation and `git diff --check`
 passed. Tests use isolated databases; CP7 was not started.
+
+## Stage 6 checkpoint 7 — consolidation and acceptance preparation
+
+CP7 removes the now-dead Editor one-row direct-save/preview helpers rather
+than leaving a dormant second writer, and makes the shared review renderer's
+summary/hash language neutral for Content Studio, imported AI packages, and
+reviewed inverses. Final-review remediation adds full physical-source
+assertions for Field, Snippet, and group-label drafts; direct-writer regression
+coverage now also rejects `revert_revision()` from Editor; reference changes
+run detach → content images → reattach for inverse and inverse-of-inverse; and
+snapshot restore preserves detached validated artifacts without attempting
+live reconstruction. The permanent-deletion warning about a future
+Return-to-pending refusal is now graph-level: it compares every validated
+Case's strict reconstruction result before and after the candidate, and warns
+only for new losses. This covers Block deletion and inverse-of-inverse as well
+as Preset detachment. Its signed result is protected by the shared local guard,
+which now digests the complete validated-Case set and full rows supplied to
+strict reconstruction. A Case arriving or changing after review therefore
+makes ordinary and inverse Apply stale; the digest remains session-local and
+does not place Case data in review provenance or audit.
+
+Current focused results: **95 passed** across generalized candidates, lifecycle,
+and Stage 5 transactions, including **10 passed** in the dedicated validated-
+Case warning/race selection; the two focused Stage 5 local-guard/retry tests
+also pass. A broader Stage 2 safety, Stage 6 schema/UI, and Editor selection
+passed **60 tests**. The adversarial coverage includes late validated-Case arrival,
+changes to `structured_input`, `clinical_info`, `preset_id`, identity and
+status, a destructive reviewed inverse, unchanged-state Apply, and true→false,
+false→true, and false→false warning semantics. No golden fixtures were
+regenerated; tests used temporary databases only. Changed Python files compile
+and `git diff --check` passes.
+
+Final independent acceptance supersedes the earlier constrained-environment
+timeouts: the full isolated suite passed **493 tests in 302.06s**; the browser
+matrix completed; the late validated-Case review/Apply race was rejected as
+stale; validated deletion → inverse → inverse-of-inverse and stale-before-
+Prepare protections passed; recovery restore had canonical hash equality; and
+the isolated restored database booted successfully. The final reviewer found
+no implementation or data-integrity defect.
+
+### CP7 recovery-snapshot drill (isolated database only)
+
+The Editor download is a canonical content snapshot, restored by the existing
+`content_snapshot.restore_content_snapshot()` service; it is not an AI package.
+Do not point this drill at `pathology.db`. With a downloaded snapshot at
+`/absolute/path/pathopilot-content-snapshot.json`, create a disposable target,
+restore it, and compare canonical hashes:
+
+```bash
+venv/bin/python init_db.py --db /tmp/pathopilot-recovery-drill.db --rebuild
+venv/bin/python -c 'import json, sys, content_snapshot; snapshot = json.load(open(sys.argv[1], encoding="utf-8")); ok, error = content_snapshot.restore_content_snapshot(snapshot, db_name=sys.argv[2]); print("restore:", "OK" if ok else error); raise SystemExit(0 if ok else 1)' /absolute/path/pathopilot-content-snapshot.json /tmp/pathopilot-recovery-drill.db
+venv/bin/python -c 'import json, sys, content_snapshot; snapshot = content_snapshot.normalize_content_snapshot(json.load(open(sys.argv[1], encoding="utf-8"))); restored = content_snapshot.export_content_snapshot(sys.argv[2]); print("snapshot hashes match:", content_snapshot.content_snapshot_hash(snapshot) == content_snapshot.content_snapshot_hash(restored)); raise SystemExit(0 if content_snapshot.content_snapshot_hash(snapshot) == content_snapshot.content_snapshot_hash(restored) else 1)' /absolute/path/pathopilot-content-snapshot.json /tmp/pathopilot-recovery-drill.db
+PATHOPILOT_DB_NAME=/tmp/pathopilot-recovery-drill.db venv/bin/streamlit run app.py
+```
+
+Inspect the five routes and representative reports against that isolated copy,
+then remove only `/tmp/pathopilot-recovery-drill.db` when finished. Restore
+validates the candidate on a temporary SQLite backup, preserves saved Cases,
+and commits one content-only transaction with a `snapshot_restore` revision.
+Pending Cases must still reconstruct with an identical content fingerprint;
+validated frozen Cases, including intentionally detached Presets, are preserved
+exactly without live reconstruction.
 
 ### Final contract hardening, regression, and real-model acceptance
 

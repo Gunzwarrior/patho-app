@@ -210,13 +210,17 @@ reconsider, not just re-explain.
   consequence of an earlier click (via Streamlit's rerun cycle) doesn't
   reliably qualify. The only workaround is a fragile hidden-button JS
   trick — explicitly rejected in favor of two adjacent buttons.
-- **The Editor UI (Tier 3)**: Stages 1–5 are complete; Stage 6 is the next
-  planned stage. Tier 2's content was deliberately allowed to settle before
-  Editor work began; see PROGRESS.md and EDITOR_UI_PROPOSAL.md for current
-  status and scope.
+- **The Editor UI (Tier 3)**: Stage 6 Content Studio is accepted and complete.
+  It is the only Editor authoring
+  path: guided changes, AI packages, and reviewed inverses all use frozen
+  review → confirmation → Apply; no legacy one-click revert remains. Destructive
+  reviews compare validated-Case reconstruction before/after and warn only for
+  newly unavailable future Return-to-pending paths. Stage 7 Quick
+  Type/consistency-rule authoring is still out of scope; see PROGRESS.md and
+  EDITOR_UI_PROPOSAL.md for current status and scope.
   **A persistent automated test suite is a decided prerequisite/companion —
   see TESTING.md** for the full plan, philosophy, and checkpoint-by-
-  checkpoint status (all current checkpoints complete). Every round's
+  checkpoint status (final Stage 6 acceptance: 493 isolated tests). Every round's
   testing before this suite existed was ad-hoc and
   thrown away afterward, which worked only because a Claude-tested round
   always sat between a template edit and a real case seeing it. Editor UI

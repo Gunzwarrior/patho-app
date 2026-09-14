@@ -231,14 +231,12 @@ def test_successful_apply_clears_forms_preserves_section_and_records_revision(mu
     _unlock()
     package = _file(envelope(mutable_db))
     app = _review(_open_ai(package), package)
-    app.session_state["_editor_loaded_blocks"] = {"entity_key": "appendice", "entity": {}}
     confirm_key = _confirmation_key(app)
     _set_checkbox_with_file(app, confirm_key, True, package)
     before = database.current_content_revision_id()
     _click_with_file(app, _apply_key(app), package)
 
     assert app.radio(key="editor_section").value == "AI package"
-    assert "_editor_loaded_blocks" not in app.session_state.filtered_state
     assert "_editor_ai_review" not in app.session_state.filtered_state
     assert app.session_state["_editor_ai_generation"] == 1
     assert database.current_content_revision_id() == before + 1
@@ -300,7 +298,7 @@ def test_recent_revision_inverse_requires_prepare_confirm_and_apply(mutable_db):
     assert database.current_content_revision_id() == source_revision
     inverse = app.session_state["_editor_inverse_review"]
     assert inverse is not None and inverse.data["inverse_revision_id"] == source_revision
-    confirm = next(box for box in app.checkbox if box.label == "I confirm this exact inverse review")
+    confirm = next(box for box in app.checkbox if box.label == "I confirm this exact reviewed candidate and its local pending-Case impact")
     apply = next(button for button in app.button if button.label == "Apply reviewed inverse")
     assert apply.disabled
     confirm.set_value(True).run()
