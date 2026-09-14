@@ -432,7 +432,13 @@ def block_draft_operations(action, key, draft, bindings, *, source_key=None, bas
                     rule_values = {name: rule[name] for name in (
                         "field_a_key", "field_a_values", "field_b_key", "field_b_values", "message",
                     )}
-                    operations.append(operation("link", "Field_Consistency_Rules", rule_key, rule_values))
+                    copied = operation("link", "Field_Consistency_Rules", rule_key, rule_values)
+                    # This is the sole provenance that permits the candidate
+                    # engine to retain an existing rule's legacy JSON text
+                    # exactly.  It names one physical source row; the engine
+                    # rechecks it against the signed duplicate baseline.
+                    copied["copy_source"] = {"block_key": source_key, "id": rule["id"]}
+                    operations.append(copied)
             return operations
 
         desired_by_key = dict(desired)
@@ -787,6 +793,292 @@ def preset_draft_operations(action, key, draft, instances, *, source_key=None, b
                 operations.append(operation("reorder" if set(changed) == {"display_order"} else "update",
                                             "Preset_Blocks", {"preset_code": key, "block_key": identity[0],
                                                               "sort_order": identity[1]}, changed))
+        return operations
+    finally:
+        conn.close()
+
+
+# Stage 7 checkpoint 1 ------------------------------------------------------
+#
+# Quick Type tokens and consistency rules are complete-set drafts.  These
+# planners deliberately produce ordinary generalized intents; they do not
+# write, and remain usable by tests/disposable callers before CP2/CP3 add any
+# forms.  Their one source assertion covers owner identity, every current
+# configuration row (including IDs), and all selectable endpoint images.
+
+_CONFIGURATION_ASSERTION = "assert_configuration_draft"
+
+
+def _configuration_image(conn, kind, owner_key):
+    if kind == "quick_type":
+        owner = conn.execute("SELECT * FROM Presets WHERE short_code=?", (owner_key,)).fetchone()
+        if owner is None:
+            raise StudioIntentError("Quick Type Preset is unavailable.")
+        owner = dict(owner)
+        links = []
+        for row in conn.execute("""SELECT pb.*,b.* FROM Preset_Blocks pb JOIN Blocks b ON b.id=pb.block_id
+                                 WHERE pb.preset_id=? ORDER BY pb.sort_order,pb.block_id""", (owner["id"],)):
+            link = dict(row)
+            link["fields"] = [
+                {"binding": dict(binding), "field": dict(field)}
+                for binding in conn.execute("""SELECT bf.*,f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+                                               WHERE bf.block_id=? ORDER BY bf.sort_order,f.id""", (link["block_id"],))
+                for field in [conn.execute("SELECT * FROM Fields WHERE id=?", (binding["field_id"],)).fetchone()]
+            ]
+            links.append(link)
+        rows = [dict(row) for row in conn.execute(
+            "SELECT * FROM Quick_Type_Tokens WHERE preset_id=? ORDER BY sort_order,id", (owner["id"],)
+        )]
+    elif kind == "consistency":
+        owner = conn.execute("SELECT * FROM Blocks WHERE key=?", (owner_key,)).fetchone()
+        if owner is None:
+            raise StudioIntentError("Consistency-rule Block is unavailable.")
+        owner = dict(owner)
+        links = [
+            {"binding": dict(binding), "field": dict(field)}
+            for binding in conn.execute("""SELECT bf.*,f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+                                          WHERE bf.block_id=? ORDER BY bf.sort_order,f.id""", (owner["id"],))
+            for field in [conn.execute("SELECT * FROM Fields WHERE id=?", (binding["field_id"],)).fetchone()]
+        ]
+        rows = [dict(row) for row in conn.execute(
+            "SELECT * FROM Field_Consistency_Rules WHERE block_id=? ORDER BY id", (owner["id"],)
+        )]
+    else:
+        raise StudioIntentError("Configuration draft type is invalid.")
+    # `row_hash` excludes only a top-level id, so nest every physical row to
+    # retain surrogate identity against delete/recreate ABA races.
+    return {"kind": kind, "owner": owner, "configuration_rows": rows, "endpoints": links}
+
+
+def configuration_draft_baseline(kind, owner_key, *, db_name=None):
+    if kind not in {"quick_type", "consistency"} or not isinstance(owner_key, str) or not owner_key:
+        raise StudioIntentError("Configuration draft owner is invalid.")
+    conn = _connection(db_name)
+    try:
+        return content_editing.row_hash({"configuration": _configuration_image(conn, kind, owner_key)})
+    finally:
+        conn.close()
+
+
+def _assert_configuration_draft_baseline(conn, kind, owner_key, baseline):
+    if not isinstance(baseline, str) or not baseline:
+        raise StudioIntentError("Configuration draft requires its loaded baseline.")
+    current = content_editing.row_hash({"configuration": _configuration_image(conn, kind, owner_key)})
+    if current != baseline:
+        raise StaleSourceDraftError(
+            "Configuration owner, tokens/rules, or endpoint Fields changed since the draft was loaded. Current values were reloaded."
+        )
+
+
+def _configuration_assertion(kind, owner_key, baseline):
+    return {"op": _CONFIGURATION_ASSERTION, "kind": kind, "owner_key": owner_key, "baseline": baseline}
+
+
+def _quick_type_desired(conn, preset_code, tokens):
+    if not isinstance(tokens, list):
+        raise StudioIntentError("Quick Type draft must be a list.")
+    preset = conn.execute("SELECT * FROM Presets WHERE short_code=?", (preset_code,)).fetchone()
+    if preset is None or preset["is_archived"]:
+        raise StudioIntentError("Quick Type owner must be an active Preset.")
+    targets = {}
+    for row in conn.execute("""SELECT pb.sort_order,b.is_table,b.is_archived AS block_archived FROM Preset_Blocks pb
+                               JOIN Blocks b ON b.id=pb.block_id WHERE pb.preset_id=?""", (preset["id"],)):
+        targets[row["sort_order"]] = dict(row)
+    result = []
+    accepted = {"sort_order", "id", "block_sort_order", "field_key", "token_kind", "lookup_table", "digit_width"}
+    explicit_positions = [supplied.get("sort_order") if isinstance(supplied, dict) else None for supplied in tokens]
+    use_explicit_positions = any(position is not None for position in explicit_positions)
+    if use_explicit_positions and any(position is None for position in explicit_positions):
+        raise StudioIntentError("Quick Type token positions must be supplied as one complete set.")
+    if use_explicit_positions and (
+            any(type(position) is not int or position < 0 for position in explicit_positions)
+            or len(set(explicit_positions)) != len(explicit_positions)):
+        raise StudioIntentError("Quick Type token positions are invalid.")
+    for position, supplied in enumerate(tokens):
+        if not isinstance(supplied, dict) or set(supplied) - accepted or not {
+            "block_sort_order", "field_key", "token_kind", "lookup_table", "digit_width"
+        } <= set(supplied):
+            raise StudioIntentError("Quick Type token draft is invalid.")
+        token = {name: copy.deepcopy(supplied[name]) for name in
+                 ("block_sort_order", "field_key", "token_kind", "lookup_table", "digit_width")}
+        if type(token["block_sort_order"]) is not int or token["block_sort_order"] not in targets:
+            raise StudioIntentError("Quick Type token targets an unavailable Block instance.")
+        target = targets[token["block_sort_order"]]
+        if target["is_table"] or target["block_archived"]:
+            raise StudioIntentError("Quick Type token targets an unavailable Block instance.")
+        field = conn.execute("""SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+                                WHERE bf.block_id=(SELECT block_id FROM Preset_Blocks WHERE preset_id=? AND sort_order=?)
+                                  AND f.key=?""", (preset["id"], token["block_sort_order"], token["field_key"])).fetchone()
+        if field is None or field["is_archived"]:
+            raise StudioIntentError("Quick Type token targets an unavailable Field.")
+        field = dict(field)
+        if token["token_kind"] == "measurement":
+            if field["type"] not in {"number", "decimal"}:
+                raise StudioIntentError("Quick Type measurement must target a numeric Field.")
+            if token["lookup_table"] is not None:
+                raise StudioIntentError("Quick Type measurement cannot have a lookup table.")
+        elif token["token_kind"] == "lookup":
+            if not isinstance(token["lookup_table"], dict):
+                raise StudioIntentError("Quick Type lookup table is invalid.")
+            for value in token["lookup_table"].values():
+                try:
+                    content_changes.contract.field_value(field, value)
+                except (TypeError, ValueError):
+                    raise StudioIntentError("Quick Type lookup value is invalid for its Field.") from None
+        else:
+            raise StudioIntentError("Quick Type token kind is invalid.")
+        result.append({"sort_order": explicit_positions[position] if use_explicit_positions else position, **token})
+    try:
+        import quicktype
+        quicktype.validate_quick_type_config(result)
+    except ValueError as error:
+        raise StudioIntentError(str(error)) from None
+    return result
+
+
+def quick_type_draft_operations(preset_code, tokens, *, baseline=None, db_name=None):
+    """Replace one Preset's complete token set through a reviewed candidate."""
+    conn = _connection(db_name)
+    try:
+        expected = configuration_draft_baseline("quick_type", preset_code, db_name=db_name) if baseline is None else baseline
+        _assert_configuration_draft_baseline(conn, "quick_type", preset_code, expected)
+        desired = _quick_type_desired(conn, preset_code, tokens)
+        current = [dict(row) for row in conn.execute(
+            "SELECT * FROM Quick_Type_Tokens WHERE preset_id=(SELECT id FROM Presets WHERE short_code=?) ORDER BY sort_order,id",
+            (preset_code,))]
+        def semantic(row):
+            lookup = row["lookup_table"]
+            if isinstance(lookup, str):
+                lookup = json.loads(lookup)
+            return {"block_sort_order": row["block_sort_order"], "field_key": row["field_key"],
+                    "token_kind": row["token_kind"],
+                    "lookup_table": content_changes.contract.canonical_json(lookup).strip() if lookup is not None else None,
+                    "digit_width": row["digit_width"]}
+        # A complete draft without explicit positions expresses its order, not
+        # an instruction to densify unrelated legacy positions.  When retained
+        # tokens keep their relative order, retain their immutable positions
+        # and append genuinely new rows after the current range.  A real
+        # reorder still uses normalized desired order below.
+        if not any(isinstance(token, dict) and "sort_order" in token for token in tokens):
+            if len(current) == len(desired):
+                # A same-length complete draft has one row at every existing
+                # positional identity.  Bind it by order before comparing
+                # attributes: this lets an ordinary edit or a reorder update
+                # that row instead of deleting and recreating its surrogate.
+                for row, existing in zip(desired, current):
+                    row["sort_order"] = existing["sort_order"]
+            else:
+                current_by_semantic = {content_changes.contract.canonical_json(semantic(row)): row for row in current}
+                desired_by_semantic = {content_changes.contract.canonical_json(semantic(row)): row for row in desired}
+                current_common = [content_changes.contract.canonical_json(semantic(row)) for row in current
+                                  if content_changes.contract.canonical_json(semantic(row)) in desired_by_semantic]
+                desired_common = [content_changes.contract.canonical_json(semantic(row)) for row in desired
+                                  if content_changes.contract.canonical_json(semantic(row)) in current_by_semantic]
+                if current_common == desired_common:
+                    next_position = max((row["sort_order"] for row in current), default=-1) + 1
+                    for row in desired:
+                        identity = content_changes.contract.canonical_json(semantic(row))
+                        if identity in current_by_semantic:
+                            row["sort_order"] = current_by_semantic[identity]["sort_order"]
+                        else:
+                            row["sort_order"] = next_position
+                            next_position += 1
+        current_by_position = {row["sort_order"]: row for row in current}
+        desired_stored = [{**row, "lookup_table": content_changes.contract.canonical_json(row["lookup_table"]).strip()
+                            if row["lookup_table"] is not None else None} for row in desired]
+        desired_by_position = {row["sort_order"]: row for row in desired_stored}
+        # A no-op draft loaded from a valid legacy sparse sequence may omit
+        # positions (CP2 will carry them invisibly). Preserve its physical
+        # rows rather than densifying positions as an incidental rewrite.
+        if (not any(isinstance(token, dict) and "sort_order" in token for token in tokens)
+                and [semantic(row) for row in current] == [semantic(row) for row in desired_stored]):
+            raise StudioIntentError("Quick Type draft has no persisted change.")
+        if (set(current_by_position) == set(desired_by_position)
+                and all(semantic(current_by_position[position]) == semantic(desired_by_position[position])
+                        for position in current_by_position)):
+            raise StudioIntentError("Quick Type draft has no persisted change.")
+        operations = [_configuration_assertion("quick_type", preset_code, expected)]
+        for position in sorted(set(current_by_position) | set(desired_by_position)):
+            before, after = current_by_position.get(position), desired_by_position.get(position)
+            if before is not None and after is not None and semantic(before) == semantic(after):
+                continue
+            if before is not None and after is not None:
+                before_semantic, after_semantic = semantic(before), semantic(after)
+                changed = {name: after[name] for name in
+                           ("block_sort_order", "field_key", "token_kind", "lookup_table", "digit_width")
+                           if before_semantic[name] != after_semantic[name]}
+                operations.append(operation("update", "Quick_Type_Tokens", {
+                    "preset_code": preset_code, "sort_order": position,
+                }, changed))
+            elif before is not None:
+                operations.append(operation("unlink", "Quick_Type_Tokens", {
+                    "preset_code": preset_code, "sort_order": position,
+                }))
+            elif after is not None:
+                operations.append(operation("link", "Quick_Type_Tokens", {
+                    "preset_code": preset_code, "sort_order": position,
+                }, {name: after[name] for name in ("block_sort_order", "field_key", "token_kind", "lookup_table", "digit_width")}))
+        return operations
+    finally:
+        conn.close()
+
+
+def consistency_rule_draft_operations(block_key, rules, *, baseline=None, db_name=None):
+    """Replace one non-table Block's complete rule set through Content Studio."""
+    if not isinstance(rules, list):
+        raise StudioIntentError("Consistency rule draft must be a list.")
+    conn = _connection(db_name)
+    try:
+        expected = configuration_draft_baseline("consistency", block_key, db_name=db_name) if baseline is None else baseline
+        _assert_configuration_draft_baseline(conn, "consistency", block_key, expected)
+        owner = conn.execute("SELECT * FROM Blocks WHERE key=?", (block_key,)).fetchone()
+        if owner is None or owner["is_archived"] or owner["is_table"]:
+            raise StudioIntentError("Consistency-rule owner must be an active non-table Block.")
+        fields = {row["key"]: dict(row) for row in conn.execute("""SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+                                                                     WHERE bf.block_id=?""", (owner["id"],))}
+        try:
+            import consistency
+            desired = consistency.canonicalize_rules(fields, rules)
+        except ValueError as error:
+            raise StudioIntentError(str(error)) from None
+        current = [dict(row) for row in conn.execute("SELECT * FROM Field_Consistency_Rules WHERE block_id=? ORDER BY id", (owner["id"],))]
+        existing = [{"field_a_key": row["field_a_key"], "field_a_values": json.loads(row["field_a_values"]),
+                     "field_b_key": row["field_b_key"], "field_b_values": json.loads(row["field_b_values"]),
+                     "message": row["message"]} for row in current]
+        try:
+            # Validate the complete current set first, then retain each raw
+            # row beside its semantic image for exact minimal unlink keys.
+            consistency.canonicalize_rules(fields, existing)
+            current_pairs = [(consistency.canonicalize_rule(row, fields), raw)
+                             for row, raw in zip(existing, current)]
+        except ValueError as error:
+            raise StudioIntentError("Current consistency configuration is invalid; repair it before editing.") from error
+        current_by_identity = {consistency.predicate_identity(row): (row, raw)
+                               for row, raw in current_pairs}
+        desired_by_identity = {consistency.predicate_identity(row): row for row in desired}
+        if (set(current_by_identity) == set(desired_by_identity)
+                and all(current_by_identity[identity][0] == desired_by_identity[identity]
+                        for identity in current_by_identity)):
+            raise StudioIntentError("Consistency rule draft has no persisted change.")
+        operations = [_configuration_assertion("consistency", block_key, expected)]
+        for identity in sorted(set(current_by_identity) | set(desired_by_identity), key=content_changes.contract.canonical_json):
+            before = current_by_identity.get(identity)
+            after = desired_by_identity.get(identity)
+            if before is not None and after is not None and before[0] == after:
+                continue
+            if before is not None:
+                raw = before[1]
+                operations.append(operation("unlink", "Field_Consistency_Rules", {
+                    "block_key": block_key, "field_a_key": raw["field_a_key"], "field_a_values": raw["field_a_values"],
+                    "field_b_key": raw["field_b_key"], "field_b_values": raw["field_b_values"], "message": raw["message"],
+                }))
+            if after is not None:
+                key = {"block_key": block_key, "field_a_key": after["field_a_key"],
+                       "field_a_values": content_changes.contract.canonical_json(after["field_a_values"]).strip(),
+                       "field_b_key": after["field_b_key"],
+                       "field_b_values": content_changes.contract.canonical_json(after["field_b_values"]).strip(), "message": after["message"]}
+                operations.append(operation("link", "Field_Consistency_Rules", key,
+                                            {name: after[name] for name in ("field_a_key", "field_a_values", "field_b_key", "field_b_values", "message")}))
         return operations
     finally:
         conn.close()

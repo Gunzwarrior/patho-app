@@ -86,3 +86,34 @@ class TestValidateConsistencyRules:
     def test_rejects_empty_field_b_values(self):
         with pytest.raises(ValueError, match="field_b_values"):
             consistency.validate_consistency_rules(self.FIELDS, [self._rule(field_b_values=[])])
+
+
+class TestSemanticCanonicalRules:
+    FIELDS = {
+        "size": {"key": "size", "type": "decimal", "options": None},
+        "flag": {"key": "flag", "type": "checkbox", "options": None},
+    }
+
+    def _rule(self, values):
+        return {"field_a_key": "size", "field_a_values": values,
+                "field_b_key": "flag", "field_b_values": [True], "message": "Check."}
+
+    def test_decimal_spellings_and_signed_zero_are_semantic_duplicates(self):
+        with pytest.raises(ValueError, match="duplicate semantic"):
+            consistency.canonicalize_rules(self.FIELDS, [self._rule([1, 1.0])])
+        with pytest.raises(ValueError, match="duplicate semantic"):
+            consistency.canonicalize_rules(self.FIELDS, [self._rule([0, -0.0])])
+
+    def test_reversed_predicate_is_equivalent_after_typed_canonicalization(self):
+        reversed_rule = {"field_a_key": "flag", "field_a_values": [True],
+                         "field_b_key": "size", "field_b_values": [1.0], "message": "Other wording."}
+        with pytest.raises(ValueError, match="Equivalent"):
+            consistency.canonicalize_rules(self.FIELDS, [self._rule([1]), reversed_rule])
+
+    def test_persisted_json_operands_use_the_same_semantic_canonicalization(self):
+        canonical = consistency.canonicalize_rule({
+            "field_a_key": "size", "field_a_values": "[1.0]",
+            "field_b_key": "flag", "field_b_values": "[true]", "message": "Check.",
+        }, self.FIELDS)
+        assert canonical["field_a_values"] == [1]
+        assert canonical["field_b_values"] == [True]

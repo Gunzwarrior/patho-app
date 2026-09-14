@@ -617,7 +617,15 @@ def _prefix_warnings(conn, operations):
 
 def _general_review_warnings(conn, operations, before_validated, after_validated):
     """Warnings are part of the signed generalized-review payload."""
-    warnings = _prefix_warnings(conn, operations)
+    active = [dict(row) for row in conn.execute("SELECT * FROM Presets WHERE is_archived=0")]
+    token_sets = {
+        preset["id"]: [
+            {**dict(row), "lookup_table": json.loads(row["lookup_table"]) if row["lookup_table"] else None}
+            for row in conn.execute("SELECT * FROM Quick_Type_Tokens WHERE preset_id=? ORDER BY sort_order", (preset["id"],))
+        ] for preset in active
+    }
+    _, reachability_warnings = quicktype.prefix_reachability(active, token_sets)
+    warnings = reachability_warnings
     duplicate_sources = {op["key"] for op in operations
                          if op.get("op") == _GENERAL_PRESET_ASSERTION and op.get("duplicate") is True}
     for operation in operations:
@@ -629,6 +637,50 @@ def _general_review_warnings(conn, operations, before_validated, after_validated
                 "Quick Type tokens are intentionally not copied to a duplicated Preset; only its bare shortcut is available."
             )
     return warnings + _validated_reconstruction_loss_warning(before_validated, after_validated)
+
+
+def _configuration_review_evidence(before_rows, after_rows, operations, conn):
+    """Small, signed CP1 evidence for complete-set configuration drafts."""
+    owners = [(operation["kind"], operation["owner_key"]) for operation in operations
+              if operation.get("op") == _GENERAL_CONFIGURATION_ASSERTION]
+
+    def image(rows, kind, owner_key):
+        if kind == "quick_type":
+            preset = rows["Presets"].get(owner_key)
+            if preset is None:
+                return []
+            result = []
+            for row in rows["Quick_Type_Tokens"].values():
+                if row["preset_id"] != preset["id"]:
+                    continue
+                result.append({"sort_order": row["sort_order"], "block_sort_order": row["block_sort_order"],
+                               "field_key": row["field_key"], "token_kind": row["token_kind"],
+                               "lookup_table": json.loads(row["lookup_table"]) if row["lookup_table"] else None,
+                               "digit_width": row["digit_width"]})
+            return sorted(result, key=lambda row: row["sort_order"])
+        block = rows["Blocks"].get(owner_key)
+        if block is None:
+            return []
+        result = []
+        for row in rows["Field_Consistency_Rules"].values():
+            if row["block_id"] != block["id"]:
+                continue
+            result.append({"field_a_key": row["field_a_key"], "field_a_values": json.loads(row["field_a_values"]),
+                           "field_b_key": row["field_b_key"], "field_b_values": json.loads(row["field_b_values"]),
+                           "message": row["message"]})
+        return sorted(result, key=contract.canonical_json)
+
+    active = [dict(row) for row in conn.execute("SELECT * FROM Presets WHERE is_archived=0")]
+    token_sets = {
+        preset["id"]: database.get_quick_type_tokens_on_connection(conn, preset["id"])
+        for preset in active
+    }
+    errors, warnings = quicktype.prefix_reachability(active, token_sets)
+    return {"before": [{"kind": kind, "owner_key": key, "configuration": image(before_rows, kind, key)}
+                       for kind, key in owners],
+            "after": [{"kind": kind, "owner_key": key, "configuration": image(after_rows, kind, key)}
+                      for kind, key in owners],
+            "findings": {"reachability_errors": errors, "reachability_warnings": warnings}}
 
 
 def _validated_reconstructability(conn):
@@ -1136,9 +1188,10 @@ _GENERAL_FIELD_ASSERTION = "assert_field_endpoints"
 _GENERAL_PRESET_ASSERTION = "assert_preset_draft"
 _GENERAL_PRESET_ENDPOINT_ASSERTION = "assert_preset_endpoints"
 _GENERAL_SOURCE_ASSERTION = "assert_source_draft"
+_GENERAL_CONFIGURATION_ASSERTION = "assert_configuration_draft"
 _GENERAL_ASSERTIONS = frozenset({_GENERAL_ASSERTION, _GENERAL_FIELD_ASSERTION,
                                  _GENERAL_PRESET_ASSERTION, _GENERAL_PRESET_ENDPOINT_ASSERTION,
-                                 _GENERAL_SOURCE_ASSERTION})
+                                 _GENERAL_SOURCE_ASSERTION, _GENERAL_CONFIGURATION_ASSERTION})
 _GENERAL_PHYSICAL_COLUMNS = {
     "Fields": ("id", "key", "label", "type", "is_archived", "options", "default_value", "conclusion_addendum_template"),
     "Blocks": ("id", "key", "name", "is_archived", "is_table", "site_label", "conclusion_group", "macro_template", "micro_template", "conclusion_template", "context_template", "title_fragment_template", "conclusion_label_template"),
@@ -1243,6 +1296,22 @@ def _general_rows(conn):
 def _general_normalize(operations):
     if not isinstance(operations, list) or not operations or len(operations) > contract.MAX_OPERATIONS:
         raise ChangeError("Content Studio operations are invalid.")
+    configuration_owners = {
+        operation.get("owner_key") for operation in operations
+        if isinstance(operation, dict) and operation.get("op") == _GENERAL_CONFIGURATION_ASSERTION
+        and operation.get("kind") == "quick_type"
+    }
+    duplicate_rule_sources = {
+        operation.get("key") for operation in operations
+        if isinstance(operation, dict) and operation.get("op") == _GENERAL_ASSERTION
+        and operation.get("table") == "Blocks" and isinstance(operation.get("key"), str)
+        and operation.get("copied_rules_baseline") is not None
+    }
+    created_blocks = {
+        operation.get("key") for operation in operations
+        if isinstance(operation, dict) and operation.get("op") == "create"
+        and operation.get("table") == "Blocks" and isinstance(operation.get("key"), str)
+    }
     cleaned, targets = [], set()
     for operation in operations:
         if not isinstance(operation, dict):
@@ -1329,6 +1398,19 @@ def _general_normalize(operations):
                             "key": dict(key) if isinstance(key, dict) else key,
                             "baseline": operation["baseline"]})
             continue
+        if action == _GENERAL_CONFIGURATION_ASSERTION:
+            if (set(operation) != {"op", "kind", "owner_key", "baseline"}
+                    or operation["kind"] not in {"quick_type", "consistency"}
+                    or not isinstance(operation["owner_key"], str) or not operation["owner_key"]
+                    or not isinstance(operation["baseline"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", operation["baseline"])):
+                raise ChangeError("Content Studio configuration draft assertion is invalid.")
+            marker = (action, operation["kind"], operation["owner_key"])
+            if marker in targets:
+                raise ChangeError("Content Studio targets must be unique.")
+            targets.add(marker)
+            cleaned.append(dict(operation))
+            continue
         if action == "case_preset_reference":
             if set(operation) != {"op", "case_id", "before_preset_id", "after_preset_id"}:
                 raise ChangeError("Content Studio Case reference is invalid.")
@@ -1354,8 +1436,10 @@ def _general_normalize(operations):
         if not valid_key:
             raise ChangeError("Content Studio relationship key is invalid.")
         has_values = "values" in operation
+        has_copy_source = "copy_source" in operation
         if action in {"create", "update", "link", "reorder"}:
-            if set(operation) != {"op", "table", "key", "values"} or not isinstance(operation["values"], dict):
+            expected = {"op", "table", "key", "values"} | ({"copy_source"} if has_copy_source else set())
+            if set(operation) != expected or not isinstance(operation["values"], dict):
                 raise ChangeError("Content Studio operation values are invalid.")
         elif set(operation) != {"op", "table", "key"}:
             raise ChangeError("Content Studio operation is invalid.")
@@ -1363,13 +1447,36 @@ def _general_normalize(operations):
             raise ChangeError("Content Studio operation is invalid.")
         if table in _GENERAL_RELATIONS and action in {"archive", "restore"}:
             raise ChangeError("Content Studio operation is invalid.")
+        if has_copy_source:
+            source = operation["copy_source"]
+            if (action != "link" or table != "Field_Consistency_Rules"
+                    or not isinstance(source, dict) or set(source) != {"block_key", "id"}
+                    or not isinstance(source["block_key"], str) or not source["block_key"]
+                    or type(source["id"]) is not int or source["id"] <= 0
+                    or source["block_key"] == key["block_key"]
+                    or source["block_key"] not in duplicate_rule_sources
+                    or key["block_key"] not in created_blocks):
+                raise ChangeError("Consistency-rule copy provenance is invalid.")
         marker = (table, _general_audit_key(table, key))
+        # A complete token-set replacement deliberately unlinks then recreates
+        # a stable position.  It is safe only under the signed complete-set
+        # configuration assertion; other double-targeted intents remain
+        # rejected.  This is needed for a unique position index and exact
+        # reorder semantics without temporarily retargeting a token.
+        prior = next((item for item in cleaned
+                      if item.get("table") == table and _general_audit_key(table, item.get("key")) == marker[1]), None)
         if marker in targets:
-            raise ChangeError("Content Studio targets must be unique.")
-        targets.add(marker)
+            allowed_replacement = (table == "Quick_Type_Tokens" and key.get("preset_code") in configuration_owners
+                                   and {action, prior.get("op") if prior else None} == {"link", "unlink"})
+            if not allowed_replacement:
+                raise ChangeError("Content Studio targets must be unique.")
+        else:
+            targets.add(marker)
         clean = {"op": action, "table": table, "key": dict(key) if isinstance(key, dict) else key}
         if has_values:
             clean["values"] = dict(operation["values"])
+        if has_copy_source:
+            clean["copy_source"] = dict(operation["copy_source"])
         cleaned.append(clean)
     # Makes review input order irrelevant while preserving source action data.
     def phase(operation):
@@ -1441,6 +1548,41 @@ def _general_insert_from_intent(conn, op):
             values.setdefault("display_order", key["sort_order"]); values.setdefault("field_overrides", "{}")
         elif table == "Preset_Block_Rows":
             values.setdefault("field_overrides", "{}")
+        elif table == "Quick_Type_Tokens":
+            owner = conn.execute("SELECT is_archived FROM Presets WHERE id=?", (values["preset_id"],)).fetchone()
+            if owner is None or owner["is_archived"]:
+                raise ChangeError("New Quick Type configuration requires an active Preset owner.")
+        elif table == "Field_Consistency_Rules":
+            owner = conn.execute("SELECT is_archived,is_table FROM Blocks WHERE id=?", (values["block_id"],)).fetchone()
+            if owner is None or owner["is_archived"] or owner["is_table"]:
+                raise ChangeError("New consistency configuration requires an active non-table Block owner.")
+            rule_fields = {row["key"]: dict(row) for row in conn.execute(
+                """SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+                   WHERE bf.block_id=?""", (values["block_id"],)
+            )}
+            try:
+                canonical = consistency.canonicalize_rule({
+                    "field_a_key": values["field_a_key"], "field_a_values": values["field_a_values"],
+                    "field_b_key": values["field_b_key"], "field_b_values": values["field_b_values"],
+                    "message": values["message"],
+                }, rule_fields)
+            except ValueError as error:
+                raise ChangeError(str(error)) from None
+            source = op.get("copy_source")
+            if source is not None:
+                source_row = conn.execute(
+                    """SELECT r.* FROM Field_Consistency_Rules r JOIN Blocks b ON b.id=r.block_id
+                       WHERE b.key=? AND r.id=?""", (source["block_key"], source["id"])
+                ).fetchone()
+                copied_columns = ("field_a_key", "field_a_values", "field_b_key", "field_b_values", "message")
+                if source_row is None or any(values[name] != source_row[name] for name in copied_columns):
+                    raise ChangeError("Consistency-rule copy source changed or is unavailable.")
+                # The normalized intent grammar proved that this link belongs
+                # to a signed Block duplicate.  Preserve its already-audited
+                # storage image, while the canonical call above validates its
+                # typed semantic meaning.
+            else:
+                values.update(canonical)
         elif table == "Conclusion_Group_Labels":
             values.setdefault("block_key_set", key["block_key_set"])
         for name in ("sort_order",):
@@ -1474,6 +1616,14 @@ def _general_update_from_intent(conn, op):
         raise ChangeError("Block table state is immutable.")
     if table == "Blocks" and before["is_table"]:
         raise ChangeError("Table Blocks are read-only in Content Studio.")
+    if table == "Quick_Type_Tokens":
+        owner = conn.execute("SELECT is_archived FROM Presets WHERE id=?", (before["preset_id"],)).fetchone()
+        if owner is None or owner["is_archived"]:
+            raise ChangeError("Modified Quick Type configuration requires an active Preset owner.")
+    if table == "Field_Consistency_Rules":
+        owner = conn.execute("SELECT is_archived,is_table FROM Blocks WHERE id=?", (before["block_id"],)).fetchone()
+        if owner is None or owner["is_archived"] or owner["is_table"]:
+            raise ChangeError("Modified consistency configuration requires an active non-table Block owner.")
     if table == "Preset_Blocks" and "sort_order" in values:
         raise ChangeError("Preset instance identity is immutable.")
     immutable_relation_columns = {
@@ -1669,7 +1819,9 @@ def _validate_general_configuration(conn):
         for block in database.get_preset_blocks_on_connection(conn, preset["id"]):
             _check_widget_defaults(block)
 
-    for preset in conn.execute("SELECT id FROM Presets WHERE is_archived=0"):
+    active_presets = [dict(row) for row in conn.execute("SELECT * FROM Presets WHERE is_archived=0")]
+    token_sets = {}
+    for preset in active_presets:
         tokens = []
         for token in conn.execute("SELECT * FROM Quick_Type_Tokens WHERE preset_id=? ORDER BY sort_order", (preset["id"],)):
             token = dict(token)
@@ -1696,6 +1848,10 @@ def _validate_general_configuration(conn):
                     contract.field_value(field, value)
             tokens.append(token)
         quicktype.validate_quick_type_config(tokens)
+        token_sets[preset["id"]] = tokens
+    reachability_errors, _ = quicktype.prefix_reachability(active_presets, token_sets)
+    if reachability_errors:
+        raise ChangeError(reachability_errors[0])
 
     rows_seen = set()
     for row in conn.execute("""SELECT pbr.*, b.is_table, p.is_archived AS preset_is_archived,
@@ -1753,20 +1909,28 @@ def _validate_general_configuration(conn):
                     variables, _ = content_editing._template_variables(source)
                     if variables - context_aliases - {"snippet"}:
                         raise ChangeError("Context and title templates may use only context-section Fields.")
+        rule_fields = {row["key"]: dict(row) for row in conn.execute(
+            """SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+               WHERE bf.block_id=?""", (block["id"],)
+        )}
         rules = []
         for rule in conn.execute("SELECT * FROM Field_Consistency_Rules WHERE block_id=?", (block["id"],)):
-            rule = dict(rule)
-            rule["field_a_values"] = json.loads(rule["field_a_values"])
-            rule["field_b_values"] = json.loads(rule["field_b_values"])
+            stored = dict(rule)
+            rule = {"field_a_key": stored["field_a_key"], "field_a_values": json.loads(stored["field_a_values"]),
+                    "field_b_key": stored["field_b_key"], "field_b_values": json.loads(stored["field_b_values"]),
+                    "message": stored["message"]}
             for key, values in ((rule["field_a_key"], rule["field_a_values"]),
                                 (rule["field_b_key"], rule["field_b_values"])):
-                field = conn.execute("SELECT * FROM Fields WHERE key=?", (key,)).fetchone()
+                field = rule_fields.get(key)
                 if field is None or field["is_archived"]:
                     raise ChangeError("Consistency rule Field is unavailable.")
                 for value in values:
-                    contract.field_value(dict(field), value)
+                    contract.field_value(field, value)
             rules.append(rule)
-        consistency.validate_consistency_rules(fields, rules)
+        try:
+            consistency.canonicalize_rules(rule_fields, rules)
+        except ValueError as error:
+            raise ChangeError(str(error)) from None
     for label in conn.execute("SELECT block_key_set FROM Conclusion_Group_Labels"):
         keys = label["block_key_set"].split(",")
         if keys != sorted(set(keys)) or any(not _fetch(conn, "Blocks", key) for key in keys):
@@ -1954,6 +2118,10 @@ def _validate_general_assertions(conn, operations):
                 content_studio._assert_source_draft_baseline(
                     conn, operation["table"], operation["key"], operation["baseline"]
                 )
+            elif operation["op"] == _GENERAL_CONFIGURATION_ASSERTION:
+                content_studio._assert_configuration_draft_baseline(
+                    conn, operation["kind"], operation["owner_key"], operation["baseline"]
+                )
         except (content_studio.StaleBlockDraftError, content_studio.StalePresetDraftError,
                 content_studio.StaleSourceDraftError) as error:
             raise StaleDraftReviewError(str(error)) from None
@@ -2010,6 +2178,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
             pending = _general_pending_impact(before_pending, after_pending)
             payload = {"engine": "generalized_v1", "summary": summary, "operations": operations,
                        "changes": changes, "case_references": refs, "presets": presets,
+                       "configuration_review": _configuration_review_evidence(before_rows, after_rows, operations, candidate),
                        "unaffected_presets": sum(not item["affected"] for item in presets),
                        "pending_cases": pending, "validated_pending_count": len(after_pending),
                        "warnings": _general_review_warnings(candidate, operations, before_validated, after_validated), "branch_warnings": [], "standalone": standalone, "before_standalone": [],
@@ -2189,7 +2358,29 @@ def _general_apply_images(conn, changes):
         deleting = change["after"] is None
         return (3 if deleting and not relation else 2 if deleting else 0 if not relation else 1,
                 change["table"], _general_audit_key(change["table"], change["key"]))
+    # Replacing a unique Quick Type position (notably a reorder) intentionally
+    # creates a new surrogate row during forward Apply.  An UPDATE cannot put
+    # the old ID back, so remove those current images first and insert the
+    # audited image explicitly below.  No other relation has this replacement
+    # grammar, and all checks still compare exact physical rows.
+    replacements = []
+    for change in changes:
+        if change["table"] != "Quick_Type_Tokens" or change["before"] is None or change["after"] is None:
+            continue
+        current = _general_row(conn, change["table"], change["key"])
+        if current != change["before"]:
+            raise ChangeError("Revert refused: later content changes or identities conflict with this revision.")
+        if current["id"] != change["after"]["id"]:
+            replacements.append(change)
+    for change in replacements:
+        _general_delete_from_intent(conn, change["table"], change["key"])
+
     for change in sorted(changes, key=order):
+        if change in replacements:
+            if _general_row(conn, change["table"], change["key"]) is not None:
+                raise ChangeError("Revert refused: restored token position is occupied.")
+            _insert(conn, change["table"], change["after"])
+            continue
         current = _general_row(conn, change["table"], change["key"])
         if current != change["before"]:
             raise ChangeError("Revert refused: later content changes or identities conflict with this revision.")

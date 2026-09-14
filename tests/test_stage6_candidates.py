@@ -273,8 +273,8 @@ def test_create_and_inverse_cover_configuration_tables_with_ordinary_ownership(m
         }, {"display_order": 0, "field_overrides": {}}),
         content_studio.operation("link", "Quick_Type_Tokens", {
             "preset_code": "dai", "sort_order": 99,
-        }, {"block_sort_order": 0, "field_key": "appendicite_type", "token_kind": "lookup",
-            "lookup_table": {"z": "endo"}, "digit_width": None}),
+        }, {"block_sort_order": 0, "field_key": "false_membranes", "token_kind": "lookup",
+            "lookup_table": {"z": False}, "digit_width": None}),
         content_studio.operation("link", "Field_Consistency_Rules", {
             "block_key": "appendice", "field_a_key": "false_membranes", "field_a_values": "[false]",
             "field_b_key": "appendicite_type", "field_b_values": '["phlegmoneuse"]',

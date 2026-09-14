@@ -37,6 +37,24 @@ def migrate_schema(db_name=None):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
+        # CP1: identity snapshots and reviewed candidates address a token by
+        # (preset_id, sort_order).  Do the duplicate check before *any*
+        # migration write so an old malformed database is refused intact.
+        # SQLite's CREATE UNIQUE INDEX error is not sufficiently explicit and
+        # must not become a partially-applied migration.
+        token_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='Quick_Type_Tokens'"
+        ).fetchone()
+        if token_table:
+            duplicate = conn.execute(
+                """SELECT preset_id,sort_order FROM Quick_Type_Tokens
+                   GROUP BY preset_id,sort_order HAVING COUNT(*) > 1 LIMIT 1"""
+            ).fetchone()
+            if duplicate is not None:
+                raise ValueError(
+                    "Stage 7 Quick Type migration refused: duplicate token position "
+                    f"for preset_id={duplicate['preset_id']}, sort_order={duplicate['sort_order']}."
+                )
         case_columns = _table_columns(conn, "Cases")
         if "content_fingerprint" not in case_columns:
             conn.execute("ALTER TABLE Cases ADD COLUMN content_fingerprint TEXT")
@@ -316,6 +334,19 @@ def migrate_schema(db_name=None):
                 if current != legacy:
                     conn.execute("UPDATE Cases SET content_fingerprint=? WHERE id=?", (current, case["id"]))
             conn.execute("INSERT INTO Schema_Migrations (name) VALUES (?)", (link_fingerprint_marker,))
+
+        # Additive, idempotent CP1 enforcement.  The preflight above makes
+        # this all-or-nothing for an old database containing duplicate token
+        # positions; no Case/content data is rewritten.
+        token_position_marker = "stage7_quick_type_token_position_unique_v1"
+        if not conn.execute(
+            "SELECT 1 FROM Schema_Migrations WHERE name=?", (token_position_marker,)
+        ).fetchone():
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS Quick_Type_Tokens_preset_sort_order_uq "
+                "ON Quick_Type_Tokens(preset_id, sort_order)"
+            )
+            conn.execute("INSERT INTO Schema_Migrations (name) VALUES (?)", (token_position_marker,))
         conn.commit()
     finally:
         conn.close()
@@ -352,6 +383,19 @@ def get_all_presets(include_archived=False):
     rows = conn.execute(query + " ORDER BY category, name").fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_all_presets_on_connection(conn, include_archived=False):
+    """Connection-scoped Preset read for candidate/batch interpretation.
+
+    Supplying a candidate connection is an authority boundary: callers must
+    never silently reopen the operational database while evaluating a frozen
+    candidate graph.
+    """
+    query = "SELECT * FROM Presets"
+    if not include_archived:
+        query += " WHERE is_archived = 0"
+    return [dict(row) for row in conn.execute(query + " ORDER BY category, name")]
 
 
 def get_preset_by_id(preset_id):
@@ -715,6 +759,14 @@ def get_quick_type_tokens(preset_id):
     Quick Type config -- meaning nothing beyond its bare short_code
     parses, which quicktype.parse_tokens treats as valid, not an error."""
     conn = get_db_connection()
+    try:
+        return get_quick_type_tokens_on_connection(conn, preset_id)
+    finally:
+        conn.close()
+
+
+def get_quick_type_tokens_on_connection(conn, preset_id):
+    """Connection-scoped token read; never opens a fallback connection."""
     rows = conn.execute(
         """SELECT sort_order, block_sort_order, field_key, token_kind, lookup_table, digit_width
            FROM Quick_Type_Tokens
@@ -722,7 +774,6 @@ def get_quick_type_tokens(preset_id):
            ORDER BY sort_order""",
         (preset_id,),
     ).fetchall()
-    conn.close()
     return [
         {**dict(r), "lookup_table": json.loads(r["lookup_table"]) if r["lookup_table"] else None}
         for r in rows

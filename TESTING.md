@@ -656,3 +656,17 @@ data even if something goes wrong) before trusting it with Checkpoint 6
 subtle mistake is most likely to reproduce a bug this project already
 paid to learn). Same instinct as piloting Quick Type on `dai` alone
 before extending it — applied to trusting a model instead of a feature.
+
+## Stage 7 CP1 focused verification — 2026-09-14
+
+The final remediation-focused runs passed **21** CP1 configuration tests,
+**15** consistency tests, **22** Quick Type tests, **28** Stage 6 Block tests,
+and **30** Stage 6 candidate tests. Coverage includes the named unique
+token-position migration (including duplicate refusal and repeat migration),
+candidate-connection parsing isolation, minimal token/rule composition and
+physical identity, owner/endpoint/configuration ABA, stale review, typed
+decimal rule canonicalization, archived/table-owner refusal, exact proven
+Block-duplicate rule copying, and materialization/audit rollback.
+`python3 -m py_compile database.py quicktype.py consistency.py
+content_studio.py content_changes.py` and `git diff --check` passed. The full
+isolated suite remains the manual command `venv/bin/python -m pytest -q`.

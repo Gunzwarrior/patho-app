@@ -95,17 +95,37 @@ def validate_quick_type_config(tokens):
     if not tokens:
         return  # a preset with no Quick Type config is just not quick-typeable past its bare short_code -- not an error.
 
+    targets = set()
+    positions = set()
     for i, token in enumerate(tokens):
         field_key = token["field_key"]
+        target = (token.get("block_sort_order", 0), field_key)
+        if target in targets:
+            raise ValueError(
+                f"Quick Type has more than one token targeting Block instance {target[0]} "
+                f"Field '{field_key}'."
+            )
+        targets.add(target)
+        if "sort_order" in token:
+            position = token["sort_order"]
+            if type(position) is not int or position < 0:
+                raise ValueError("Quick Type token position is invalid.")
+            if position in positions:
+                raise ValueError(f"Quick Type token position {position} is duplicated.")
+            positions.add(position)
 
         if token["token_kind"] == "lookup":
+            if not isinstance(token.get("lookup_table"), dict):
+                raise ValueError(f"Lookup token for '{field_key}' has an invalid lookup_table.")
+            if token.get("digit_width") is not None:
+                raise ValueError(f"Lookup token for '{field_key}' cannot have a digit_width.")
             keys = set(token["lookup_table"].keys())
             if not keys:
                 raise ValueError(f"Lookup token for '{field_key}' has an empty lookup_table.")
-            oversized = {k for k in keys if len(k) != 1}
+            oversized = {k for k in keys if not isinstance(k, str) or len(k) != 1}
             if oversized:
                 raise ValueError(
-                    f"Lookup token for '{field_key}' has key(s) {sorted(oversized)} longer than 1 "
+                    f"Lookup token for '{field_key}' has key(s) {sorted(map(str, oversized))} longer than 1 "
                     f"character -- multi-character lookup isn't supported yet (deferred, see module docstring)."
                 )
             collisions = keys & RESERVED_CHARS
@@ -116,6 +136,11 @@ def validate_quick_type_config(tokens):
                 )
 
         elif token["token_kind"] == "measurement":
+            if token.get("lookup_table") is not None:
+                raise ValueError(f"Measurement token for '{field_key}' cannot have a lookup_table.")
+            width = token.get("digit_width")
+            if width is not None and (type(width) is not int or width <= 0):
+                raise ValueError(f"Measurement token for '{field_key}' has an invalid digit_width.")
             is_last = (i == len(tokens) - 1)
             if not is_last:
                 next_token = tokens[i + 1]
@@ -291,7 +316,24 @@ def parse_tokens(remainder, tokens):
     return overrides, None
 
 
-def parse_quick_type(raw_code):
+def parse_quick_type_on_connection(raw_code, conn):
+    """Parse against exactly ``conn``; this path never uses global reads."""
+    import database as db
+
+    raw_code = raw_code.strip()
+    if not raw_code:
+        return None, None, "empty Quick Type code."
+    preset, remainder = find_preset_by_prefix(raw_code, db.get_all_presets_on_connection(conn))
+    if preset is None:
+        return None, None, f"no preset short_code matches '{raw_code}'."
+    tokens = db.get_quick_type_tokens_on_connection(conn, preset["id"])
+    overrides, error = parse_tokens(remainder, tokens)
+    if error:
+        return None, None, f"{preset['short_code']}: {error}"
+    return preset, overrides, None
+
+
+def parse_quick_type(raw_code, *, conn=None):
     """
     Convenience wrapper: the actual entry point workspace.py will call.
     Fetches presets and the matched preset's tokens from the database
@@ -305,18 +347,38 @@ def parse_quick_type(raw_code):
     success. On failure, preset and field_overrides_by_block are both
     None and error is a specific, user-displayable message.
     """
+    if conn is not None:
+        return parse_quick_type_on_connection(raw_code, conn)
     import database as db
+    owned = db.get_db_connection()
+    try:
+        return parse_quick_type_on_connection(raw_code, owned)
+    finally:
+        owned.close()
 
-    raw_code = raw_code.strip()
-    if not raw_code:
-        return None, None, "empty Quick Type code."
 
-    preset, remainder = find_preset_by_prefix(raw_code, db.get_all_presets())
-    if preset is None:
-        return None, None, f"no preset short_code matches '{raw_code}'."
+def prefix_reachability(presets, tokens_by_preset):
+    """Return deterministic (errors, warnings) for active-prefix routing.
 
-    tokens = db.get_quick_type_tokens(preset["id"])
-    overrides, error = parse_tokens(remainder, tokens)
-    if error:
-        return None, None, f"{preset['short_code']}: {error}"
-    return preset, overrides, None
+    A longer active code that itself parses as a shorter code's modifier is
+    unreachable under the required longest-prefix resolver.  A bare-code
+    prefix that does not parse as such a modifier remains legal but visible.
+    """
+    errors, warnings = [], []
+    for shorter in sorted(presets, key=lambda row: row["short_code"]):
+        for longer in sorted(presets, key=lambda row: row["short_code"]):
+            if shorter["id"] == longer["id"] or not longer["short_code"].startswith(shorter["short_code"]):
+                continue
+            suffix = longer["short_code"][len(shorter["short_code"]):]
+            _, error = parse_tokens(suffix, tokens_by_preset.get(shorter["id"], []))
+            if error is None:
+                errors.append(
+                    f"Quick Type modifiers for '{shorter['short_code']}' are unreachable: active "
+                    f"Preset '{longer['short_code']}' wins longest-prefix matching."
+                )
+            else:
+                warnings.append(
+                    f"Quick Type prefix overlap: '{shorter['short_code']}' / '{longer['short_code']}' "
+                    "shadows no configured modifier. Longest-prefix matching is unchanged."
+                )
+    return errors, warnings

@@ -596,9 +596,23 @@ not any later local work.
 ## Editor UI implementation boundary
 
 `EDITOR_UI_PROPOSAL.md` preserves the frozen implemented safety baseline and
-forward roadmap. Stages 1–6 are complete; Stage 7 is planned in
-`STAGE7_IMPLEMENTATION_PLAN.md` but unimplemented. Do not begin a future
-checkpoint without following its approved bounded contract.
+forward roadmap. Stages 1–6 are complete; Stage 7 follows the bounded
+contract in `STAGE7_IMPLEMENTATION_PLAN.md`. Do not begin a future checkpoint
+without following that approved contract.
+
+### Stage 7 CP1 — configuration-authoring safety foundation
+
+CP1 is implemented as a backend-only boundary. Complete Quick Type token and
+same-Block consistency-rule drafts now plan through Content Studio's existing
+frozen review, confirmation, atomic Apply, audit, and reviewed inverse path;
+no Stage 7 form or Case/bulk writer exists. The additive named migration adds
+the unique `(preset_id, sort_order)` Quick Type position index after a
+read-only duplicate preflight. Connection-scoped Quick Type parsing is
+available for candidate-state callers and does not reopen the operational
+database. The remediation pass added minimal-diff composition, typed decimal
+rule canonicalization, and generalized archived/table-owner enforcement;
+focused CP1/candidate/schema/Quick Type/rule tests pass. CP2–CP6 remain
+explicitly unimplemented.
 
 Quick Type expansion is no longer an incidental non-blocker: it is the focus
 of Stage 7, including authoring and bulk pending-case intake. Future case-type

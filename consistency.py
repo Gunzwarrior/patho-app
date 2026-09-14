@@ -19,7 +19,11 @@ Rules are data (Field_Consistency_Rules), authored by hand in
 seed_data.py, same as Quick_Type_Tokens — no Editor UI needed yet.
 """
 
+import json
+from collections.abc import Mapping
+
 import database as db
+import change_packages as contract
 from rendering import build_context
 
 
@@ -51,6 +55,94 @@ def check_block(block, field_values_override=None, conn=None):
         if value_a in rule["field_a_values"] and value_b in rule["field_b_values"]:
             fired.append(rule["message"])
     return fired
+
+
+def _encoded(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def canonical_rule_value(field, value):
+    """Validate and normalize one persisted rule operand semantically.
+
+    Decimal comparison in rendering is numeric, not spelling-based.  Store a
+    single JSON-native spelling so ``1``/``1.0`` and signed zero cannot create
+    distinct values or predicates.
+    """
+    value = contract.field_value(field, value)
+    if field["type"] == "decimal":
+        value = float(value)
+        if value == 0:
+            return 0
+        if value.is_integer():
+            return int(value)
+    return value
+
+
+def canonical_rule_values(field, values):
+    # Guided authoring supplies JSON-native lists, whereas established
+    # generalized paths (notably Block duplication) faithfully carry the
+    # persisted JSON-text column value.  Decode that storage representation
+    # here, before the one typed semantic normalization below; callers must
+    # not need distinct planner and validator semantics.
+    if isinstance(values, str):
+        try:
+            values = json.loads(values)
+        except json.JSONDecodeError:
+            values = None
+    if not isinstance(values, list) or not values:
+        raise ValueError(f"Consistency rule values for '{field['key']}' must be a non-empty list.")
+    encoded = {}
+    for value in values:
+        normalized = canonical_rule_value(field, value)
+        key = _encoded(normalized)
+        if key in encoded:
+            raise ValueError(f"Consistency rule values for '{field['key']}' contain duplicate semantic values.")
+        encoded[key] = normalized
+    return [encoded[key] for key in sorted(encoded)]
+
+
+def canonicalize_rule(rule, fields):
+    """Return one typed, deterministic, orientation-independent rule image."""
+    required = {"field_a_key", "field_a_values", "field_b_key", "field_b_values", "message"}
+    if not isinstance(rule, dict) or set(rule) != required:
+        raise ValueError("Consistency rule is invalid.")
+    field_a, field_b = rule["field_a_key"], rule["field_b_key"]
+    if field_a not in fields or field_b not in fields:
+        raise ValueError("Consistency rule references a Field not bound to this Block.")
+    if field_a == field_b:
+        raise ValueError("Consistency rule fields must be distinct.")
+    message = rule["message"].strip() if isinstance(rule["message"], str) else None
+    if not message:
+        raise ValueError("Consistency rule message cannot be blank.")
+    result = {"field_a_key": field_a, "field_a_values": canonical_rule_values(fields[field_a], rule["field_a_values"]),
+              "field_b_key": field_b, "field_b_values": canonical_rule_values(fields[field_b], rule["field_b_values"]),
+              "message": message}
+    left = (result["field_a_key"], _encoded(result["field_a_values"]))
+    right = (result["field_b_key"], _encoded(result["field_b_values"]))
+    if right < left:
+        result = {"field_a_key": result["field_b_key"], "field_a_values": result["field_b_values"],
+                  "field_b_key": result["field_a_key"], "field_b_values": result["field_a_values"],
+                  "message": message}
+    return result
+
+
+def predicate_identity(rule):
+    """Semantic identity intentionally excludes warning presentation text."""
+    return (rule["field_a_key"], _encoded(rule["field_a_values"]),
+            rule["field_b_key"], _encoded(rule["field_b_values"]))
+
+
+def canonicalize_rules(fields, rules):
+    """Canonicalize a complete same-Block rule set and reject equivalents."""
+    result, seen = [], set()
+    for rule in rules:
+        canonical = canonicalize_rule(rule, fields)
+        identity = predicate_identity(canonical)
+        if identity in seen:
+            raise ValueError("Equivalent consistency rules (including A/B reversed) cannot be duplicated.")
+        seen.add(identity)
+        result.append(canonical)
+    return sorted(result, key=lambda rule: (_encoded(predicate_identity(rule)), rule["message"]))
 
 
 def validate_consistency_rules(block_fields, rules):
@@ -85,6 +177,10 @@ def validate_consistency_rules(block_fields, rules):
        value list can never match anything, making the rule dead code
        that silently never fires.
     """
+    if isinstance(block_fields, Mapping):
+        canonicalize_rules(block_fields, rules)
+        return
+    seen = set()
     for rule in rules:
         field_a, field_b = rule["field_a_key"], rule["field_b_key"]
 
@@ -107,3 +203,23 @@ def validate_consistency_rules(block_fields, rules):
             raise ValueError(f"Consistency rule for '{field_a}' has an empty field_a_values -- can never fire.")
         if not rule["field_b_values"]:
             raise ValueError(f"Consistency rule for '{field_b}' has an empty field_b_values -- can never fire.")
+        # Legacy pure callers did not include presentation text; persisted
+        # candidate rows always do, and therefore enforce the CP1 requirement
+        # in final-graph validation/planners without breaking that old helper.
+        if "message" in rule and (not isinstance(rule["message"], str) or not rule["message"].strip()):
+            raise ValueError("Consistency rule message cannot be blank.")
+        for name in ("field_a_values", "field_b_values"):
+            values = rule[name]
+            if not isinstance(values, list):
+                raise ValueError(f"Consistency rule {name} must be a list.")
+            encoded = [_encoded(value) for value in values]
+            if len(set(encoded)) != len(encoded):
+                raise ValueError(f"Consistency rule {name} contains duplicate values.")
+        left = (field_a, tuple(sorted(_encoded(v)
+                                      for v in rule["field_a_values"])))
+        right = (field_b, tuple(sorted(_encoded(v)
+                                       for v in rule["field_b_values"])))
+        identity = tuple(sorted((left, right)))
+        if identity in seen:
+            raise ValueError("Equivalent consistency rules (including A/B reversed) cannot be duplicated.")
+        seen.add(identity)

@@ -790,6 +790,17 @@ def test_duplicate_is_safe_with_pending_and_ad_hoc_saved_instances(mutable_db):
         baseline=content_studio.block_draft_baseline(source, bindings), db_name=mutable_db,
     ))
     assert prepared.pending_cases == []
+    copied_rule_intents = [intent for intent in prepared.operations
+                           if intent.get("table") == "Field_Consistency_Rules"]
+    # Block duplication intentionally carries the persisted JSON-text rule
+    # representation through generalized insertion.  It must be accepted by
+    # the same semantic canonicalizer used by guided configuration authoring.
+    assert [intent["values"]["field_a_values"] for intent in copied_rule_intents] == [
+        rule["field_a_values"] for rule in source_rules
+    ]
+    assert all(intent.get("copy_source", {}).get("block_key") == "appendice"
+               and type(intent.get("copy_source", {}).get("id")) is int
+               for intent in copied_rule_intents)
     content_changes.apply_review(prepared, db_name=mutable_db)
     assert content_studio.pending_blockers("Blocks", "appendice", db_name=mutable_db)
     conn = connection(mutable_db)
