@@ -7,6 +7,16 @@ record from earlier rounds.
 
 ## Current status
 
+**Stage 7 is planned; implementation has not begun.** The authoritative
+architecture and seven-checkpoint contract is `STAGE7_IMPLEMENTATION_PLAN.md`,
+based on the completed Stage 6 repository at
+`a23e917cc674481d6ab1e33f50ab0da13d1f33ab`. It preserves separate content-
+configuration and operational Case planes: Quick Type/consistency authoring
+reuses Content Studio candidate → frozen review → Apply → inverse, while bulk
+intake has a separate no-write decoded preview and atomic pending-only Case
+Apply built on the shared Case persistence primitive. Checkpoint 6's
+`etc0`–`etc5` consolidation is conditional and does not block bulk intake.
+
 **Stage 6 checkpoint 7 — accepted and complete.** Editor has one reachable human authoring surface:
 Content Studio. The remaining unused one-row direct-save/preview helpers were
 removed, so manual Fields, Snippets, Blocks, Presets, relationships, lifecycle
@@ -14,7 +24,8 @@ actions, AI packages, and reviewed inverses all retain the frozen review →
 confirmation → Apply boundary. The common review renderer now uses neutral
 review language; its recovery-snapshot gate and the backend gate still protect
 every Apply. Table Blocks/table-bearing Presets remain read-only, and Stage 7
-Quick Type and consistency-rule authoring remain absent.
+Quick Type and consistency-rule authoring remain absent pending implementation
+of the approved Stage 7 plan.
 
 CP7 adds source-level regressions proving that the Editor embeds no legacy
 direct writer, alongside the existing UI/transaction coverage for lifecycle,
@@ -235,9 +246,8 @@ after reopen closing the section. Thomas has now confirmed that the section
 fix and the authorized live thyroid correction also work in his browser.
 Thomas completed the checkpoint 3 browser review on 2026-09-08 and approved
 the functionality and commit. External real-model acceptance completed on
-2026-09-10. Stages 6–7 remain. Authority remains
-the roadmap in `5dd1f44` and the reviewed
-`STAGE5_IMPLEMENTATION_PLAN.md`.
+2026-09-10. At that Stage 5 boundary, Stages 6–7 remained; current authority
+for later work is recorded at the top of this file.
 Thomas confirmed that PathoPilot must remain fully usable without a paid AI plan. Stage 5 is now an optional, token-economical AI context/change-
 package workflow; Stage 6 is a committed autonomous Content Studio for guided
 creation, relationship management, editing, archive, and safe deletion; Stage
@@ -246,8 +256,9 @@ intake that creates pending Cases for review. Modifications continue to use the
 existing pending-content acknowledgement. Removal archives content when a
 pending draft depends on it and offers permanent deletion when no pending
 dependency remains and the complete candidate is valid. See
-`EDITOR_UI_PROPOSAL.md` §§1, 3, 4, 8–10. Each future stage still requires a
-bounded implementation proposal before coding.
+`EDITOR_UI_PROPOSAL.md` §§1, 3, 4, 8–10 and
+`STAGE7_IMPLEMENTATION_PLAN.md`. Each future stage or checkpoint requires its
+approved bounded contract before coding.
 
 **Stage 5 checkpoint 1 — verified on 2026-09-05.**
 `change_packages.py` provides the compact content-only AI export, generated
@@ -585,15 +596,14 @@ not any later local work.
 ## Editor UI implementation boundary
 
 `EDITOR_UI_PROPOSAL.md` preserves the frozen implemented safety baseline and
-now records the revised product roadmap. Stages 1–5 are committed; Stage 5
-checkpoint 3 is tested and browser-approved. Stages 6–7 are unimplemented. Do
-not begin a future stage until its bounded implementation
-proposal has been reviewed against the approved outcomes.
+forward roadmap. Stages 1–6 are complete; Stage 7 is planned in
+`STAGE7_IMPLEMENTATION_PLAN.md` but unimplemented. Do not begin a future
+checkpoint without following its approved bounded contract.
 
 Quick Type expansion is no longer an incidental non-blocker: it is the focus
 of Stage 7, including authoring and bulk pending-case intake. Future case-type
 content such as breast may be created through either the optional Stage 5 AI
-workflow or the independent Stage 6 Content Studio once those stages exist.
+workflow or the independent Stage 6 Content Studio.
 
 ## Where to find detail
 

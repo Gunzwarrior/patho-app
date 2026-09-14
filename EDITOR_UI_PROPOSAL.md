@@ -6,7 +6,8 @@ independent verification; Stage 7 has not begun.**
 This is the approved design baseline and forward roadmap. Stages 1–5 record
 the implemented safety foundation and optional reviewed AI workflow. Stages
 6–7 record the remaining product outcomes. Stage 6 follows its approved bounded
-implementation plan; Stage 7 still needs one before code is written.
+implementation plan. Stage 7 is planned but not yet implemented; its approved
+architectural/checkpoint contract is `STAGE7_IMPLEMENTATION_PLAN.md`.
 
 Sol’s review identified real blockers in the previous write-capable stages.
 This revision accepts those findings where they are concrete, records
