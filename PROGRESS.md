@@ -95,7 +95,23 @@ add/remove/reorder, override semantics, template coordination, lifecycle,
 pending impact, and adversarial stale-source/identity races. Manual browser
 verification and final independent review passed; the final isolated suite
 passed **459 tests**. Changed Python files compile and diff checks pass.
-Checkpoint 6 has not begun.
+
+**Stage 6 checkpoint 6 — Preset Studio and `Preset_Blocks` — accepted for
+commit.** Preset create/edit/duplicate, lifecycle, composition, ordering, and
+per-instance Field overrides use the same frozen review → confirmation → Apply
+path and source/endpoint identity protections as the preceding Content Studio
+checkpoints. `short_code` and instance `sort_order` remain immutable;
+`display_order` alone changes default presentation. Duplicate Block instances,
+including their individual overrides and inherit/null/zero/false/empty-string
+semantics, remain distinct. Draft-only instance endpoint baselines are retained
+per instance, and complete Field metadata/physical identity participates in
+stale protection. Frozen reviews include prefix-overlap and duplicate-without-
+Quick-Type warnings.
+
+Final independent acceptance closed all CP6 blockers: the full isolated suite
+passed **476 tests** and focused independent verification passed **76 tests**.
+The endpoint ABA/rebasing regression was independently re-tested and fixed;
+compilation and `git diff --check` passed. CP7 has not begun.
 
 **Stage 6 checkpoint 2 remediation — complete locally and awaiting approval.**
 The independent review's blocking findings are addressed without extending

@@ -46,8 +46,8 @@ pytest -q           # compact output
 pytest -v tests/test_consistency.py   # one file, verbose
 ```
 
-459 tests currently exist; the Stage 6 checkpoint 5 full isolated run passed
-as documented below.
+476 tests currently exist; the Stage 6 checkpoint 6 full isolated acceptance
+run passed as documented below.
 
 ## Structure
 
@@ -69,6 +69,7 @@ patho-app/
     test_stage6_schema.py    # additive lifecycle/order storage and v1/v2 compatibility
     test_stage6_candidates.py # generalized internal candidate/audit/inverse coverage
     test_stage6_lifecycle.py # lifecycle closure, archived resolution and deletion safety
+    test_stage6_presets.py   # Preset Studio composition, overrides, identity, and stale guards
     golden_helpers.py        # shared render-a-preset-at-defaults helper
     golden_fixtures/         # frozen known-good plain-text output
     regenerate_golden.py     # deliberate, human-reviewed fixture updates
@@ -480,7 +481,23 @@ Focused CP5/UI/candidate/lifecycle/editor selections and manual browser checks
 passed. Final independent review closed all blockers, independently verified
 Create/Edit/Duplicate/Apply ABA protection, and approved the checkpoint. The
 full isolated suite passed **459 tests**; relevant Python files compiled and
-diff checks passed. Checkpoint 6 was not started.
+diff checks passed.
+
+## Stage 6 checkpoint 6 — Preset Studio and `Preset_Blocks`
+
+`test_stage6_presets.py` covers frozen-review Preset create/edit/duplicate and
+lifecycle flows, immutable short-code and Block-instance identity, duplicate
+Block instances and per-instance overrides, pending composition ordering,
+Quick Type preservation/cleanup, table-bearing refusal, selector/two-tab
+staleness, and review warnings. Adversarial cases bind complete source and
+Field endpoint images, including physical-ID ABA replacement, retained
+draft-only instance baselines across add/remove operations, and concurrent
+Field label/default changes.
+
+Final independent acceptance passed the full isolated suite (**476 passed**)
+and focused verification (**76 passed**). Independent retesting confirmed the
+endpoint ABA/rebasing failure is fixed. Compilation and `git diff --check`
+passed. Tests use isolated databases; CP7 was not started.
 
 ### Final contract hardening, regression, and real-model acceptance
 

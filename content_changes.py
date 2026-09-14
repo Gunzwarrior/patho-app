@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+import copy
 import json
 import re
 import sqlite3
@@ -599,6 +600,22 @@ def _prefix_warnings(conn, operations):
             if (a in new or b in new) and (a.startswith(b) or b.startswith(a))]
 
 
+def _general_review_warnings(conn, operations):
+    """Warnings are part of the signed generalized-review payload."""
+    warnings = _prefix_warnings(conn, operations)
+    duplicate_sources = {op["key"] for op in operations
+                         if op.get("op") == _GENERAL_PRESET_ASSERTION and op.get("duplicate") is True}
+    for operation in operations:
+        if (operation.get("op") == "create" and operation.get("table") == "Presets" and duplicate_sources):
+            # This is intentionally conservative: the guided duplicate path
+            # is the only current Preset-create path carrying a Preset source
+            # assertion, and its tokens are deliberately omitted.
+            warnings.append(
+                "Quick Type tokens are intentionally not copied to a duplicated Preset; only its bare shortcut is available."
+            )
+    return warnings
+
+
 def _review_on_connection(candidate, operations, base_hash, *, package_hash=None,
                           summary="", inverse=None):
     base = content_snapshot.snapshot_from_connection(candidate)
@@ -1071,7 +1088,10 @@ _GENERAL_KEYS = {
 _GENERAL_ACTIONS = frozenset({"create", "update", "archive", "restore", "delete", "link", "unlink", "reorder"})
 _GENERAL_ASSERTION = "assert_block_draft"
 _GENERAL_FIELD_ASSERTION = "assert_field_endpoints"
-_GENERAL_ASSERTIONS = frozenset({_GENERAL_ASSERTION, _GENERAL_FIELD_ASSERTION})
+_GENERAL_PRESET_ASSERTION = "assert_preset_draft"
+_GENERAL_PRESET_ENDPOINT_ASSERTION = "assert_preset_endpoints"
+_GENERAL_ASSERTIONS = frozenset({_GENERAL_ASSERTION, _GENERAL_FIELD_ASSERTION,
+                                 _GENERAL_PRESET_ASSERTION, _GENERAL_PRESET_ENDPOINT_ASSERTION})
 _GENERAL_PHYSICAL_COLUMNS = {
     "Fields": ("id", "key", "label", "type", "is_archived", "options", "default_value", "conclusion_addendum_template"),
     "Blocks": ("id", "key", "name", "is_archived", "is_table", "site_label", "conclusion_group", "macro_template", "micro_template", "conclusion_template", "context_template", "title_fragment_template", "conclusion_label_template"),
@@ -1213,6 +1233,34 @@ def _general_normalize(operations):
             cleaned.append({"op": action, "field_keys": list(field_keys),
                             "baseline": operation["baseline"]})
             continue
+        if action == _GENERAL_PRESET_ASSERTION:
+            if (set(operation) != {"op", "key", "baseline", "endpoint_baseline", "duplicate"}
+                    or not isinstance(key, str) or not key
+                    or not isinstance(operation["baseline"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", operation["baseline"])
+                    or operation["endpoint_baseline"] is not None
+                    or type(operation["duplicate"]) is not bool):
+                raise ChangeError("Content Studio Preset draft assertion is invalid.")
+            marker = (action, key)
+            if marker in targets:
+                raise ChangeError("Content Studio targets must be unique.")
+            targets.add(marker); cleaned.append(dict(operation)); continue
+        if action == _GENERAL_PRESET_ENDPOINT_ASSERTION:
+            endpoints = operation.get("endpoints")
+            if (set(operation) != {"op", "endpoints"}
+                    or not isinstance(endpoints, list) or not endpoints
+                    or any(not isinstance(item, dict) or set(item) != {"block_key", "instance_no", "baseline"}
+                           or not isinstance(item["block_key"], str) or not item["block_key"]
+                           or type(item["instance_no"]) is not int or not 0 <= item["instance_no"] < 1000
+                           or not isinstance(item["baseline"], str)
+                           or not re.fullmatch(r"[0-9a-f]{64}", item["baseline"])
+                           for item in endpoints)
+                    or len({(item["block_key"], item["instance_no"]) for item in endpoints}) != len(endpoints)):
+                raise ChangeError("Content Studio Preset endpoint assertion is invalid.")
+            marker = (action, tuple((item["block_key"], item["instance_no"]) for item in endpoints))
+            if marker in targets:
+                raise ChangeError("Content Studio targets must be unique.")
+            targets.add(marker); cleaned.append({"op": action, "endpoints": copy.deepcopy(endpoints)}); continue
         if action == "case_preset_reference":
             if set(operation) != {"op", "case_id", "before_preset_id", "after_preset_id"}:
                 raise ChangeError("Content Studio Case reference is invalid.")
@@ -1826,7 +1874,15 @@ def _validate_general_assertions(conn, operations):
                 content_studio._assert_field_endpoints(
                     conn, operation["field_keys"], operation["baseline"]
                 )
-        except content_studio.StaleBlockDraftError as error:
+            elif operation["op"] == _GENERAL_PRESET_ASSERTION:
+                content_studio._assert_preset_draft_baseline(
+                    conn, operation["key"], operation["baseline"], operation["endpoint_baseline"]
+                )
+            elif operation["op"] == _GENERAL_PRESET_ENDPOINT_ASSERTION:
+                content_studio._assert_preset_endpoints_baseline(
+                    conn, operation["endpoints"]
+                )
+        except (content_studio.StaleBlockDraftError, content_studio.StalePresetDraftError) as error:
             raise StaleDraftReviewError(str(error)) from None
 
 
@@ -1881,7 +1937,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                        "changes": changes, "case_references": refs, "presets": presets,
                        "unaffected_presets": sum(not item["affected"] for item in presets),
                        "pending_cases": pending, "validated_pending_count": len(after_pending),
-                       "warnings": [], "branch_warnings": [], "standalone": standalone, "before_standalone": [],
+                       "warnings": _general_review_warnings(candidate, operations), "branch_warnings": [], "standalone": standalone, "before_standalone": [],
                        "inverse_revision_id": None, "inverse_source_hash": None}
             return _issued_review(None, base_hash, result_hash, guard, contract.canonical_json(payload))
     except (ChangeError, contract.PackageError):

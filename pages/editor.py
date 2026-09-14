@@ -10,6 +10,7 @@ import content_snapshot
 import change_packages
 import content_studio
 import database as db
+import composition
 from editor_preview import render_preset_defaults
 from report_presentation import restricted_report_html
 
@@ -206,7 +207,8 @@ def _show_operations(review):
     # mutations. They remain inside the signed/frozen review for Apply but do
     # not displace the user-facing operation widgets.
     operations = [operation for operation in review.operations
-                  if operation.get("op") not in {"assert_block_draft", "assert_field_endpoints"}]
+                  if operation.get("op") not in {"assert_block_draft", "assert_field_endpoints",
+                                                   "assert_preset_draft", "assert_preset_endpoints"}]
     st.subheader(f"Normalized operations ({len(operations)})", anchor=False)
     for position, operation in enumerate(operations, 1):
         key = operation["key"]
@@ -471,31 +473,31 @@ def _entity_caption(row, key_name, label_name):
     return f"{row[label_name]} (`{row[key_name]}` · ID {row['id']}){archived}"
 
 
-def _field_default_widget(field_type, options, value, key):
+def _field_default_widget(field_type, options, value, key, *, label="Default value"):
     """Render the same typed default intent used by the candidate validator."""
     if field_type == "checkbox":
         current = str(value).lower() in {"1", "true"}
-        return st.checkbox("Default value", value=current, key=key)
+        return st.checkbox(label, value=current, key=key)
     if field_type == "select":
         if not options:
             st.error("A select Field needs options before it can have a default.")
             return None
         selected = value if value in options else options[0]
-        return st.selectbox("Default value", options, index=options.index(selected), key=key)
+        return st.selectbox(label, options, index=options.index(selected), key=key)
     if field_type == "number":
         try:
             current = int(value)
         except (TypeError, ValueError):
             current = 0
-        return st.number_input("Default value", min_value=0, value=current, step=1, key=key)
+        return st.number_input(label, min_value=0, value=current, step=1, key=key)
     if field_type == "decimal":
         try:
             current = float(value)
         except (TypeError, ValueError):
             current = 0.0
-        return st.number_input("Default value", min_value=0.0, value=current,
+        return st.number_input(label, min_value=0.0, value=current,
                                key=key, help="Use a non-negative decimal.")
-    return st.text_input("Default value", "" if value is None else str(value), key=key)
+    return st.text_input(label, "" if value is None else str(value), key=key)
 
 
 def _parse_select_options(raw):
@@ -505,8 +507,9 @@ def _parse_select_options(raw):
 
 def _lifecycle_panel(table, row, signature, writes_enabled):
     action = "Restore" if row.get("is_archived") else "Archive"
+    stable_key = row["shortcut"] if table == "Snippets" else row["short_code"] if table == "Presets" else row["key"]
     plan = content_studio.lifecycle_plan(action.lower(), table,
-                                         row["key"] if table != "Snippets" else row["shortcut"])
+                                         stable_key)
     st.subheader("Availability and deletion", anchor=False)
     if plan["direct_dependencies"]:
         st.caption("Direct dependents: " + ", ".join(
@@ -881,6 +884,260 @@ def _block_studio(rows, fields, mode, writes_enabled):
         _lifecycle_panel("Blocks", block, _studio_signature("block", {"table": "Blocks", "key": key}, values), writes_enabled)
 
 
+def _preset_instance_label(instance, position, blocks_by_key):
+    block = blocks_by_key.get(instance["block_key"], {})
+    return f"{position + 1}. {block.get('name', instance['block_key'])} ({instance['block_key']} · instance {instance['instance_no']})"
+
+
+def _preset_studio(rows, mode, writes_enabled):
+    """CP6's one-draft Preset metadata/composition editor.
+
+    The session list is presentation state only.  Its instance numbers are
+    loaded from ``sort_order`` and never renumbered: Up/Down changes the list,
+    from which the planner emits only ``display_order`` changes.
+    """
+    st.subheader("Presets", anchor=False)
+    generation = st.session_state.get("_editor_studio_form_generation", 0)
+    action = st.radio("Preset action", ["Edit existing Preset", "Create a new Preset", "Duplicate existing Preset"],
+                      horizontal=True, key="editor_studio_preset_action", on_change=_clear_studio_review)
+    selectable = _filter_rows(rows, mode)
+    if action == "Create a new Preset":
+        preset, source_key, stable_key, source_links = None, None, "new", []
+    else:
+        if not selectable:
+            st.info("No Presets are available for this action.")
+            return
+        choices = {row["id"]: row for row in selectable}
+        preset_id = st.selectbox("Source Preset" if action == "Duplicate existing Preset" else "Preset", list(choices),
+                                 format_func=lambda ident: _entity_caption(choices[ident], "short_code", "name"),
+                                 key="editor_studio_preset_select", on_change=_clear_studio_review)
+        preset, source_key, stable_key = choices[preset_id], choices[preset_id]["short_code"], choices[preset_id]["short_code"]
+        _, source_links = content_studio.preset_draft_source(source_key)
+        if preset.get("is_archived"):
+            st.info("This Preset is archived. Restore it before editing or duplicating it.")
+            restore_plan = content_studio.lifecycle_plan("restore", "Presets", source_key)
+            restore_signature = _studio_signature("lifecycle", {"table": "Presets", "key": source_key}, restore_plan)
+            if _show_studio_review(restore_signature, writes_enabled):
+                return
+            _lifecycle_panel("Presets", preset, restore_signature, writes_enabled)
+            return
+        if any(link["block_is_table"] for link in source_links):
+            st.info("Table-bearing Presets are read-only in Content Studio. Table row authoring remains outside Stage 6.")
+            _show_preview(preset["id"])
+            lifecycle_signature = _studio_signature(
+                "lifecycle", {"table": "Presets", "key": source_key},
+                content_studio.lifecycle_plan("archive", "Presets", source_key),
+            )
+            if _show_studio_review(lifecycle_signature, writes_enabled):
+                return
+            _lifecycle_panel("Presets", preset, lifecycle_signature, writes_enabled)
+            return
+
+    signature = _studio_signature("preset", {"table": "Presets", "key": stable_key},
+                                  {"action": action, "generation": generation})
+    if _show_studio_review(signature, writes_enabled):
+        return
+    token = f"editor_studio_preset_{action.split()[0].lower()}_{stable_key}_{generation}"
+    active_blocks = [row for row in db.get_all_editor_blocks()
+                     if not row.get("is_archived") and not row.get("is_table")]
+    blocks_by_key = {row["key"]: row for row in active_blocks}
+    state_key = f"_editor_studio_preset_instances_{action}_{stable_key}_{generation}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = [{
+            "block_key": link["block_key"], "instance_no": link["sort_order"],
+            "field_overrides": json.loads(link["field_overrides"] or "{}"),
+        } for link in sorted(source_links, key=lambda link: (link["display_order"], link["sort_order"]))]
+    instances = [dict(item) for item in st.session_state[state_key]]
+    source_baseline_key = f"_editor_studio_preset_baseline_{action}_{stable_key}_{generation}"
+    if preset is not None and source_baseline_key not in st.session_state:
+        # Capture once per loaded form generation. Recomputing at submission
+        # would bless a second tab's composition update before the stale-draft
+        # guard gets a chance to report it.
+        st.session_state[source_baseline_key] = content_studio.preset_draft_baseline(preset, source_links)
+    endpoint_baseline_key = f"_editor_studio_preset_endpoints_{action}_{stable_key}_{generation}"
+    if endpoint_baseline_key not in st.session_state:
+        # Only draft-only additions appear here. Existing Preset instances are
+        # permanently bound by the source baseline above and must never be
+        # silently rebased when another instance is added or removed.
+        st.session_state[endpoint_baseline_key] = []
+
+    # Duplication copies a whole safe composition. It deliberately does not
+    # offer a partial structural editor, which could otherwise be mistaken for
+    # Stage 7 Quick Type/table authoring.
+    allow_composition_edit = action != "Duplicate existing Preset"
+    if allow_composition_edit:
+        add_options = list(blocks_by_key)
+        if add_options:
+            add_key = f"{token}_add_block"
+            if st.session_state.get(add_key) not in add_options:
+                st.session_state[add_key] = add_options[0]
+            new_block_key = st.selectbox("Add Block instance", add_options,
+                                         format_func=lambda key: f"{blocks_by_key[key]['name']} ({key})", key=add_key)
+            if st.button("Add Block instance", key=f"{token}_add"):
+                used = {item["instance_no"] for item in instances}
+                instance_no = next((number for number in range(1000) if number not in used), None)
+                if instance_no is None:
+                    st.error("This Preset has no safe instance numbers remaining.")
+                else:
+                    instances.append({"block_key": new_block_key, "instance_no": instance_no, "field_overrides": {}})
+                    st.session_state[state_key] = instances
+                    endpoints = list(st.session_state[endpoint_baseline_key])
+                    endpoints.append({
+                        "block_key": new_block_key, "instance_no": instance_no,
+                        "baseline": content_studio.preset_instance_endpoint_baseline(new_block_key, instance_no),
+                    })
+                    st.session_state[endpoint_baseline_key] = endpoints
+                    _clear_studio_review(); st.rerun()
+        if instances:
+            picker_options = list(range(len(instances)))
+            move_key = f"{token}_move_instance"
+            if st.session_state.get(move_key) not in picker_options:
+                st.session_state[move_key] = picker_options[0]
+            chosen = st.selectbox("Block instance to move", picker_options,
+                                  format_func=lambda pos: _preset_instance_label(instances[pos], pos, blocks_by_key), key=move_key)
+            up, down, remove = st.columns(3)
+            if up.button("Move Block up", key=f"{token}_up", disabled=chosen == 0):
+                instances = composition.move_instance(instances, chosen, -1)
+                st.session_state[state_key] = instances; _clear_studio_review(); st.rerun()
+            if down.button("Move Block down", key=f"{token}_down", disabled=chosen == len(instances) - 1):
+                instances = composition.move_instance(instances, chosen, 1)
+                st.session_state[state_key] = instances; _clear_studio_review(); st.rerun()
+            if remove.button("Remove Block instance", key=f"{token}_remove"):
+                instances = composition.remove_instance(instances, chosen)
+                st.session_state[state_key] = instances
+                surviving = {(item["block_key"], item["instance_no"]) for item in instances}
+                st.session_state[endpoint_baseline_key] = [
+                    endpoint for endpoint in st.session_state[endpoint_baseline_key]
+                    if (endpoint["block_key"], endpoint["instance_no"]) in surviving
+                ]
+                _clear_studio_review(); st.rerun()
+    else:
+        st.caption("Duplicate copies this Preset's ordered Block instances and overrides exactly. Quick Type tokens are not copied.")
+
+    # Resolve field controls per *instance*, not per Block key: the same Block
+    # can occur twice with independent override objects.
+    resolved = {}
+    if preset is not None:
+        for block in db.get_preset_blocks(preset["id"]):
+            resolved[(block["key"], block["sort_order"])] = block
+    else:
+        for item in instances:
+            block = blocks_by_key.get(item["block_key"])
+            if block is not None:
+                # The same loader used by previews gives Field type/options
+                # and inherited values without adding a writer path.
+                scratch = db.get_db_connection()
+                try:
+                    resolved[(item["block_key"], item["instance_no"])] = db.get_block_on_connection(
+                        scratch, block["id"], include_archived=False
+                    )
+                finally:
+                    scratch.close()
+    updated_instances = []
+    for position, item in enumerate(instances):
+        block = resolved.get((item["block_key"], item["instance_no"]))
+        if block is None:
+            # A user may have just added this instance to an *existing*
+            # Preset, so it is not present in get_preset_blocks() yet. Load
+            # the Block's resolved Field metadata directly for the draft;
+            # this remains read-only and the endpoint assertion binds it to
+            # the frozen candidate before any later Apply.
+            block_row = blocks_by_key.get(item["block_key"])
+            if block_row is not None:
+                scratch = db.get_db_connection()
+                try:
+                    block = db.get_block_on_connection(scratch, block_row["id"], include_archived=False)
+                finally:
+                    scratch.close()
+        overrides = dict(item["field_overrides"])
+        with st.expander(_preset_instance_label(item, position, blocks_by_key), expanded=False):
+            st.caption(f"Immutable instance number: `{item['instance_no']}`")
+            if not allow_composition_edit:
+                st.caption("Copied per-instance overrides")
+                st.json(overrides)
+                updated_instances.append({"block_key": item["block_key"], "instance_no": item["instance_no"],
+                                          "field_overrides": overrides})
+                continue
+            for field in (block or {}).get("fields", []):
+                field_key = field["key"]
+                override_key = f"{token}_{position}_{item['instance_no']}_{field_key}"
+                st.caption(f"Field: {field['label']} (`{field_key}` · {field['type']})")
+                enabled = st.checkbox(f"Override {field['label']} ({field_key})", value=field_key in overrides,
+                                      key=f"{override_key}_enabled", on_change=_clear_studio_review)
+                if not enabled:
+                    overrides.pop(field_key, None)
+                    continue
+                explicit_null = field["type"] in {"text", "decimal"} and overrides.get(field_key, object()) is None
+                if field["type"] in {"text", "decimal"}:
+                    null_mode = st.checkbox(f"Override {field['label']} ({field_key}) with null", value=explicit_null,
+                                            key=f"{override_key}_null", on_change=_clear_studio_review)
+                    if null_mode:
+                        overrides[field_key] = None
+                        continue
+                default = overrides.get(field_key, field.get("value"))
+                requested = _field_default_widget(
+                    field["type"], field.get("options") or [], default, f"{override_key}_value",
+                    label=f"Override value for {field['label']} ({field_key})",
+                )
+                # Historic JSON overrides can store numeric/checkbox values
+                # in their original textual spelling. Retain that exact value
+                # when the typed widget means the same thing, so a metadata
+                # edit does not manufacture an override-only candidate.
+                if field_key in overrides:
+                    try:
+                        same = content_changes._native_stored(field, overrides[field_key]) == requested
+                    except (TypeError, ValueError):
+                        same = False
+                    overrides[field_key] = overrides[field_key] if same else requested
+                else:
+                    overrides[field_key] = requested
+        updated_instances.append({"block_key": item["block_key"], "instance_no": item["instance_no"],
+                                  "field_overrides": overrides})
+    instances = updated_instances
+    st.session_state[state_key] = instances
+
+    defaults = ({"name": "", "category": None, "default_title": None, "default_adicap": None}
+                if preset is None else {column: preset.get(column) for column in
+                                         ("name", "category", "default_title", "default_adicap")})
+    with st.form(f"editor_studio_preset_form_{action}_{stable_key}_{generation}"):
+        if action in {"Create a new Preset", "Duplicate existing Preset"}:
+            key = st.text_input("Short code")
+        else:
+            key = preset["short_code"]
+            st.caption(f"Short code: `{key}` (locked)")
+        name = st.text_input("Preset name", defaults["name"] or "", key=f"{token}_name")
+        category = st.text_input("Category (optional)", defaults["category"] or "", key=f"{token}_category")
+        title = st.text_input("Default title (optional)", defaults["default_title"] or "", key=f"{token}_title")
+        adicap = st.text_input("Default ADICAP (metadata only; Workspace has no consumer)",
+                               defaults["default_adicap"] or "", key=f"{token}_adicap")
+        prepare = st.form_submit_button("Prepare Preset review", disabled=not writes_enabled)
+    values = {"name": name, "category": category or None, "default_title": title or None,
+              "default_adicap": adicap or None}
+    if prepare:
+        target_action = "create" if action == "Create a new Preset" else "duplicate" if action == "Duplicate existing Preset" else "edit"
+        baseline = st.session_state.get(source_baseline_key) if preset is not None else None
+        # A new instance can be added to either a brand-new or an existing
+        # Preset. In both cases its selected Block/Field endpoints need the
+        # captured physical baseline at review time.
+        endpoint_baselines = st.session_state.get(endpoint_baseline_key)
+        frozen_signature = _studio_signature("preset", {"table": "Presets", "key": stable_key},
+                                             {"action": target_action, "values": values, "instances": instances})
+        try:
+            intents = content_studio.preset_draft_operations(
+                target_action, key, values, instances, source_key=source_key, baseline=baseline,
+                endpoint_baselines=endpoint_baselines,
+            )
+        except content_studio.StalePresetDraftError as error:
+            _clear_studio_review(); st.session_state["_editor_studio_form_generation"] = generation + 1
+            st.session_state["_editor_studio_error"] = str(error); st.rerun()
+        except content_studio.StudioIntentError as error:
+            st.error(f"Review was not prepared: {error}")
+        else:
+            _prepare_studio_review(intents, frozen_signature, f"{target_action.title()} Preset.{key}")
+    if preset is not None and action == "Edit existing Preset":
+        _lifecycle_panel("Presets", preset, signature, writes_enabled)
+
+
 def _group_label_studio(writes_enabled):
     labels = db.get_all_conclusion_group_labels()
     all_blocks = db.get_all_editor_blocks()
@@ -1227,7 +1484,7 @@ if section == "Content Studio":
     st.caption("Draft changes become a frozen review before they can be applied. Stable keys and Field type/options are immutable.")
     mode = st.radio("Lifecycle filter", ["Active", "Archived", "All"], horizontal=True,
                     key="editor_studio_filter", on_change=_clear_studio_review)
-    studio_kind = st.radio("Content Studio area", ["Fields", "Blocks", "Snippets", "Group labels"], horizontal=True,
+    studio_kind = st.radio("Content Studio area", ["Fields", "Blocks", "Presets", "Snippets", "Group labels"], horizontal=True,
                            key="editor_studio_kind", on_change=_clear_studio_review)
     studio_error = st.session_state.pop("_editor_studio_error", None)
     if studio_error:
@@ -1238,11 +1495,14 @@ if section == "Content Studio":
                 st.error(str(studio_local_error))
     all_fields = db.get_all_fields(include_archived=True)
     all_blocks = db.get_all_editor_blocks()
+    all_presets = db.get_all_presets(include_archived=True)
     all_snippets = db.get_all_snippets(include_archived=True)
     if studio_kind == "Fields":
         _field_studio(all_fields, mode, writes_enabled)
     elif studio_kind == "Blocks":
         _block_studio(all_blocks, all_fields, mode, writes_enabled)
+    elif studio_kind == "Presets":
+        _preset_studio(all_presets, mode, writes_enabled)
     elif studio_kind == "Snippets":
         _snippet_studio(all_snippets, mode, writes_enabled)
     else:

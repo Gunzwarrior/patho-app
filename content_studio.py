@@ -32,6 +32,10 @@ class StaleBlockDraftError(StudioIntentError):
     """A Block draft no longer matches the Block and bindings it loaded."""
 
 
+class StalePresetDraftError(StudioIntentError):
+    """A Preset draft no longer matches its loaded composition."""
+
+
 def _copy_mapping(value, name):
     if not isinstance(value, dict):
         raise StudioIntentError(f"{name} must be an object.")
@@ -426,6 +430,321 @@ def block_draft_operations(action, key, draft, bindings, *, source_key=None, bas
         # changed. The candidate engine rejects no-op updates by design.
         if all(source[column] == values[column] for column in _BLOCK_COLUMNS):
             operations.pop(len(assertions))
+        return operations
+    finally:
+        conn.close()
+
+
+# Stage 6 checkpoint 6 ------------------------------------------------------
+
+_PRESET_COLUMNS = ("name", "category", "default_title", "default_adicap")
+
+
+def _preset_values(draft):
+    if not isinstance(draft, dict) or set(draft) != set(_PRESET_COLUMNS):
+        raise StudioIntentError("Preset draft has invalid metadata.")
+    values = {}
+    for column in _PRESET_COLUMNS:
+        value = draft[column]
+        if column == "name":
+            if not isinstance(value, str) or not value.strip():
+                raise StudioIntentError("Preset name cannot be blank.")
+        elif value is not None and not isinstance(value, str):
+            raise StudioIntentError(f"Preset {column} must be text or empty.")
+        values[column] = _none_if_blank(value) if column != "name" else value
+    return values
+
+
+def _preset_link_rows(conn, preset_id):
+    """Exact linked instance images, including endpoint identities.
+
+    A Preset form controls a composition, not just the Preset row.  Preserve
+    the physical IDs of every linked Block and Field so a delete/recreate ABA
+    cannot be mistaken for the same source composition.
+    """
+    result = []
+    rows = conn.execute(
+        """SELECT pb.*, b.key AS block_key, b.is_archived AS block_is_archived,
+                  b.is_table AS block_is_table
+           FROM Preset_Blocks pb JOIN Blocks b ON b.id=pb.block_id
+           WHERE pb.preset_id=? ORDER BY pb.sort_order""", (preset_id,)
+    )
+    for row in rows:
+        image = dict(row)
+        image["block"] = dict(conn.execute("SELECT * FROM Blocks WHERE id=?", (image["block_id"],)).fetchone())
+        image["fields"] = [{
+            "binding": dict(binding),
+            "field": dict(conn.execute("SELECT * FROM Fields WHERE id=?", (binding["field_id"],)).fetchone()),
+        } for binding in conn.execute(
+            "SELECT * FROM Block_Fields WHERE block_id=? ORDER BY sort_order", (image["block_id"],)
+        )]
+        result.append(image)
+    return result
+
+
+def _preset_instance_endpoint_image(conn, block_key, instance_no):
+    """Complete physical endpoint image for one draft-only Block instance."""
+    block = conn.execute("SELECT * FROM Blocks WHERE key=?", (block_key,)).fetchone()
+    if block is None:
+        raise StudioIntentError("Preset Blocks must be active non-table Blocks.")
+    block = dict(block)
+    return {
+        "block_key": block_key, "instance_no": instance_no, "block": block,
+        "fields": [{
+            "binding": dict(binding),
+            "field": dict(conn.execute("SELECT * FROM Fields WHERE id=?", (binding["field_id"],)).fetchone()),
+        } for binding in conn.execute(
+            "SELECT * FROM Block_Fields WHERE block_id=? ORDER BY sort_order", (block["id"],)
+        )],
+    }
+
+
+def _preset_draft_image(preset, links=None, *, endpoints=None):
+    return {
+        "preset": dict(preset) if preset is not None else None,
+        "links": sorted((copy.deepcopy(links) if links is not None else []),
+                        key=lambda row: (row.get("sort_order", 0), row.get("block_id", 0))),
+        "endpoints": copy.deepcopy(endpoints) if endpoints is not None else None,
+    }
+
+
+def preset_draft_baseline(preset, links):
+    """Hash the complete persisted Preset and all of its live instances."""
+    return content_editing.row_hash(_preset_draft_image(preset, links))
+
+
+def preset_draft_source(short_code, *, db_name=None):
+    """Read the one physical source image used by a Preset form."""
+    conn = _connection(db_name)
+    try:
+        preset = _target(conn, "Presets", short_code)
+        return preset, _preset_link_rows(conn, preset["id"])
+    finally:
+        conn.close()
+
+
+def _preset_instance_endpoint_baseline(conn, block_key, instance_no):
+    return content_editing.row_hash(_preset_instance_endpoint_image(conn, block_key, instance_no))
+
+
+def preset_instance_endpoint_baseline(block_key, instance_no, *, db_name=None):
+    """Capture one immutable draft-only instance endpoint at selection time."""
+    if not isinstance(block_key, str) or not block_key or type(instance_no) is not int or not 0 <= instance_no < 1000:
+        raise StudioIntentError("Preset Block instance identity is invalid.")
+    conn = _connection(db_name)
+    try:
+        return _preset_instance_endpoint_baseline(conn, block_key, instance_no)
+    finally:
+        conn.close()
+
+
+def _normal_preset_instances(instances):
+    if not isinstance(instances, list) or not instances:
+        raise StudioIntentError("A Preset needs at least one Block instance.")
+    result, identities, display = [], set(), set()
+    for position, instance in enumerate(instances):
+        if not isinstance(instance, dict) or set(instance) != {"block_key", "instance_no", "field_overrides"}:
+            raise StudioIntentError("Preset Block instances are invalid.")
+        block_key, instance_no, overrides = instance["block_key"], instance["instance_no"], instance["field_overrides"]
+        if (not isinstance(block_key, str) or not block_key or type(instance_no) is not int
+                or not 0 <= instance_no < 1000 or not isinstance(overrides, dict)):
+            raise StudioIntentError("Preset Block instances are invalid.")
+        identity = (block_key, instance_no)
+        if identity in identities or position in display:
+            raise StudioIntentError("Preset Block instance identity or display order is duplicated.")
+        identities.add(identity); display.add(position)
+        result.append({"block_key": block_key, "instance_no": instance_no,
+                       "display_order": position, "field_overrides": copy.deepcopy(overrides)})
+    return result
+
+
+def _validate_preset_instances(conn, instances):
+    """Validate the exact per-instance Field set and preserve JSON semantics."""
+    checked = []
+    for instance in instances:
+        block = conn.execute("SELECT * FROM Blocks WHERE key=?", (instance["block_key"],)).fetchone()
+        if block is None or block["is_archived"] or block["is_table"]:
+            raise StudioIntentError("Preset Blocks must be active non-table Blocks.")
+        fields = {row["key"]: dict(row) for row in conn.execute(
+            """SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+               WHERE bf.block_id=?""", (block["id"],)
+        )}
+        overrides = instance["field_overrides"]
+        if set(overrides) - set(fields):
+            raise StudioIntentError("Preset override targets a Field not linked to that Block instance.")
+        normalized = {}
+        for field_key, value in overrides.items():
+            try:
+                # Preset overrides are JSON-native values. Keep a present null
+                # as null (rather than dropping the key), as well as 0, false
+                # and the empty string; only Block_Field SQL overrides use
+                # the historic text storage conversion.
+                content_changes.contract.field_value(
+                    fields[field_key], content_changes._native_stored(fields[field_key], value)
+                )
+                normalized[field_key] = value
+            except (TypeError, ValueError):
+                raise StudioIntentError("Preset Field override is invalid for its Field type.") from None
+        checked.append({**instance, "block_id": block["id"], "field_overrides": normalized})
+    return checked
+
+
+def _assert_preset_draft_baseline(conn, source_key, baseline, endpoint_baseline=None):
+    if not isinstance(baseline, str) or not baseline:
+        raise StudioIntentError("Preset edit and duplicate drafts require their loaded baseline.")
+    try:
+        source = _target(conn, "Presets", source_key)
+    except StudioIntentError:
+        raise StalePresetDraftError("This Preset or its Block instances changed since the draft was loaded. Current values were reloaded.") from None
+    links = _preset_link_rows(conn, source["id"])
+    if baseline != preset_draft_baseline(source, links):
+        raise StalePresetDraftError("This Preset or its Block instances changed since the draft was loaded. Current values were reloaded.")
+    return source, links
+
+
+def _assert_preset_endpoints_baseline(conn, endpoints):
+    """Assert each draft-only endpoint independently; never rebase survivors."""
+    for endpoint in endpoints:
+        current = _preset_instance_endpoint_baseline(
+            conn, endpoint["block_key"], endpoint["instance_no"]
+        )
+        if current != endpoint["baseline"]:
+            raise StalePresetDraftError(
+                "Preset Block endpoints changed since the draft was loaded. Current values were reloaded."
+            )
+
+
+def _endpoint_assertion(instances, required_identities, endpoint_baselines):
+    """Bind only newly selected instances, preserving older draft baselines."""
+    if not required_identities:
+        return []
+    if not isinstance(endpoint_baselines, list):
+        raise StalePresetDraftError("Preset Block endpoints changed since the draft was loaded. Current values were reloaded.")
+    provided = {(item.get("block_key"), item.get("instance_no")): item
+                for item in endpoint_baselines if isinstance(item, dict)}
+    if set(provided) != set(required_identities):
+        raise StalePresetDraftError("Preset Block endpoints changed since the draft was loaded. Current values were reloaded.")
+    endpoints = []
+    for block_key, instance_no in sorted(required_identities):
+        endpoint = provided[(block_key, instance_no)]
+        if (set(endpoint) != {"block_key", "instance_no", "baseline"}
+                or not isinstance(endpoint["baseline"], str)):
+            raise StalePresetDraftError("Preset Block endpoints changed since the draft was loaded. Current values were reloaded.")
+        endpoints.append(copy.deepcopy(endpoint))
+    return [{"op": "assert_preset_endpoints", "endpoints": endpoints}]
+
+
+def preset_draft_operations(action, key, draft, instances, *, source_key=None, baseline=None,
+                            endpoint_baselines=None, db_name=None):
+    """Translate one atomic Preset metadata/composition draft into intents.
+
+    ``sort_order`` is treated exclusively as immutable instance identity.
+    Reordering emits only ``display_order`` changes; removed instances receive
+    narrowly-scoped Quick Type cleanup, and duplication intentionally receives
+    no tokens at all.
+    """
+    if action not in {"create", "edit", "duplicate"} or not isinstance(key, str) or not key.strip():
+        raise StudioIntentError("Preset action and short code are required.")
+    values = _preset_values(draft)
+    desired = _normal_preset_instances(instances)
+    conn = _connection(db_name)
+    try:
+        if action in {"create", "duplicate"} and conn.execute(
+                "SELECT 1 FROM Presets WHERE short_code=?", (key,)).fetchone():
+            raise StudioIntentError("Preset short code already exists.")
+        source = None
+        source_links = []
+        if action in {"edit", "duplicate"}:
+            if not isinstance(source_key, str) or not source_key:
+                raise StudioIntentError("An existing Preset is required.")
+            source, source_links = _assert_preset_draft_baseline(conn, source_key, baseline)
+            if source["is_archived"]:
+                raise StudioIntentError("Restore an archived Preset before editing or duplicating it.")
+            if action == "edit" and key != source_key:
+                raise StudioIntentError("Preset short code is immutable.")
+            if action == "duplicate" and key == source_key:
+                raise StudioIntentError("A duplicate needs a new Preset short code.")
+            if action == "duplicate" and values["name"] == source["name"]:
+                raise StudioIntentError("A duplicate needs a new Preset name.")
+            if any(link["block_is_table"] for link in source_links):
+                raise StudioIntentError("Table-bearing Presets are read-only in Content Studio.")
+        checked = _validate_preset_instances(conn, desired)
+        if action == "duplicate":
+            source_shape = [{"block_key": link["block_key"], "instance_no": link["sort_order"],
+                             "display_order": link["display_order"],
+                             "field_overrides": json.loads(link["field_overrides"] or "{}")}
+                            for link in sorted(source_links, key=lambda link: (link["display_order"], link["sort_order"]))]
+            if [{k: item[k] for k in ("block_key", "instance_no", "display_order", "field_overrides")} for item in checked] != source_shape:
+                raise StudioIntentError("Duplicate copies the source Preset composition and overrides unchanged.")
+        if source is not None:
+            assertions = [{"op": "assert_preset_draft", "key": source_key, "baseline": baseline,
+                           "endpoint_baseline": None, "duplicate": action == "duplicate"}]
+            # Existing-Preset drafts need the same physical endpoint guard
+            # when they add a new Block instance. The source baseline covers
+            # retained instances; this closes the ABA gap for the newly
+            # selected Block and its Fields.
+            source_identities = {(link["block_key"], link["sort_order"]) for link in source_links}
+            new_identities = {(item["block_key"], item["instance_no"]) for item in desired} - source_identities
+            assertions.extend(_endpoint_assertion(desired, new_identities, endpoint_baselines))
+        else:
+            assertions = _endpoint_assertion(
+                desired, {(item["block_key"], item["instance_no"]) for item in desired}, endpoint_baselines
+            )
+        if action in {"create", "duplicate"}:
+            operations = assertions + [operation("create", "Presets", key, values)]
+            copied_raw_overrides = ({
+                (link["block_key"], link["sort_order"]): link["field_overrides"] for link in source_links
+            } if action == "duplicate" else {})
+            for item in checked:
+                raw_overrides = copied_raw_overrides.get((item["block_key"], item["instance_no"]), object())
+                operations.append(operation("link", "Preset_Blocks", {
+                    "preset_code": key, "block_key": item["block_key"], "sort_order": item["instance_no"],
+                }, {"display_order": item["display_order"], "field_overrides":
+                    None if raw_overrides is None else item["field_overrides"]}))
+            return operations
+
+        old = {(link["block_key"], link["sort_order"]): link for link in source_links}
+        new = {(item["block_key"], item["instance_no"]): item for item in checked}
+        operations = list(assertions)
+        if any(source[column] != values[column] for column in _PRESET_COLUMNS):
+            operations.append(operation("update", "Presets", key, values))
+        for identity in sorted(set(old) - set(new)):
+            link = old[identity]
+            # Tokens refer to the immutable instance number, so only cleanup
+            # tokens that target the instance actually removed/replaced.
+            for token in conn.execute("SELECT sort_order FROM Quick_Type_Tokens WHERE preset_id=? AND block_sort_order=?",
+                                      (source["id"], link["sort_order"])):
+                operations.append(operation("unlink", "Quick_Type_Tokens", {
+                    "preset_code": key, "sort_order": token["sort_order"],
+                }))
+            operations.append(operation("unlink", "Preset_Blocks", {
+                "preset_code": key, "block_key": link["block_key"], "sort_order": link["sort_order"],
+            }))
+        for identity in sorted(set(new) - set(old)):
+            item = new[identity]
+            # A removed historical identity may remain in an explicit pending
+            # composition even after the relationship disappeared. Do not
+            # repurpose it for a newly linked instance.
+            for case in conn.execute("SELECT structured_input FROM Cases WHERE status='pending' AND preset_id=?", (source["id"],)):
+                structured = json.loads(case["structured_input"] or "{}")
+                for saved in structured.get("block_instances", []) or []:
+                    if isinstance(saved, dict) and saved.get("block_id") == item["block_id"] and saved.get("instance_no") == item["instance_no"]:
+                        raise StudioIntentError("That Block instance number is retained by a pending Case and cannot be reused.")
+            operations.append(operation("link", "Preset_Blocks", {
+                "preset_code": key, "block_key": item["block_key"], "sort_order": item["instance_no"],
+            }, {"display_order": item["display_order"], "field_overrides": item["field_overrides"]}))
+        for identity in sorted(set(old) & set(new)):
+            before, item = old[identity], new[identity]
+            changed = {}
+            if before["display_order"] != item["display_order"]:
+                changed["display_order"] = item["display_order"]
+            before_overrides = json.loads(before["field_overrides"] or "{}")
+            if before_overrides != item["field_overrides"]:
+                changed["field_overrides"] = item["field_overrides"]
+            if changed:
+                operations.append(operation("reorder" if set(changed) == {"display_order"} else "update",
+                                            "Preset_Blocks", {"preset_code": key, "block_key": identity[0],
+                                                              "sort_order": identity[1]}, changed))
         return operations
     finally:
         conn.close()
