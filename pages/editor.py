@@ -225,19 +225,65 @@ def _show_configuration_review(data):
 def _show_guided_evidence(data):
     """Show candidate-bound interpretations before any approval controls."""
     evidence = data.get("guided_evidence")
-    if not evidence or evidence.get("kind") != "quick_type":
+    if not evidence:
         return
-    st.subheader("Frozen Quick Type interpretations", anchor=False)
-    for item in evidence.get("examples", []):
-        with st.expander(f"{item['label']}: {item['code']}"):
-            expected = "successful parse" if item["positive"] else "rejection"
-            actual = "rejected" if item["error"] else f"routed to {item.get('preset')}"
-            st.caption(f"Expected: {expected} · Actual: {actual}")
-            if item["error"]:
-                st.info(item["error"])
-            else:
-                _show_rows(item.get("decoded", []), "Bare code: no field overrides.")
-                _show_report(item.get("report"), "Production-path report")
+    if evidence.get("kind") == "quick_type":
+        st.subheader("Frozen Quick Type interpretations", anchor=False)
+        for item in evidence.get("examples", []):
+            with st.expander(f"{item['label']}: {item['code']}"):
+                expected = "successful parse" if item["positive"] else "rejection"
+                actual = "rejected" if item["error"] else f"routed to {item.get('preset')}"
+                st.caption(f"Expected: {expected} · Actual: {actual}")
+                if item["error"]:
+                    st.info(item["error"])
+                else:
+                    _show_rows(item.get("decoded", []), "Bare code: no field overrides.")
+                    _show_report(item.get("report"), "Production-path report")
+    elif evidence.get("kind") == "consistency":
+        st.subheader("Frozen consistency-rule probes", anchor=False)
+        for item in evidence.get("blocks", []):
+            with st.expander(f"{item['block_name']} — rule {item['position']}"):
+                st.caption(item["rule"]["message"])
+                left, right = st.columns(2)
+                with left:
+                    st.markdown("**Matching values — warning fires**")
+                    _show_mapping(item["matching"])
+                with right:
+                    st.markdown("**Nonmatching values — warning stops**")
+                    _show_mapping(item["nonmatching"])
+
+
+def _show_consistency_warning_impact(data):
+    """Keep CP3 warning-only deltas visibly separate from Case/render deltas."""
+    impact = data.get("consistency_warning_impact")
+    if not impact:
+        return
+    st.subheader("Consistency warning impact", anchor=False)
+    st.caption("These warnings are evaluated on the reviewed candidate. Warning-only changes do not edit Cases or their fingerprints.")
+    defaults = impact.get("default_presets", [])
+    pending = impact.get("pending_cases", [])
+    default_changed = sum(item["warning_changed"] for item in defaults)
+    pending_changed = sum(item["warning_changed"] for item in pending)
+    st.caption(f"{default_changed}/{len(defaults)} default Preset warning sets changed · "
+               f"{pending_changed}/{len(pending)} pending Case warning sets changed")
+    for heading, rows, identifier in (
+        ("Default Presets", defaults, "preset_code"),
+        ("Pending Cases", pending, "case_number"),
+    ):
+        st.markdown(f"**{heading}**")
+        for item in rows:
+            label = item.get(identifier) or str(item.get("id"))
+            marker = "changed" if item["warning_changed"] else "unchanged"
+            with st.expander(f"{label} — warnings {marker}"):
+                st.caption("Rendering changed: " + ("yes" if item["rendering_changed"] else "no")
+                           + " · fingerprint changed: " + ("yes" if item["fingerprint_changed"] else "no"))
+                before_col, after_col = st.columns(2)
+                with before_col:
+                    st.markdown("**Before**")
+                    _show_rows([{"warning": value} for value in item["before"]], "No warnings.")
+                with after_col:
+                    st.markdown("**Candidate after**")
+                    _show_rows([{"warning": value} for value in item["after"]], "No warnings.")
 
 
 def _show_review_reports(review, key_prefix):
@@ -311,6 +357,7 @@ def _show_full_review(review, key_prefix):
             _show_mapping(warning)
     _show_configuration_review(data)
     _show_guided_evidence(data)
+    _show_consistency_warning_impact(data)
     _show_operations(review)
     _show_changes(review)
     _show_review_reports(review, key_prefix)
@@ -416,7 +463,8 @@ def _studio_signature(kind, target, values):
                       ensure_ascii=False, sort_keys=True, default=str)
 
 
-def _prepare_studio_review(intents, signature, summary, *, evidence_factory=None):
+def _prepare_studio_review(intents, signature, summary, *, evidence_factory=None,
+                            preserve_stale_draft=False):
     _clear_studio_review()
     try:
         snapshot = content_snapshot.export_content_snapshot()
@@ -426,9 +474,14 @@ def _prepare_studio_review(intents, signature, summary, *, evidence_factory=None
         )
     except (content_studio.StudioIntentError, content_changes.ChangeError,
             content_editing.ContentEditError, change_packages.PackageError) as error:
-        st.session_state["_editor_studio_error"] = str(error)
-        st.session_state["_editor_studio_local_error"] = getattr(error, "local", None)
-        if isinstance(error, content_changes.StaleDraftReviewError):
+        if isinstance(error, content_changes.StaleDraftReviewError) and preserve_stale_draft:
+            # CP3 owns a read-only preserved-draft/reload panel.  Do not let
+            # the generic race recovery advance its generation first.
+            st.session_state["_editor_consistency_review_stale_error"] = str(error)
+        else:
+            st.session_state["_editor_studio_error"] = str(error)
+            st.session_state["_editor_studio_local_error"] = getattr(error, "local", None)
+        if isinstance(error, content_changes.StaleDraftReviewError) and not preserve_stale_draft:
             # The assertion was checked on the review's own snapshot. Fresh
             # widget keys now load that persisted source instead of retaining
             # values from the refused draft.
@@ -755,6 +808,233 @@ def _quick_type_studio(writes_enabled):
             _prepare_studio_review(intents, signature, f"Edit Quick Type grammar for {selected}",
                                    evidence_factory=content_studio.quick_type_review_evidence(selected, examples))
         except (ValueError, content_studio.StudioIntentError) as error:
+            st.error(f"Review was not prepared: {error}")
+
+
+def _rule_value_rows(values, prefix):
+    """Keep numeric rule-value widgets stable when rows are edited or removed."""
+    return [item if isinstance(item, dict) and {"uid", "value"} <= set(item)
+            else {"uid": f"{prefix}-{index}", "value": item}
+            for index, item in enumerate(values or [])]
+
+
+def _rule_values_widget(field, values, widget_scope, side):
+    """Typed exact-set controls for one side of a consistency predicate."""
+    field_type = field["type"]
+    if field_type == "checkbox":
+        selected = st.multiselect(
+            "Triggering values", [False, True], default=[value for value in values if type(value) is bool],
+            format_func=lambda value: "Checked" if value else "Unchecked",
+            key=f"{widget_scope}_{side}_checkbox", on_change=_clear_studio_review,
+        )
+        return selected, values
+    if field_type == "select":
+        options = field.get("options") or []
+        selected = st.multiselect(
+            "Triggering values", options, default=[value for value in values if value in options],
+            key=f"{widget_scope}_{side}_select", on_change=_clear_studio_review,
+        )
+        return selected, values
+    if field_type == "text":
+        text = st.text_area(
+            "Exact triggering values (one value per line)", value="\n".join(str(value) for value in values),
+            key=f"{widget_scope}_{side}_text", on_change=_clear_studio_review,
+        )
+        # Blank lines are not a useful visible authoring value; the planner
+        # still owns canonical typed validation and duplicate refusal.
+        return [line for line in text.splitlines() if line], values
+
+    rows = _rule_value_rows(values, f"{side}-saved")
+    rebuilt = []
+    for index, row in enumerate(rows):
+        row_scope = f"{widget_scope}_{side}_value_{row['uid']}"
+        left, right = st.columns([4, 1])
+        with left:
+            if field_type == "number":
+                try:
+                    current = int(row["value"])
+                except (TypeError, ValueError):
+                    current = 0
+                value = st.number_input("Triggering value", min_value=0, step=1, value=current,
+                                        key=row_scope, on_change=_clear_studio_review)
+            else:
+                try:
+                    current = float(row["value"])
+                except (TypeError, ValueError):
+                    current = 0.0
+                value = st.number_input("Triggering value", min_value=0.0, value=current,
+                                        key=row_scope, on_change=_clear_studio_review)
+        rebuilt.append({"uid": row["uid"], "value": value})
+        with right:
+            if st.button("Remove value", key=f"{row_scope}_remove"):
+                return [item["value"] for item in rebuilt[:-1] + rows[index + 1:]], rebuilt[:-1] + rows[index + 1:]
+    if st.button("Add triggering value", key=f"{widget_scope}_{side}_add"):
+        next_uid = max((int(item["uid"].rsplit("-", 1)[-1]) for item in rows
+                        if item["uid"].rsplit("-", 1)[-1].isdigit()), default=-1) + 1
+        rebuilt.append({"uid": f"new-{next_uid}", "value": 0 if field_type == "number" else 0.0})
+        return [item["value"] for item in rebuilt], rebuilt
+    return [item["value"] for item in rebuilt], rebuilt
+
+
+def _consistency_rule_studio(writes_enabled):
+    """CP3's local complete-rule draft; Content Studio remains the only writer."""
+    active = [row for row in db.get_all_editor_blocks() if not row["is_archived"] and not row["is_table"]]
+    st.subheader("Guided consistency-rule authoring", anchor=False)
+    st.caption("A rule warns when Field A is in its exact set and Field B is in its exact set. Prepare freezes warning probes and pending-Case deltas; Apply is the only writer.")
+    if not active:
+        st.info("No active non-table Block is available.")
+        return
+    by_key = {row["key"]: row for row in active}
+    selected = st.selectbox("Active non-table Block", list(by_key),
+                            format_func=lambda key: f"{by_key[key]['name']} ({key})",
+                            key="editor_consistency_block", on_change=_clear_studio_review)
+    generation = st.session_state.get("_editor_studio_form_generation", 0)
+    target_state_key = f"_editor_consistency_target_{generation}"
+    previous_target = st.session_state.get(target_state_key)
+    if previous_target is not None and previous_target not in by_key:
+        # An archive/table-state/lifecycle change can remove the old owner
+        # from the eligible selector before Streamlit renders its saved
+        # selection. Treat that as the same explicit stale-source boundary,
+        # rather than quietly showing another Block's empty draft.
+        _clear_studio_review()
+        st.error(
+            "This consistency-rule draft's Block is no longer an active non-table source. "
+            "The local draft was preserved for reference, but cannot be prepared. "
+            "Reload current source and rebuild it."
+        )
+        with st.expander("Preserved stale local rule draft"):
+            st.code(json.dumps(st.session_state.get(
+                f"_editor_consistency_draft_{previous_target}_{generation}", []
+            ), ensure_ascii=False, indent=2), language="json")
+        if st.button("Reload current consistency-rule source", key=f"editor_consistency_stale_owner_{generation}_reload"):
+            _advance_studio_draft_generation()
+            st.rerun()
+        return
+    st.session_state[target_state_key] = selected
+    widget_scope = f"editor_consistency_{selected}_{generation}"
+    draft_key = f"_editor_consistency_draft_{selected}_{generation}"
+    baseline_key = f"_editor_consistency_baseline_{selected}_{generation}"
+    uid_key = f"_editor_consistency_next_uid_{selected}_{generation}"
+    current_baseline = content_studio.configuration_draft_baseline("consistency", selected)
+    review_stale_error = st.session_state.pop("_editor_consistency_review_stale_error", None)
+    if (baseline_key in st.session_state
+            and st.session_state[baseline_key] != current_baseline):
+        # Do not pass an old rule form through newly loaded Field widgets:
+        # doing so can silently coerce a removed/retyped endpoint into a new
+        # selection before CP1 has a chance to refuse its physical baseline.
+        # Keep the original draft object intact for reference, but make the
+        # owner/endpoint change explicit and require a deliberate reload to
+        # create a new generation bound to current source state.
+        _clear_studio_review()
+        st.error(
+            "This consistency-rule draft is stale because its Block, rules, or endpoint Fields "
+            "changed in another tab. The local draft was preserved for reference, but cannot be "
+            "prepared against the new source. Reload current source and rebuild it."
+        )
+        with st.expander("Preserved stale local rule draft"):
+            st.code(json.dumps(st.session_state.get(draft_key, []), ensure_ascii=False, indent=2), language="json")
+        if st.button("Reload current consistency-rule source", key=f"{widget_scope}_reload_stale"):
+            _advance_studio_draft_generation()
+            st.rerun()
+        return
+    if review_stale_error:
+        # A source write can race after the local precheck but before the
+        # candidate service reads its review snapshot.  Its physical
+        # assertion refused the candidate; present the same deliberate CP3
+        # preserved-draft path on this rerun instead of auto-resetting it.
+        _clear_studio_review()
+        st.error(
+            "This consistency-rule draft became stale while its review was being prepared. "
+            "The local draft was preserved for reference, but cannot be prepared. "
+            "Reload current source and rebuild it."
+        )
+        with st.expander("Preserved stale local rule draft"):
+            st.code(json.dumps(st.session_state.get(draft_key, []), ensure_ascii=False, indent=2), language="json")
+        if st.button("Reload current consistency-rule source", key=f"{widget_scope}_reload_review_stale"):
+            _advance_studio_draft_generation()
+            st.rerun()
+        return
+    owner, fields, saved_rules = content_studio.consistency_rule_draft_source(selected)
+    if draft_key not in st.session_state:
+        st.session_state[draft_key] = [
+            {"uid": f"saved-{rule['id']}", "field_a_key": rule["field_a_key"],
+             "field_a_values": rule["field_a_values"], "field_b_key": rule["field_b_key"],
+             "field_b_values": rule["field_b_values"], "message": rule["message"],
+             "a_rows": _rule_value_rows(rule["field_a_values"], "a-saved"),
+             "b_rows": _rule_value_rows(rule["field_b_values"], "b-saved")}
+            for rule in saved_rules
+        ]
+        st.session_state[baseline_key] = current_baseline
+        st.session_state[uid_key] = len(saved_rules)
+    draft = st.session_state[draft_key]
+    field_by_key = {field["key"]: field for field in fields}
+    if _show_studio_review(_studio_signature("consistency", selected, {"draft": draft}), writes_enabled):
+        return
+    if len(fields) < 2:
+        st.warning("This Block needs two active bound Fields before a consistency rule can be authored.")
+        return
+    if st.button("Add consistency rule", key=f"{widget_scope}_add"):
+        uid_number = st.session_state[uid_key]
+        st.session_state[uid_key] = uid_number + 1
+        draft.append({"uid": f"new-{uid_number}", "field_a_key": fields[0]["key"], "field_a_values": [],
+                      "field_b_key": fields[1]["key"], "field_b_values": [], "message": "",
+                      "a_rows": [], "b_rows": []})
+        _clear_studio_review()
+        st.rerun()
+
+    normalized, draft_errors = [], []
+    for index, rule in enumerate(draft):
+        uid = rule["uid"]
+        rule_scope = f"{widget_scope}_rule_{uid}"
+        with st.expander(f"{index + 1}. Consistency warning", expanded=True):
+            a_col, b_col = st.columns(2)
+            with a_col:
+                a_key = st.selectbox("Field A", list(field_by_key),
+                                     index=list(field_by_key).index(rule["field_a_key"]) if rule["field_a_key"] in field_by_key else 0,
+                                     format_func=lambda key: f"{field_by_key[key]['label']} ({key} · {field_by_key[key]['type']})",
+                                     key=f"{rule_scope}_field_a", on_change=_clear_studio_review)
+                a_source = rule.get("a_rows", rule.get("field_a_values", [])) if field_by_key[a_key]["type"] in {"number", "decimal"} else rule.get("field_a_values", [])
+                a_values, a_rows = _rule_values_widget(field_by_key[a_key], a_source, rule_scope, "a")
+            with b_col:
+                b_key = st.selectbox("Field B", list(field_by_key),
+                                     index=list(field_by_key).index(rule["field_b_key"]) if rule["field_b_key"] in field_by_key else min(1, len(field_by_key) - 1),
+                                     format_func=lambda key: f"{field_by_key[key]['label']} ({key} · {field_by_key[key]['type']})",
+                                     key=f"{rule_scope}_field_b", on_change=_clear_studio_review)
+                b_source = rule.get("b_rows", rule.get("field_b_values", [])) if field_by_key[b_key]["type"] in {"number", "decimal"} else rule.get("field_b_values", [])
+                b_values, b_rows = _rule_values_widget(field_by_key[b_key], b_source, rule_scope, "b")
+            message = st.text_area("Warning message", value=rule.get("message", ""),
+                                   key=f"{rule_scope}_message", on_change=_clear_studio_review)
+            if a_key == b_key:
+                draft_errors.append("Field A and Field B must be distinct.")
+                st.error("Field A and Field B must be distinct.")
+            if not a_values or not b_values:
+                draft_errors.append("Each Field needs at least one triggering value.")
+                st.error("Each Field needs at least one triggering value.")
+            if not message.strip():
+                draft_errors.append("Consistency rule message cannot be blank.")
+                st.error("Consistency rule message cannot be blank.")
+            if st.button("Delete consistency rule", key=f"{rule_scope}_delete"):
+                draft.pop(index)
+                _clear_studio_review()
+                st.rerun()
+            normalized.append({"uid": uid, "field_a_key": a_key, "field_a_values": a_values,
+                               "field_b_key": b_key, "field_b_values": b_values, "message": message,
+                               "a_rows": a_rows, "b_rows": b_rows})
+    st.session_state[draft_key] = normalized
+    if st.button("Prepare consistency-rule review", key=f"{widget_scope}_prepare", disabled=not writes_enabled):
+        try:
+            if draft_errors:
+                raise content_studio.StudioIntentError(draft_errors[0])
+            rules = [{name: rule[name] for name in ("field_a_key", "field_a_values", "field_b_key", "field_b_values", "message")}
+                     for rule in normalized]
+            intents = content_studio.consistency_rule_draft_operations(
+                selected, rules, baseline=st.session_state[baseline_key],
+            )
+            signature = _studio_signature("consistency", selected, {"draft": normalized})
+            _prepare_studio_review(intents, signature, f"Edit consistency rules for {owner['name']} ({selected})",
+                                   evidence_factory=content_studio.consistency_rule_review_evidence(selected),
+                                   preserve_stale_draft=True)
+        except content_studio.StudioIntentError as error:
             st.error(f"Review was not prepared: {error}")
 
 
@@ -1689,7 +1969,7 @@ if section == "Content Studio":
     st.caption("Draft changes become a frozen review before they can be applied. Stable keys and Field type/options are immutable.")
     mode = st.radio("Lifecycle filter", ["Active", "Archived", "All"], horizontal=True,
                     key="editor_studio_filter", on_change=_clear_studio_review)
-    studio_kind = st.radio("Content Studio area", ["Fields", "Blocks", "Presets", "Quick Type", "Snippets", "Group labels"], horizontal=True,
+    studio_kind = st.radio("Content Studio area", ["Fields", "Blocks", "Presets", "Quick Type", "Consistency rules", "Snippets", "Group labels"], horizontal=True,
                            key="editor_studio_kind", on_change=_clear_studio_review)
     studio_error = st.session_state.pop("_editor_studio_error", None)
     if studio_error:
@@ -1710,6 +1990,8 @@ if section == "Content Studio":
         _preset_studio(all_presets, mode, writes_enabled)
     elif studio_kind == "Quick Type":
         _quick_type_studio(writes_enabled)
+    elif studio_kind == "Consistency rules":
+        _consistency_rule_studio(writes_enabled)
     elif studio_kind == "Snippets":
         _snippet_studio(all_snippets, mode, writes_enabled)
     else:

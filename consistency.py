@@ -47,14 +47,18 @@ def check_block(block, field_values_override=None, conn=None):
     if not rules:
         return []
 
-    context = build_context(block, field_values_override)
     fired = []
     for rule in rules:
-        value_a = context.get(rule["field_a_key"])
-        value_b = context.get(rule["field_b_key"])
-        if value_a in rule["field_a_values"] and value_b in rule["field_b_values"]:
+        if rule_matches(block, rule, field_values_override):
             fired.append(rule["message"])
     return fired
+
+
+def rule_matches(block, rule, field_values_override=None):
+    """Evaluate one rule against the same resolved-value context as Workspace."""
+    context = build_context(block, field_values_override)
+    return (context.get(rule["field_a_key"]) in rule["field_a_values"]
+            and context.get(rule["field_b_key"]) in rule["field_b_values"])
 
 
 def _encoded(value):

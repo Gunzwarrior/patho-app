@@ -1283,6 +1283,137 @@ def consistency_rule_draft_operations(block_key, rules, *, baseline=None, db_nam
         conn.close()
 
 
+def consistency_rule_draft_source(block_key, *, db_name=None):
+    """Load one CP3 form's active owner, typed endpoints, and physical rules.
+
+    Rule IDs are intentionally returned only as local widget identities.  They
+    never enter the planner's public rule key, whose complete-set baseline is
+    the protection against delete/recreate ABA races.
+    """
+    conn = _connection(db_name)
+    try:
+        owner = conn.execute("SELECT * FROM Blocks WHERE key=?", (block_key,)).fetchone()
+        if owner is None or owner["is_archived"] or owner["is_table"]:
+            raise StudioIntentError("Consistency-rule owner must be an active non-table Block.")
+        fields = [dict(row) for row in conn.execute(
+            """SELECT f.* FROM Block_Fields bf JOIN Fields f ON f.id=bf.field_id
+               WHERE bf.block_id=? AND f.is_archived=0 ORDER BY bf.sort_order,f.id""", (owner["id"],)
+        )]
+        for field in fields:
+            field["options"] = json.loads(field["options"]) if field["options"] else None
+        rules = []
+        for row in conn.execute("SELECT * FROM Field_Consistency_Rules WHERE block_id=? ORDER BY id", (owner["id"],)):
+            rule = dict(row)
+            rule["field_a_values"] = json.loads(rule["field_a_values"])
+            rule["field_b_values"] = json.loads(rule["field_b_values"])
+            rules.append(rule)
+        return dict(owner), fields, rules
+    finally:
+        conn.close()
+
+
+def _rule_nonmatching_value(field, selected):
+    """Return one valid typed value outside a canonical trigger set, if any."""
+    import consistency
+    selected_keys = {consistency._encoded(value) for value in selected}
+    if field["type"] == "checkbox":
+        for value in (False, True):
+            if consistency._encoded(value) not in selected_keys:
+                return value
+        return None
+    if field["type"] == "select":
+        for value in field.get("options") or []:
+            if consistency._encoded(value) not in selected_keys:
+                return value
+        return None
+    if field["type"] == "number":
+        value = 0
+        while consistency._encoded(value) in selected_keys:
+            value += 1
+        return value
+    if field["type"] == "decimal":
+        value = 0
+        while consistency._encoded(value) in selected_keys:
+            value += 1
+        return value
+    # Text operands are exact matches.  This remains valid even where the
+    # authored set contains blank text (which is a real, exact text value).
+    value = "__consistency_rule_nonmatch__"
+    while consistency._encoded(value) in selected_keys:
+        value += "_"
+    return value
+
+
+def _consistency_rule_examples_on_connection(conn, block_keys):
+    """Evaluate matching/nonmatching probes through the production evaluator."""
+    import consistency
+    result = []
+    for block_key in block_keys:
+        owner = conn.execute("SELECT * FROM Blocks WHERE key=?", (block_key,)).fetchone()
+        if owner is None or owner["is_archived"] or owner["is_table"]:
+            raise StudioIntentError("Consistency-rule Block is unavailable in the reviewed candidate.")
+        block = database.get_block_on_connection(conn, owner["id"])
+        fields = {field["key"]: field for field in block["fields"]}
+        raw_rules = database.get_consistency_rules_on_connection(conn, owner["id"])
+        rules = consistency.canonicalize_rules(fields, raw_rules)
+        for position, rule in enumerate(rules, 1):
+            matching = {rule["field_a_key"]: rule["field_a_values"][0],
+                        rule["field_b_key"]: rule["field_b_values"][0]}
+            warnings = consistency.check_block(block, matching, conn)
+            if not consistency.rule_matches(block, rule, matching):
+                raise StudioIntentError("Consistency-rule matching probe did not fire in the reviewed candidate.")
+            nonmatching = dict(matching)
+            changed_field = None
+            for field_key, selected in ((rule["field_a_key"], rule["field_a_values"]),
+                                        (rule["field_b_key"], rule["field_b_values"])):
+                alternate = _rule_nonmatching_value(fields[field_key], selected)
+                if alternate is not None:
+                    nonmatching[field_key] = alternate
+                    changed_field = field_key
+                    break
+            if changed_field is None:
+                nonmatching_result = {
+                    "available": False,
+                    "values": matching,
+                    "warnings": warnings,
+                    "note": "No valid nonmatching value exists because both triggering sets cover their Fields' choices.",
+                }
+            else:
+                nonmatching_warnings = consistency.check_block(block, nonmatching, conn)
+                if consistency.rule_matches(block, rule, nonmatching):
+                    raise StudioIntentError("Consistency-rule nonmatching probe still fired in the reviewed candidate.")
+                nonmatching_result = {"available": True, "values": nonmatching,
+                                      "warnings": nonmatching_warnings,
+                                      "changed_field": changed_field}
+            result.append({"block_key": block_key, "block_name": owner["name"], "position": position,
+                           "rule": rule, "matching": {"values": matching, "warnings": warnings},
+                           "nonmatching": nonmatching_result})
+    return result
+
+
+def consistency_rule_review_evidence(block_key):
+    """Freeze CP3's rule probes after candidate final-graph validation."""
+    if not isinstance(block_key, str) or not block_key:
+        raise StudioIntentError("Consistency-rule review needs a Block key.")
+
+    def evidence(candidate):
+        return {"kind": "consistency", "blocks": _consistency_rule_examples_on_connection(candidate, [block_key])}
+    return evidence
+
+
+def consistency_rule_generated_review_evidence(conn, block_keys):
+    """Regenerate candidate-bound CP3 probes for a reviewed inverse."""
+    # An inverse can legitimately delete a Block that was duplicated together
+    # with its copied rules.  That removed row remains in the audit image (and
+    # therefore in ``configuration_owners``), but is no longer a candidate
+    # authoring owner to probe.  Keep evidence bound only to final active
+    # non-table owners; warning deltas still show the removed rules' effects.
+    keys = [key for key in dict.fromkeys(block_keys) if conn.execute(
+        "SELECT 1 FROM Blocks WHERE key=? AND is_archived=0 AND is_table=0", (key,)
+    ).fetchone() is not None]
+    return {"kind": "consistency", "blocks": _consistency_rule_examples_on_connection(conn, keys)}
+
+
 def _connection(db_name):
     conn = database.get_db_connection() if db_name is None else sqlite3.connect(db_name)
     conn.row_factory = sqlite3.Row

@@ -7,9 +7,9 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 7 is planned; implementation has not begun.** The authoritative
-architecture and seven-checkpoint contract is `STAGE7_IMPLEMENTATION_PLAN.md`,
-based on the completed Stage 6 repository at
+**Stage 7 CP1–CP3 are accepted; do not begin CP4 without a new bounded task.**
+The authoritative architecture and seven-checkpoint contract is
+`STAGE7_IMPLEMENTATION_PLAN.md`, based on the completed Stage 6 repository at
 `a23e917cc674481d6ab1e33f50ab0da13d1f33ab`. It preserves separate content-
 configuration and operational Case planes: Quick Type/consistency authoring
 reuses Content Studio candidate → frozen review → Apply → inverse, while bulk
@@ -23,9 +23,8 @@ removed, so manual Fields, Snippets, Blocks, Presets, relationships, lifecycle
 actions, AI packages, and reviewed inverses all retain the frozen review →
 confirmation → Apply boundary. The common review renderer now uses neutral
 review language; its recovery-snapshot gate and the backend gate still protect
-every Apply. Table Blocks/table-bearing Presets remain read-only, and Stage 7
-Quick Type and consistency-rule authoring remain absent pending implementation
-of the approved Stage 7 plan.
+every Apply. Table Blocks/table-bearing Presets remain read-only; Stage 7
+Quick Type and same-Block consistency-rule authoring now use that surface.
 
 CP7 adds source-level regressions proving that the Editor embeds no legacy
 direct writer, alongside the existing UI/transaction coverage for lifecycle,
@@ -618,6 +617,26 @@ Quick Type expansion is no longer an incidental non-blocker: it is the focus
 of Stage 7, including authoring and bulk pending-case intake. Future case-type
 content such as breast may be created through either the optional Stage 5 AI
 workflow or the independent Stage 6 Content Studio.
+
+### Stage 7 CP3 — consistency-rule authoring
+
+CP3 is accepted. Content Studio now provides guided create/edit/delete for a
+complete same-Block warn-and-confirm rule set on active non-table Blocks,
+using typed exact value sets and stable source/generation-scoped draft widget
+identity. It reuses the CP1 candidate → frozen review → confirmation → Apply
+→ audit/reviewed-inverse path; no Case writer or second evaluator was added.
+Frozen reviews show production-evaluator matching/nonmatching probes plus
+default-Preset and reconstructable pending-Case warning deltas. Warning-only
+changes are distinct from rendered clinical output and content fingerprints;
+pending Cases remain untouched, show the new warning on reopen, and use the
+ordinary Workspace confirmation on their next Save. Validated artifacts stay
+frozen.
+
+The accepted remediation set covers physical stale owner/endpoint protection
+with an explicit read-only preserved-draft/reload flow (including the
+review-time race), order-insensitive warning membership with multiplicity,
+duplicate-Block copied-rule inverse/re-inverse, and warning-only report
+classification. CP4 remains unimplemented.
 
 ## Where to find detail
 

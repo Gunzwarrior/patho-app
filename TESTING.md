@@ -670,3 +670,24 @@ Block-duplicate rule copying, and materialization/audit rollback.
 `python3 -m py_compile database.py quicktype.py consistency.py
 content_studio.py content_changes.py` and `git diff --check` passed. The full
 isolated suite remains the manual command `venv/bin/python -m pytest -q`.
+
+## Stage 7 CP3 acceptance — 2026-09-15
+
+CP3 consistency-rule authoring is accepted. Independent closure verified the
+complete isolated suite at **548 passed in 348.25s**, `git diff --check`, and
+`tests/test_stage7_consistency_ui.py` at **9/9 passed**. That focused file
+covers typed rule CRUD; candidate-only matching/nonmatching probes; default
+and pending warning-only deltas with stable fingerprints; order-insensitive
+warning membership; stale owner/endpoint and review-time race handling;
+no-direct-writer AppTest behavior; and copied-rule Block duplication through
+Apply, inverse Apply, and inverse-of-inverse Apply. CP3 focused/configuration/
+lifecycle verification remains safe to run with:
+
+```bash
+venv/bin/python -m pytest -q \
+  tests/test_stage7_configuration.py tests/test_stage7_quicktype_ui.py \
+  tests/test_stage7_consistency_ui.py tests/test_consistency.py \
+  tests/test_stage6_blocks.py tests/test_stage6_lifecycle.py
+```
+
+CP4 is not included in this acceptance boundary.

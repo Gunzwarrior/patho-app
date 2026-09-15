@@ -1,6 +1,7 @@
 """Reviewed candidates, atomic content changes, and dependency-safe inverses."""
 
 from contextlib import contextmanager
+from collections import Counter
 from dataclasses import dataclass, field
 import copy
 import json
@@ -686,6 +687,85 @@ def _configuration_review_evidence(before_rows, after_rows, operations, conn, *,
             "findings": {"reachability_errors": errors, "reachability_warnings": warnings}}
 
 
+def _report_without_warnings(record):
+    """The rendering/fingerprint part of a captured report.
+
+    A consistency-rule edit deliberately changes only the warn-and-confirm
+    result.  Keeping that fact explicit prevents the normal report capture
+    (whose ``warnings`` member necessarily differs) from presenting it as a
+    rendered-content or pending-fingerprint change.
+    """
+    report = (record or {}).get("report")
+    if not isinstance(report, dict):
+        return report
+    return {key: value for key, value in report.items() if key != "warnings"}
+
+
+def _report_output_changed(before, after):
+    """Whether clinical/rendered report output changed, excluding warnings.
+
+    Consistency warnings are a separate warn-and-confirm result, not saved
+    clinical text.  This keeps every review surface from calling a rule-only
+    warning delta a report-output change.
+    """
+    return _report_without_warnings(before) != _report_without_warnings(after)
+
+
+def _canonical_warning_bag(record):
+    """Stable warning presentation and order-insensitive, multiplicity-safe comparison."""
+    report = (record or {}).get("report") or {}
+    warnings = report.get("warnings") or []
+    if not isinstance(warnings, list) or any(not isinstance(value, str) for value in warnings):
+        return []
+    return sorted(warnings)
+
+
+def _warnings_changed(before, after):
+    # Duplicate messages can arise from distinct rules/instances in the
+    # current evaluator.  Preserve that multiplicity while ignoring query or
+    # configuration row order.
+    return Counter(_canonical_warning_bag(before)) != Counter(_canonical_warning_bag(after))
+
+
+def _consistency_warning_impact(before_presets, after_presets, before_pending,
+                                after_pending, changes):
+    """Candidate-bound warning sets for a consistency-rule review.
+
+    This is intentionally separate from ``pending_cases``: that established
+    payload is fingerprint-oriented, while a rule can change the warning a
+    pending Case sees on reopen without changing either its saved Case row or
+    its content fingerprint.  ``_capture(..., candidate=True)`` has already
+    reconstructed every pending Case before this function runs.
+    """
+    if not any(change["table"] == "Field_Consistency_Rules" for change in changes):
+        return None
+
+    defaults = []
+    for code in sorted(set(before_presets) | set(after_presets)):
+        before, after = before_presets.get(code), after_presets.get(code)
+        defaults.append({
+            "preset_code": code,
+            "before": _canonical_warning_bag(before), "after": _canonical_warning_bag(after),
+            "warning_changed": _warnings_changed(before, after),
+            "rendering_changed": _report_output_changed(before, after),
+            "fingerprint_changed": (before or {}).get("fingerprint") != (after or {}).get("fingerprint"),
+        })
+
+    pending = []
+    for case_id in sorted(set(before_pending) | set(after_pending)):
+        before, after = before_pending.get(case_id), after_pending.get(case_id)
+        pending.append({
+            "id": case_id,
+            "case_number": (after or before).get("case_number"),
+            "before": _canonical_warning_bag(before), "after": _canonical_warning_bag(after),
+            "warning_changed": _warnings_changed(before, after),
+            "rendering_changed": _report_output_changed(before, after),
+            "fingerprint_changed": (before or {}).get("fingerprint") != (after or {}).get("fingerprint"),
+            "already_stale": (before or {}).get("already_stale"),
+        })
+    return {"default_presets": defaults, "pending_cases": pending}
+
+
 def _validated_reconstructability(conn):
     """Whether each frozen validated Case could safely return to pending now.
 
@@ -755,7 +835,7 @@ def _review_on_connection(candidate, operations, base_hash, *, package_hash=None
                 unaffected += 1
             presets.append({"code": code, "affected": affected,
                             "added": before is None, "removed": after is None,
-                            "output_changed": (before or {}).get("report") != (after or {}).get("report"),
+                            "output_changed": _report_output_changed(before, after),
                             "before": before, "after": after})
         pending = [
             {"id": case_id, "case_number": after["case_number"],
@@ -2178,7 +2258,7 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                 before, after = before_presets.get(code), after_presets.get(code)
                 presets.append({"code": code, "affected": before != after, "added": before is None,
                                 "removed": after is None,
-                                "output_changed": (before or {}).get("report") != (after or {}).get("report"),
+                                "output_changed": _report_output_changed(before, after),
                                 "before": before, "after": after})
             pending = _general_pending_impact(before_pending, after_pending)
             evidence = evidence_factory(candidate) if evidence_factory is not None else None
@@ -2192,6 +2272,9 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                        "configuration_review": _configuration_review_evidence(before_rows, after_rows, operations, candidate),
                        "unaffected_presets": sum(not item["affected"] for item in presets),
                        "pending_cases": pending, "validated_pending_count": len(after_pending),
+                       "consistency_warning_impact": _consistency_warning_impact(
+                           before_presets, after_presets, before_pending, after_pending, changes,
+                       ),
                        "warnings": _general_review_warnings(candidate, operations, before_validated, after_validated), "branch_warnings": [], "standalone": standalone, "before_standalone": [],
                        "inverse_revision_id": None, "inverse_source_hash": None,
                        "guided_evidence": evidence}
@@ -2433,7 +2516,7 @@ def _review_generalized_inverse(candidate, revision_id):
         result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
     presets = [{"code": code, "affected": before_presets.get(code) != after_presets.get(code),
                 "added": code not in before_presets, "removed": code not in after_presets,
-                "output_changed": (before_presets.get(code) or {}).get("report") != (after_presets.get(code) or {}).get("report"),
+                "output_changed": _report_output_changed(before_presets.get(code), after_presets.get(code)),
                 "before": before_presets.get(code), "after": after_presets.get(code)}
                for code in sorted(set(before_presets) | set(after_presets))]
     pending = _general_pending_impact(before_pending, after_pending)
@@ -2445,10 +2528,16 @@ def _review_generalized_inverse(candidate, revision_id):
             configuration_owners.append(("consistency", change["key"]["block_key"]))
     configuration_owners = list(dict.fromkeys(configuration_owners))
     quick_type_owners = [key for kind, key in configuration_owners if kind == "quick_type"]
+    consistency_owners = [key for kind, key in configuration_owners if kind == "consistency"]
     if quick_type_owners:
         import content_studio
         guided_evidence = content_studio.quick_type_generated_review_evidence(
             candidate, quick_type_owners,
+        )
+    elif consistency_owners:
+        import content_studio
+        guided_evidence = content_studio.consistency_rule_generated_review_evidence(
+            candidate, consistency_owners,
         )
     else:
         guided_evidence = None
@@ -2458,6 +2547,9 @@ def _review_generalized_inverse(candidate, revision_id):
                    before_rows, after_rows, [], candidate, owners=configuration_owners,
                ),
                "unaffected_presets": sum(not item["affected"] for item in presets), "pending_cases": pending,
+               "consistency_warning_impact": _consistency_warning_impact(
+                   before_presets, after_presets, before_pending, after_pending, inverse["changes"],
+               ),
                "validated_pending_count": len(after_pending), "warnings": _validated_reconstruction_loss_warning(before_validated, after_validated), "branch_warnings": [],
                "standalone": [], "before_standalone": [], "inverse_revision_id": revision_id,
                "inverse_source_hash": inverse["source_hash"], "guided_evidence": guided_evidence}
