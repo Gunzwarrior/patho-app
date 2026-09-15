@@ -89,13 +89,13 @@ def case_preset_reference(case_id, before_preset_id, after_preset_id):
             "before_preset_id": before_preset_id, "after_preset_id": after_preset_id}
 
 
-def review(intents, base_snapshot_hash, *, summary="", db_name=None):
+def review(intents, base_snapshot_hash, *, summary="", db_name=None, evidence_factory=None):
     """Prepare the same immutable review used by package imports and inverses."""
     if not isinstance(intents, list) or not intents:
         raise StudioIntentError("Prepare at least one Content Studio change.")
     return content_changes.review_candidate(
         copy.deepcopy(intents), base_snapshot_hash, summary=summary,
-        db_name=db_name, internal=True,
+        db_name=db_name, internal=True, evidence_factory=evidence_factory,
     )
 
 
@@ -1021,6 +1021,205 @@ def quick_type_draft_operations(preset_code, tokens, *, baseline=None, db_name=N
         return operations
     finally:
         conn.close()
+
+
+def quick_type_review_evidence(preset_code, examples):
+    """Return a candidate-only evidence factory for the CP2 frozen review.
+
+    ``examples`` is deliberately plain data captured from the guided draft.
+    The factory runs after the normal candidate graph has been materialized,
+    so both parsing and rendering use precisely the grammar that Apply will
+    install.  It has no operational connection and cannot write.
+    """
+    if not isinstance(preset_code, str) or not preset_code:
+        raise StudioIntentError("Quick Type review needs a Preset code.")
+    if not isinstance(examples, list) or any(not isinstance(x, dict) for x in examples):
+        raise StudioIntentError("Quick Type review examples are invalid.")
+    captured = copy.deepcopy(examples)
+
+    def evidence(candidate):
+        import quicktype
+        rows = []
+        for example in captured:
+            code = example.get("code")
+            if not isinstance(code, str):
+                raise StudioIntentError("Quick Type example code is invalid.")
+            preset, overrides, error = quicktype.parse_quick_type_on_connection(code, candidate)
+            positive = bool(example.get("positive"))
+            expected_preset = example.get("expected_preset")
+            label = example.get("label", "Example")
+            if positive and error is not None:
+                raise StudioIntentError(
+                    f"Quick Type example '{label}' expected successful parsing in the reviewed candidate."
+                )
+            if not positive and error is None:
+                raise StudioIntentError(
+                    f"Quick Type example '{label}' expected rejection in the reviewed candidate."
+                )
+            if (positive and expected_preset is not None
+                    and (preset is None or preset["short_code"] != expected_preset)):
+                raise StudioIntentError(
+                    f"Quick Type example '{label}' routed to the wrong Preset in the reviewed candidate."
+                )
+            item = {"label": label, "code": code, "positive": positive,
+                    "expected_preset": expected_preset, "error": error}
+            if error is None and preset is not None:
+                decoded, report = _quick_type_decoded_report(candidate, preset, overrides)
+                item["preset"] = preset["short_code"]
+                item["decoded"] = decoded
+                item["report"] = report
+            rows.append(item)
+        return {"kind": "quick_type", "preset_code": preset_code, "examples": rows}
+    return evidence
+
+
+def _quick_type_decoded_report(conn, preset, overrides):
+    """Decode and render one successful interpretation on its read connection."""
+    import database as db
+    import editor_preview
+    blocks = db.get_preset_blocks_on_connection(conn, preset["id"])
+    values, decoded = [], []
+    for block in blocks:
+        raw = overrides.get(block["sort_order"], {})
+        values.append(raw)
+        for field in block["fields"]:
+            if field["key"] in raw:
+                decoded.append({"instance_no": block["sort_order"], "block": block["name"],
+                                "field": field["label"], "field_key": field["key"],
+                                "value": raw[field["key"]]})
+    return decoded, editor_preview.render_report(conn, preset, blocks, values, strict=False)
+
+
+def quick_type_test_draft(preset_code, tokens, raw_code, *, db_name=None):
+    """Interpret one code against an unsaved draft without preparing a candidate."""
+    import quicktype
+    import database as db
+    if not isinstance(raw_code, str) or not raw_code.strip():
+        return {"code": raw_code, "error": "Enter a Quick Type code to test."}
+    conn = _connection(db_name)
+    try:
+        conn.execute("BEGIN")
+        active = db.get_all_presets_on_connection(conn)
+        preset, remainder = quicktype.find_preset_by_prefix(raw_code.strip(), active)
+        if preset is None:
+            return {"code": raw_code.strip(), "error": "No active Preset matches this code."}
+        parse_tokens = tokens if preset["short_code"] == preset_code else (
+            db.get_quick_type_tokens_on_connection(conn, preset["id"])
+        )
+        if preset["short_code"] == preset_code:
+            try:
+                quicktype.validate_quick_type_config(parse_tokens)
+            except ValueError as error:
+                return {"code": raw_code.strip(), "error": f"Draft grammar is invalid: {error}"}
+        overrides, error = quicktype.parse_tokens(remainder, parse_tokens)
+        if error is not None:
+            return {"code": raw_code.strip(), "error": f"{preset['short_code']}: {error}"}
+        decoded, report = _quick_type_decoded_report(conn, preset, overrides)
+        return {"code": raw_code.strip(), "preset": preset["short_code"],
+                "decoded": decoded, "report": report, "error": None}
+    finally:
+        conn.close()
+
+
+def quick_type_generated_examples(preset_code, tokens, active_presets):
+    """Deterministic probes for a draft, including temporarily incomplete rows.
+
+    Editing is intentionally more permissive than Prepare: an empty lookup
+    map is a normal intermediate widget state.  Such a row simply has no
+    representative positive code until the normal CP1 validator rejects it
+    at Prepare time.
+    """
+    result = [{"label": "Bare code", "code": preset_code, "positive": True,
+               "expected_preset": preset_code}]
+    def prefix_to(position, override=None):
+        suffix = ""
+        for index, token in enumerate(tokens[:position + 1]):
+            if index == position and override is not None:
+                suffix += override
+            elif token["token_kind"] == "lookup":
+                keys = sorted((token.get("lookup_table") or {}).keys())
+                if not keys:
+                    return None
+                suffix += keys[0]
+            else:
+                suffix += "1"
+        return suffix
+    for position, token in enumerate(tokens):
+        if token["token_kind"] == "lookup":
+            for key in sorted(token.get("lookup_table") or {}):
+                code = prefix_to(position, key)
+                if code is None:
+                    continue
+                result.append({"label": f"Lookup {token['field_key']}={key}",
+                               "code": preset_code + code, "positive": True,
+                               "expected_preset": preset_code})
+        else:
+            width = token.get("digit_width")
+            digits = "1" if width is None else "9" * width
+            code = prefix_to(position, digits)
+            if code is not None:
+                result.append({"label": f"Measurement {token['field_key']} boundary",
+                               "code": preset_code + code, "positive": True,
+                               "expected_preset": preset_code})
+            if width:
+                code = prefix_to(position, digits + "9")
+                if code is not None:
+                    result.append({"label": f"Measurement {token['field_key']} excess width", "code": preset_code + code, "positive": False})
+    if len({t["block_sort_order"] for t in tokens}) > 1:
+        result.append({"label": "Block rollover", "code": preset_code + _example_suffix(tokens),
+                       "positive": True, "expected_preset": preset_code})
+        result.append({"label": "Skip control !", "code": preset_code + "!" + _example_suffix(tokens, second_block=True),
+                       "positive": True, "expected_preset": preset_code})
+    result.extend([{"label": "Reserved !", "code": preset_code + _example_suffix(tokens) + "!", "positive": False},
+                   {"label": "Leftover", "code": preset_code + _example_suffix(tokens) + "?", "positive": False}])
+    for other in active_presets:
+        code = other["short_code"]
+        if code != preset_code and code.startswith(preset_code):
+            result.append({"label": "Prefix routing", "code": code, "positive": True,
+                           "expected_preset": code})
+    # retain order while avoiding duplicated strings produced by sparse drafts
+    seen = set()
+    return [row for row in result if not ((row["label"], row["code"]) in seen
+                                          or seen.add((row["label"], row["code"])))]
+
+
+def quick_type_generated_review_evidence(conn, preset_codes):
+    """Regenerate candidate-bound CP2 probes for a reviewed inverse."""
+    import database as db
+    active = db.get_all_presets_on_connection(conn)
+    by_code = {preset["short_code"]: preset for preset in active}
+    rows, tested = [], []
+    for code in sorted(set(preset_codes)):
+        preset = by_code.get(code)
+        if preset is None:
+            continue
+        tokens = db.get_quick_type_tokens_on_connection(conn, preset["id"])
+        examples = quick_type_generated_examples(code, tokens, active)
+        evidence = quick_type_review_evidence(code, examples)(conn)
+        tested.append(code)
+        rows.extend(evidence["examples"])
+    return {"kind": "quick_type", "preset_code": tested[0] if len(tested) == 1 else None,
+            "preset_codes": tested, "examples": rows}
+
+
+def _example_suffix(tokens, second_block=False):
+    blocks = []
+    for token in tokens:
+        if token["block_sort_order"] not in blocks:
+            blocks.append(token["block_sort_order"])
+    wanted = set(blocks[1:] if second_block else blocks)
+    suffix = ""
+    for token in tokens:
+        if token["block_sort_order"] not in wanted:
+            continue
+        if token["token_kind"] == "lookup":
+            keys = sorted((token.get("lookup_table") or {}).keys())
+            if not keys:
+                continue
+            suffix += keys[0]
+        else:
+            suffix += "1"
+    return suffix
 
 
 def consistency_rule_draft_operations(block_key, rules, *, baseline=None, db_name=None):

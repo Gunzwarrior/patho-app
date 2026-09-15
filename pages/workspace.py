@@ -1,3 +1,5 @@
+import math
+
 import streamlit as st
 import database as db
 import rendering
@@ -5,6 +7,8 @@ import quicktype
 import composition
 import editor_preview
 from report_presentation import restricted_report_html
+
+MAX_SAFE_WIDGET_INTEGER = 2**53 - 1
 
 CASE_SCOPED_PREFIXES = ("field_", "shared_", "wildcard_")
 CASE_SCOPED_EXACT_KEYS = (
@@ -124,6 +128,44 @@ def render_field_widget(field, widget_key, disabled):
         return st.text_input(field["label"], **kwargs)
 
 
+def _quick_type_widget_seed(field, value):
+    """Convert a semantic Quick Type override to its widget wire value.
+
+    A decimal Field deliberately uses ``text_input`` but Quick Type lookup
+    values are typed by the configuration contract (normally a float).  The
+    browser widget protocol accepts text only, so keep the semantic float in
+    parsing/rendering and seed its text widget with the equivalent display
+    string.  A Quick Type reset already creates a fresh generation, avoiding
+    a value from a former widget kind leaking into this key.
+    """
+    if field["type"] == "decimal":
+        if value is None:
+            return ""
+        normalized = rendering.normalize_decimal_widget(value)
+        if normalized is None or not math.isfinite(normalized):
+            raise ValueError(f"Quick Type value for '{field['label']}' must be a finite non-negative decimal.")
+        return rendering.format_decimal_display(normalized)
+    if field["type"] == "number":
+        if isinstance(value, bool):
+            raise ValueError(f"Quick Type value for '{field['label']}' must be a non-negative whole number.")
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError(f"Quick Type value for '{field['label']}' must be a non-negative whole number.") from None
+        if normalized < 0 or normalized > MAX_SAFE_WIDGET_INTEGER:
+            raise ValueError(f"Quick Type value for '{field['label']}' exceeds the safe whole-number range.")
+        return normalized
+    if field["type"] == "checkbox":
+        if type(value) is not bool:
+            raise ValueError(f"Quick Type value for '{field['label']}' must be true or false.")
+        return value
+    if field["type"] == "select" and value not in (field.get("options") or []):
+        raise ValueError(f"Quick Type value for '{field['label']}' is no longer an available selection.")
+    if field["type"] == "text" and not isinstance(value, str):
+        raise ValueError(f"Quick Type value for '{field['label']}' must be text.")
+    return value
+
+
 def _clear_case_scoped_state():
     """
     Clears everything scoped to "the case currently on screen" and bumps
@@ -176,8 +218,10 @@ def _handle_quick_type_submit():
         # scratch.
         st.session_state["_quicktype_error"] = f"⚠️ {qt_error}"
     else:
-        st.session_state["_pending_quicktype_preset_id"] = qt_preset["id"]
-        st.session_state["_pending_quicktype_overrides"] = qt_overrides
+        # Queue the source text, never its interpretation. The next rerun
+        # re-parses it on one current content snapshot before changing any
+        # Workspace state.
+        st.session_state["_pending_quicktype_code"] = raw
         st.session_state["_do_quick_type_apply"] = True
 
 
@@ -328,39 +372,65 @@ if st.session_state.pop("_do_case_reopen", False):
 # purpose is exactly the _form_generation-scoped-key bug pattern already
 # hit before.
 if st.session_state.pop("_do_quick_type_apply", False):
-    _qt_preset_id = st.session_state.pop("_pending_quicktype_preset_id", None)
-    _qt_overrides = st.session_state.pop("_pending_quicktype_overrides", {})
-    _qt_old_gen = st.session_state.get("_form_generation", 0)
-    _qt_preserved_case_id = st.session_state.get(f"case_id_{_qt_old_gen}", "")
-    _clear_case_scoped_state()
-    _qt_new_gen = st.session_state["_form_generation"]
-    st.session_state[f"case_id_{_qt_new_gen}"] = _qt_preserved_case_id
-
-    _qt_preset = db.get_preset_by_id(_qt_preset_id) if _qt_preset_id else None
-    if not _qt_preset:
-        st.session_state["_quicktype_error"] = "⚠️ Quick Type code resolved to a preset that no longer exists."
+    _qt_raw_code = st.session_state.pop("_pending_quicktype_code", None)
+    # Retire payloads from pre-remediation sessions without ever trusting
+    # their decoded values against a newer grammar.
+    st.session_state.pop("_pending_quicktype_preset_id", None)
+    st.session_state.pop("_pending_quicktype_overrides", None)
+    if not isinstance(_qt_raw_code, str) or not _qt_raw_code.strip():
+        st.session_state["_quicktype_error"] = "⚠️ Quick Type application expired; enter the code again."
     else:
-        st.session_state["preset_select"] = _qt_preset["id"]
-        # Set alongside preset_select, same as the case-reopen block above --
-        # prevents the preset-switch-change watcher further down from seeing
-        # this as a fresh change and scheduling a second, unwanted reset.
-        st.session_state["_last_selected_preset_id"] = _qt_preset["id"]
-
-        _qt_summary_parts = [_qt_preset["short_code"]]
-        _qt_preset_blocks = db.get_preset_blocks(_qt_preset["id"])
-        _qt_blocks = resolve_case_blocks(
-            _qt_preset_blocks, composition.derive_block_instances(_qt_preset_blocks)
-        )
-        for _qt_block in _qt_blocks:
-            _qt_block_overrides = _qt_overrides.get(_qt_block["sort_order"], {})
-            for _qt_field in _qt_block["fields"]:
-                if _qt_field["key"] in _qt_block_overrides:
-                    _qt_raw_value = _qt_block_overrides[_qt_field["key"]]
-                    st.session_state[
-                        f"field_{_qt_block['block_id']}_{_qt_block['instance_no']}_{_qt_field['key']}_{_qt_new_gen}"
-                    ] = _qt_raw_value
-                    _qt_summary_parts.append(f"{_qt_field['label']}={_qt_raw_value}")
-        st.session_state["_quicktype_success"] = "✅ " + " ; ".join(_qt_summary_parts)
+        _qt_conn = db.get_db_connection()
+        try:
+            # BEGIN pins all grammar, endpoint and resolved-default reads to
+            # one SQLite snapshot. A code queued under an older grammar is
+            # therefore interpreted only by the grammar current at apply.
+            _qt_conn.execute("BEGIN")
+            _qt_preset, _qt_overrides, _qt_parse_error = (
+                quicktype.parse_quick_type_on_connection(_qt_raw_code, _qt_conn)
+            )
+            if _qt_parse_error is not None:
+                raise ValueError(_qt_parse_error)
+            _qt_summary_parts = [_qt_preset["short_code"]]
+            _qt_preset_blocks = db.get_preset_blocks_on_connection(
+                _qt_conn, _qt_preset["id"]
+            )
+            _qt_blocks = resolve_case_blocks(
+                _qt_preset_blocks, composition.derive_block_instances(_qt_preset_blocks)
+            )
+            # Convert the complete parse before retiring current Workspace
+            # state. One invalid value therefore applies nothing.
+            _qt_seed_plan = []
+            for _qt_block in _qt_blocks:
+                _qt_block_overrides = _qt_overrides.get(_qt_block["sort_order"], {})
+                for _qt_field in _qt_block["fields"]:
+                    if _qt_field["key"] in _qt_block_overrides:
+                        _qt_raw_value = _qt_block_overrides[_qt_field["key"]]
+                        _qt_seed_plan.append((
+                            _qt_block["block_id"], _qt_block["instance_no"], _qt_field["key"],
+                            _quick_type_widget_seed(_qt_field, _qt_raw_value),
+                        ))
+                        _qt_summary_parts.append(f"{_qt_field['label']}={_qt_raw_value}")
+        except (TypeError, ValueError, OverflowError) as error:
+            st.session_state["_quicktype_error"] = f"⚠️ {error}"
+        else:
+            _qt_old_gen = st.session_state.get("_form_generation", 0)
+            _qt_preserved_case_id = st.session_state.get(f"case_id_{_qt_old_gen}", "")
+            _clear_case_scoped_state()
+            _qt_new_gen = st.session_state["_form_generation"]
+            st.session_state[f"case_id_{_qt_new_gen}"] = _qt_preserved_case_id
+            st.session_state["preset_select"] = _qt_preset["id"]
+            # Set alongside preset_select, same as the case-reopen block above --
+            # prevents the preset-switch-change watcher further down from seeing
+            # this as a fresh change and scheduling a second, unwanted reset.
+            st.session_state["_last_selected_preset_id"] = _qt_preset["id"]
+            for _qt_block_id, _qt_instance_no, _qt_field_key, _qt_seed in _qt_seed_plan:
+                st.session_state[
+                    f"field_{_qt_block_id}_{_qt_instance_no}_{_qt_field_key}_{_qt_new_gen}"
+                ] = _qt_seed
+            st.session_state["_quicktype_success"] = "✅ " + " ; ".join(_qt_summary_parts)
+        finally:
+            _qt_conn.close()
 
 # Must run before any field widget below is instantiated. See
 # _preserve_fields_for_composition() for why composition's explicit rerun

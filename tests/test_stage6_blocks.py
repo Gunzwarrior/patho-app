@@ -389,8 +389,8 @@ def test_review_boundary_stale_refusal_reloads_the_ui_draft(mutable_db, monkeypa
     assert app.text_area(key=f"{reloaded_token}_micro").value == "Concurrent boundary microscopy."
 
 
-def test_edit_to_duplicate_transition_keeps_widgets_and_baseline_on_one_generation(mutable_db):
-    """Changing action cannot bless retained Edit widgets with a newer baseline."""
+def test_edit_to_duplicate_transition_reloads_stale_source_before_prepare(mutable_db):
+    """A source change retires Edit widgets; Duplicate starts coherently."""
     _unlock()
     app = AppTest.from_file("pages/editor.py").run()
     app.radio(key="editor_studio_kind").set_value("Blocks").run()
@@ -409,19 +409,19 @@ def test_edit_to_duplicate_transition_keeps_widgets_and_baseline_on_one_generati
         conn.close()
 
     app.radio(key="editor_studio_block_action").set_value("Duplicate existing Block").run()
-    # The action changed, but these widgets intentionally remain the original
-    # loaded draft until preparation detects staleness and reloads all of it.
-    assert app.checkbox(key=f"{stale_token}_fragments_label_mode").value is False
-    app.text_input(key=f"{stale_token}_new_key").set_value("antrum_stale_transition")
-    app.text_input(key=f"{stale_token}_name").set_value("Antrum stale transition")
-    next(button for button in app.button if button.label == "Prepare Block review").click().run()
-
-    assert not app.exception
-    assert "_editor_studio_review" not in app.session_state.filtered_state
-    assert not any(row["key"] == "antrum_stale_transition" for row in database.get_all_editor_blocks())
+    # Freshness policy supersedes delayed Prepare-time recovery: stale Edit
+    # keys are gone, and the new generation reads the authoritative source.
+    assert f"{stale_token}_fragments_label_mode" not in {widget.key for widget in app.checkbox}
     reloaded_token = "editor_studio_block_antrum_1"
     assert app.checkbox(key=f"{reloaded_token}_fragments_label_mode").value is True
     assert app.text_input(key=f"{reloaded_token}_fragments_label").value == "Concurrent duplicate label"
+    app.text_input(key=f"{reloaded_token}_new_key").set_value("antrum_stale_transition")
+    app.text_input(key=f"{reloaded_token}_name").set_value("Antrum stale transition")
+    next(button for button in app.button if button.label == "Prepare Block review").click().run()
+
+    assert not app.exception
+    assert "_editor_studio_review" in app.session_state.filtered_state
+    assert not any(row["key"] == "antrum_stale_transition" for row in database.get_all_editor_blocks())
 
 
 def test_stale_block_binding_widgets_reload_without_manufacturing_a_rollback(mutable_db):

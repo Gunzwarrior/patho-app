@@ -60,6 +60,20 @@ def test_content_studio_shell_has_no_legacy_immediate_save_path(mutable_db):
     assert app.radio(key="editor_studio_filter").value == "Active"
 
 
+def test_field_draft_survives_navigation_when_its_source_is_unchanged(mutable_db):
+    app = _app(mutable_db)
+    field = _select_field(app, "appendicite_type")
+    label = next(widget for widget in app.text_input if widget.label == "Label")
+    label.set_value("Navigation-only Field draft").run()
+    app.radio(key="editor_section").set_value("Recent revisions").run()
+    app.radio(key="editor_section").set_value("Content Studio").run()
+    assert not app.exception
+    assert app.radio(key="editor_studio_kind").value == "Fields"
+    assert next(widget for widget in app.text_input if widget.label == "Label").value == "Navigation-only Field draft"
+    assert database.get_all_fields()[next(i for i, row in enumerate(database.get_all_fields())
+                                           if row["id"] == field["id"])]["label"] != "Navigation-only Field draft"
+
+
 def test_editor_has_no_reachable_or_embedded_direct_save_writer():
     """Stage 6 deliberately has one UI writer: reviewed candidate Apply."""
     source = open("pages/editor.py", encoding="utf-8").read()
@@ -146,7 +160,10 @@ def test_field_stale_draft_before_prepare_refuses_untouched_old_value(mutable_db
                                            if row["key"] == field["key"])]["label"] == "Concurrent Field label"
     assert next(widget for widget in app.text_input if widget.label == "Label").value == "Concurrent Field label"
     assert old_label != "Concurrent Field label"
-    assert any("changed since the draft was loaded" in item.value for item in app.error)
+    # Returning to a source-bound form now retires the obsolete generation
+    # before Prepare, rather than leaving a stale draft visible until CP1
+    # refuses it at review time.
+    assert not app.error
 
 
 def test_snippet_stale_draft_before_prepare_refuses_untouched_old_value(mutable_db):
@@ -163,7 +180,7 @@ def test_snippet_stale_draft_before_prepare_refuses_untouched_old_value(mutable_
     assert "_editor_studio_review" not in app.session_state.filtered_state
     assert database.get_snippet_by_shortcut(snippet["shortcut"])["expansion"] == "Concurrent snippet expansion"
     assert next(widget for widget in app.text_area if widget.label == "Expansion").value == "Concurrent snippet expansion"
-    assert any("changed since the draft was loaded" in item.value for item in app.error)
+    assert not app.error
 
 
 def test_group_label_stale_draft_before_prepare_refuses_untouched_old_value(mutable_db):
@@ -181,7 +198,7 @@ def test_group_label_stale_draft_before_prepare_refuses_untouched_old_value(muta
     assert next(row for row in database.get_all_conclusion_group_labels()
                 if row["block_key_set"] == group["block_key_set"])["combined_label"] == "Concurrent group label"
     assert next(widget for widget in app.text_input if widget.label == "Combined conclusion label").value == "Concurrent group label"
-    assert any("changed since the draft was loaded" in item.value for item in app.error)
+    assert not app.error
 
 
 def test_field_type_change_rebuilds_typed_default_before_creation(mutable_db):

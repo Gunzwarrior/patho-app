@@ -639,10 +639,13 @@ def _general_review_warnings(conn, operations, before_validated, after_validated
     return warnings + _validated_reconstruction_loss_warning(before_validated, after_validated)
 
 
-def _configuration_review_evidence(before_rows, after_rows, operations, conn):
+def _configuration_review_evidence(before_rows, after_rows, operations, conn, *, owners=()):
     """Small, signed CP1 evidence for complete-set configuration drafts."""
-    owners = [(operation["kind"], operation["owner_key"]) for operation in operations
-              if operation.get("op") == _GENERAL_CONFIGURATION_ASSERTION]
+    owners = list(dict.fromkeys(
+        [(operation["kind"], operation["owner_key"]) for operation in operations
+         if operation.get("op") == _GENERAL_CONFIGURATION_ASSERTION]
+        + list(owners)
+    ))
 
     def image(rows, kind, owner_key):
         if kind == "quick_type":
@@ -782,10 +785,11 @@ def _review_on_connection(candidate, operations, base_hash, *, package_hash=None
 
 
 def review_candidate(operations, base_hash, *, package_hash=None, summary="", db_name=None,
-                     internal=False):
+                     internal=False, evidence_factory=None):
     """One SQLite backup, one private memory candidate, no live write transaction."""
     if internal:
-        return _review_generalized_candidate(operations, base_hash, summary=summary, db_name=db_name)
+        return _review_generalized_candidate(operations, base_hash, summary=summary, db_name=db_name,
+                                             evidence_factory=evidence_factory)
     operations = _checked_operations(operations)
     try:
         with _candidate_copy(db_name) as candidate:
@@ -2127,7 +2131,8 @@ def _validate_general_assertions(conn, operations):
             raise StaleDraftReviewError(str(error)) from None
 
 
-def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=None):
+def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=None,
+                                  evidence_factory=None):
     operations = _general_normalize(operations)
     try:
         with _candidate_copy(db_name) as candidate:
@@ -2176,13 +2181,20 @@ def _review_generalized_candidate(operations, base_hash, *, summary="", db_name=
                                 "output_changed": (before or {}).get("report") != (after or {}).get("report"),
                                 "before": before, "after": after})
             pending = _general_pending_impact(before_pending, after_pending)
+            evidence = evidence_factory(candidate) if evidence_factory is not None else None
+            # Evidence is calculated only after final-graph validation on the
+            # private candidate and is serialized into the issued review.
+            # It is therefore frozen alongside the exact operations it shows.
+            if evidence is not None and not isinstance(evidence, dict):
+                raise ChangeError("Content Studio review evidence is invalid.")
             payload = {"engine": "generalized_v1", "summary": summary, "operations": operations,
                        "changes": changes, "case_references": refs, "presets": presets,
                        "configuration_review": _configuration_review_evidence(before_rows, after_rows, operations, candidate),
                        "unaffected_presets": sum(not item["affected"] for item in presets),
                        "pending_cases": pending, "validated_pending_count": len(after_pending),
                        "warnings": _general_review_warnings(candidate, operations, before_validated, after_validated), "branch_warnings": [], "standalone": standalone, "before_standalone": [],
-                       "inverse_revision_id": None, "inverse_source_hash": None}
+                       "inverse_revision_id": None, "inverse_source_hash": None,
+                       "guided_evidence": evidence}
             return _issued_review(None, base_hash, result_hash, guard, contract.canonical_json(payload))
     except (ChangeError, contract.PackageError):
         raise
@@ -2403,6 +2415,7 @@ def _review_generalized_inverse(candidate, revision_id):
     base_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
     guard = local_review_guard(candidate)
     with _access_scope(candidate):
+        before_rows = _general_rows(candidate)
         before_presets, before_pending = _capture(candidate)
         before_validated = _validated_reconstructability(candidate)
         _check_general_pending_removals(candidate, inverse["changes"])
@@ -2414,6 +2427,7 @@ def _review_generalized_inverse(candidate, revision_id):
         _general_apply_case_references(candidate, inverse["references"], attaching=True, inverse=True)
     with _access_scope(candidate):
         _validate_general_final_graph(candidate)
+        after_rows = _general_rows(candidate)
         after_presets, after_pending = _capture(candidate, candidate=True)
         after_validated = _validated_reconstructability(candidate)
         result_hash = content_snapshot.content_snapshot_hash(content_snapshot.snapshot_from_connection(candidate))
@@ -2423,10 +2437,28 @@ def _review_generalized_inverse(candidate, revision_id):
                 "before": before_presets.get(code), "after": after_presets.get(code)}
                for code in sorted(set(before_presets) | set(after_presets))]
     pending = _general_pending_impact(before_pending, after_pending)
+    configuration_owners = []
+    for change in inverse["changes"]:
+        if change["table"] == "Quick_Type_Tokens":
+            configuration_owners.append(("quick_type", change["key"]["preset_code"]))
+        elif change["table"] == "Field_Consistency_Rules":
+            configuration_owners.append(("consistency", change["key"]["block_key"]))
+    configuration_owners = list(dict.fromkeys(configuration_owners))
+    quick_type_owners = [key for kind, key in configuration_owners if kind == "quick_type"]
+    if quick_type_owners:
+        import content_studio
+        guided_evidence = content_studio.quick_type_generated_review_evidence(
+            candidate, quick_type_owners,
+        )
+    else:
+        guided_evidence = None
     payload = {"engine": "generalized_v1", "summary": f"Reverted revision {revision_id}", "operations": [],
                "changes": inverse["changes"], "case_references": inverse["references"], "presets": presets,
+               "configuration_review": _configuration_review_evidence(
+                   before_rows, after_rows, [], candidate, owners=configuration_owners,
+               ),
                "unaffected_presets": sum(not item["affected"] for item in presets), "pending_cases": pending,
                "validated_pending_count": len(after_pending), "warnings": _validated_reconstruction_loss_warning(before_validated, after_validated), "branch_warnings": [],
                "standalone": [], "before_standalone": [], "inverse_revision_id": revision_id,
-               "inverse_source_hash": inverse["source_hash"]}
+               "inverse_source_hash": inverse["source_hash"], "guided_evidence": guided_evidence}
     return _issued_review(None, base_hash, result_hash, guard, contract.canonical_json(payload))

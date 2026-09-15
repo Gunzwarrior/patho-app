@@ -128,6 +128,117 @@ def test_package_decimal_zero_preview_matches_fresh_workspace(mutable_db):
     assert app.text_area(key=f"final_micro_edit_{generation}").value == expected["micro_plain"]
 
 
+def test_applied_decimal_lookup_quick_type_seeds_workspace_text_widget_as_text(mutable_db):
+    """A typed lookup value must not be placed directly in text_input state."""
+    dai = next(preset for preset in db_module.get_all_presets() if preset["short_code"] == "dai")
+    app = AppTest.from_file("pages/workspace.py").run()
+    # Start with the existing measurement grammar, then replace it with a
+    # lookup grammar in the same browser session.  This catches a stale
+    # generation/widget-type value surviving the Quick Type reset.
+    app.text_input(key="qt_input_0").set_value("dai37").run()
+    assert not app.exception
+    assert app.session_state["_form_generation"] == 1
+    desired = db_module.get_quick_type_tokens(dai["id"])
+    desired[1] = {**desired[1], "token_kind": "lookup", "lookup_table": {"x": 7.5}, "digit_width": None}
+    baseline = content_studio.configuration_draft_baseline("quick_type", "dai")
+    intents = content_studio.quick_type_draft_operations("dai", desired, baseline=baseline)
+    content_editing.record_initial_snapshot("a" * 64)
+    review = content_studio.review(intents, _snapshot_hash(mutable_db), summary="decimal lookup")
+    content_changes.apply_review(review)
+
+    app.text_input(key="qt_input_1").set_value("dai3x").run()
+    assert not app.exception
+    generation = app.session_state["_form_generation"]
+    block = db_module.get_preset_blocks(dai["id"])[0]
+    widget_key = f"field_{block['block_id']}_{block['sort_order']}_appendix_size_cm_{generation}"
+    assert app.text_input(key=widget_key).value == "7.5"
+
+
+def test_unlimited_decimal_quick_type_overflow_is_atomic_and_visible(mutable_db):
+    dai = next(preset for preset in db_module.get_all_presets() if preset["short_code"] == "dai")
+    desired = db_module.get_quick_type_tokens(dai["id"])
+    desired[1] = {**desired[1], "digit_width": None}
+    baseline = content_studio.configuration_draft_baseline("quick_type", "dai")
+    intents = content_studio.quick_type_draft_operations("dai", desired, baseline=baseline)
+    content_editing.record_initial_snapshot("a" * 64)
+    review = content_studio.review(
+        intents, _snapshot_hash(mutable_db), summary="Unlimited decimal measurement",
+    )
+    content_changes.apply_review(review)
+
+    app = AppTest.from_file("pages/workspace.py").run()
+    app.text_input(key="case_id_0").set_value("KEEP-THIS-DRAFT").run()
+    app.text_input(key="qt_input_0").set_value("dai3" + "9" * 400).run()
+
+    assert not app.exception
+    assert app.session_state.filtered_state.get("_form_generation", 0) == 0
+    assert app.text_input(key="case_id_0").value == "KEEP-THIS-DRAFT"
+    assert any("finite" in item.value.lower() for item in app.error)
+    assert not any("✅ dai" in item.value for item in app.success)
+
+
+def test_unlimited_decimal_quick_type_accepts_an_ordinary_measurement(mutable_db):
+    dai = next(preset for preset in db_module.get_all_presets() if preset["short_code"] == "dai")
+    desired = db_module.get_quick_type_tokens(dai["id"])
+    desired[1] = {**desired[1], "digit_width": None}
+    baseline = content_studio.configuration_draft_baseline("quick_type", "dai")
+    intents = content_studio.quick_type_draft_operations("dai", desired, baseline=baseline)
+    content_editing.record_initial_snapshot("a" * 64)
+    review = content_studio.review(
+        intents, _snapshot_hash(mutable_db), summary="Unlimited decimal measurement",
+    )
+    content_changes.apply_review(review)
+
+    app = AppTest.from_file("pages/workspace.py").run()
+    app.text_input(key="qt_input_0").set_value("dai312345").run()
+    assert not app.exception
+    assert app.session_state["_form_generation"] == 1
+    block = db_module.get_preset_blocks(dai["id"])[0]
+    widget_key = f"field_{block['block_id']}_{block['sort_order']}_appendix_size_cm_1"
+    assert app.text_input(key=widget_key).value == "12345"
+
+
+def test_queued_quick_type_code_is_reparsed_after_grammar_change(mutable_db):
+    """A queued code must not carry decoded values across a content change."""
+    dai = next(preset for preset in db_module.get_all_presets()
+               if preset["short_code"] == "dai")
+    app = AppTest.from_file("pages/workspace.py").run()
+    app.text_input(key="case_id_0").set_value("KEEP-CURRENT-CASE").run()
+    # This is the callback/application boundary: dai3 was accepted while the
+    # original grammar mapped 3 to appendicite_type=periappendicite.
+    app.session_state["_pending_quicktype_code"] = "dai3"
+    app.session_state["_pending_quicktype_preset_id"] = dai["id"]
+    app.session_state["_pending_quicktype_overrides"] = {
+        0: {"appendicite_type": "periappendicite"},
+    }
+    app.session_state["_do_quick_type_apply"] = True
+
+    desired = db_module.get_quick_type_tokens(dai["id"])
+    desired[0] = {
+        **desired[0], "field_key": "false_membranes",
+        "lookup_table": {"3": True},
+    }
+    baseline = content_studio.configuration_draft_baseline("quick_type", "dai")
+    content_editing.record_initial_snapshot("a" * 64)
+    review = content_studio.review(
+        content_studio.quick_type_draft_operations(
+            "dai", desired, baseline=baseline,
+        ),
+        _snapshot_hash(mutable_db), summary="Retarget queued code",
+    )
+    content_changes.apply_review(review)
+
+    app.run()
+    assert not app.exception
+    assert app.session_state["_form_generation"] == 1
+    block = db_module.get_preset_blocks(dai["id"])[0]
+    checkbox_key = f"field_{block['block_id']}_{block['sort_order']}_false_membranes_1"
+    type_key = f"field_{block['block_id']}_{block['sort_order']}_appendicite_type_1"
+    assert app.checkbox(key=checkbox_key).value is True
+    assert app.selectbox(key=type_key).value != "periappendicite"
+    assert app.text_input(key="case_id_1").value == "KEEP-CURRENT-CASE"
+
+
 @pytest.mark.parametrize("action", ["compose_up_1", "compose_down_0", "compose_remove_1", "compose_add"])
 def test_reopened_composition_keeps_its_layout_position_after_first_edit(mutable_workspace, action):
     """A disappearing reopen notice must not remount the unkeyed expander.

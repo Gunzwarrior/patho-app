@@ -11,6 +11,7 @@ import change_packages
 import content_studio
 import database as db
 import composition
+import quicktype
 from editor_preview import render_preset_defaults
 from report_presentation import restricted_report_html
 
@@ -135,7 +136,7 @@ def _show_operations(review):
     operations = [operation for operation in review.operations
                   if operation.get("op") not in {"assert_block_draft", "assert_field_endpoints",
                                                    "assert_preset_draft", "assert_preset_endpoints",
-                                                   "assert_source_draft"}]
+                                                   "assert_source_draft", "assert_configuration_draft"}]
     st.subheader(f"Normalized operations ({len(operations)})", anchor=False)
     for position, operation in enumerate(operations, 1):
         if operation.get("op") == "case_preset_reference":
@@ -196,6 +197,47 @@ def _show_changes(review):
                 ))
                 st.caption(f"Readable diff — {column}")
                 st.code(diff or "(value changed)", language="diff")
+
+
+def _show_configuration_review(data):
+    """Render the complete signed configuration image, not only its delta."""
+    configuration = data.get("configuration_review") or {}
+    before = configuration.get("before") or []
+    after = configuration.get("after") or []
+    if not before and not after:
+        return
+    st.subheader("Complete configuration", anchor=False)
+    before_col, after_col = st.columns(2)
+    for column, heading, rows in (
+        (before_col, "Current grammar", before),
+        (after_col, "Reviewed candidate grammar", after),
+    ):
+        with column:
+            st.markdown(f"**{heading}**")
+            st.code(json.dumps(rows, ensure_ascii=False, indent=2), language="json")
+    findings = configuration.get("findings") or {}
+    for error in findings.get("reachability_errors", []):
+        st.error(error)
+    for warning in findings.get("reachability_warnings", []):
+        st.warning(warning)
+
+
+def _show_guided_evidence(data):
+    """Show candidate-bound interpretations before any approval controls."""
+    evidence = data.get("guided_evidence")
+    if not evidence or evidence.get("kind") != "quick_type":
+        return
+    st.subheader("Frozen Quick Type interpretations", anchor=False)
+    for item in evidence.get("examples", []):
+        with st.expander(f"{item['label']}: {item['code']}"):
+            expected = "successful parse" if item["positive"] else "rejection"
+            actual = "rejected" if item["error"] else f"routed to {item.get('preset')}"
+            st.caption(f"Expected: {expected} · Actual: {actual}")
+            if item["error"]:
+                st.info(item["error"])
+            else:
+                _show_rows(item.get("decoded", []), "Bare code: no field overrides.")
+                _show_report(item.get("report"), "Production-path report")
 
 
 def _show_review_reports(review, key_prefix):
@@ -267,6 +309,8 @@ def _show_full_review(review, key_prefix):
     for warning in data.get("branch_warnings", []):
         with st.expander("Candidate branch warning"):
             _show_mapping(warning)
+    _show_configuration_review(data)
+    _show_guided_evidence(data)
     _show_operations(review)
     _show_changes(review)
     _show_review_reports(review, key_prefix)
@@ -311,17 +355,74 @@ def _clear_studio_review():
     _clear_confirmation_widgets("editor_studio_review_")
 
 
+def _advance_studio_draft_generation():
+    """Retire every guided-form widget identity after a content write."""
+    _clear_studio_review()
+    st.session_state.pop("_editor_studio_widget_stash", None)
+    st.session_state["_editor_studio_form_generation"] = (
+        st.session_state.get("_editor_studio_form_generation", 0) + 1
+    )
+
+
+def _stash_studio_widget_state():
+    """Preserve unsubmitted guided form values across ordinary navigation.
+
+    Streamlit prunes widget-owned keys after a run where the corresponding
+    branch is not rendered.  Quick Type and Presets already have explicit
+    draft objects, but the older guided forms deliberately use normal form
+    widgets.  Snapshot those widget values before branch selection can hide
+    them; restoration happens before any editor widget is instantiated.
+    """
+    button_suffixes = ("_archive", "_restore", "_delete", "_up", "_down", "_add", "_remove")
+    state = {
+        key: value for key, value in st.session_state.items()
+        if key.startswith("editor_studio_") and not key.endswith(button_suffixes)
+    }
+    if state:
+        st.session_state["_editor_studio_widget_stash"] = state
+
+
+def _restore_studio_widget_state():
+    """Re-seed navigated-away guided widgets with their unchanged draft."""
+    button_suffixes = ("_archive", "_restore", "_delete", "_up", "_down", "_add", "_remove")
+    for key, value in st.session_state.get("_editor_studio_widget_stash", {}).items():
+        # This executes before the page constructs editor widgets.  Do not
+        # overwrite live current-run state (notably a click/change callback).
+        if not key.endswith(button_suffixes) and key not in st.session_state:
+            st.session_state[key] = value
+
+
+def _current_studio_baseline(state_key, current):
+    """Keep navigation-persistent drafts only while their source is exact.
+
+    Each guided editor already captures a physical CP1/Stage 6 source
+    baseline for candidate protection.  Recheck that same identity on a later
+    render rather than waiting for Prepare to discover an obsolete local
+    draft.  The generation change gives every form control fresh keys, while
+    navigation with an unchanged source retains its local values.
+    """
+    previous = st.session_state.get(state_key)
+    if previous is None:
+        st.session_state[state_key] = current
+        return current
+    if previous != current:
+        _advance_studio_draft_generation()
+        st.rerun()
+    return previous
+
+
 def _studio_signature(kind, target, values):
     return json.dumps({"kind": kind, "target": target, "values": values},
                       ensure_ascii=False, sort_keys=True, default=str)
 
 
-def _prepare_studio_review(intents, signature, summary):
+def _prepare_studio_review(intents, signature, summary, *, evidence_factory=None):
     _clear_studio_review()
     try:
         snapshot = content_snapshot.export_content_snapshot()
         review = content_studio.review(
             intents, content_snapshot.content_snapshot_hash(snapshot), summary=summary,
+            evidence_factory=evidence_factory,
         )
     except (content_studio.StudioIntentError, content_changes.ChangeError,
             content_editing.ContentEditError, change_packages.PackageError) as error:
@@ -392,10 +493,7 @@ def _show_studio_review(signature, writes_enabled):
             _clear_studio_review()
             st.session_state["_editor_error"] = f"Not applied: {error}"
         else:
-            _clear_studio_review()
-            st.session_state["_editor_studio_form_generation"] = (
-                st.session_state.get("_editor_studio_form_generation", 0) + 1
-            )
+            _advance_studio_draft_generation()
             st.session_state["_editor_message"] = f"Applied as content revision {revision_id}."
         st.rerun()
     return True
@@ -412,9 +510,9 @@ def _filter_rows(rows, mode):
 def _simple_source_baseline(table, key, generation):
     """Keep a simple form bound to the exact row it originally loaded."""
     state_key = f"_editor_studio_source_baseline_{table}_{key}_{generation}"
-    if state_key not in st.session_state:
-        st.session_state[state_key] = content_studio.source_draft_baseline(table, key)
-    return st.session_state[state_key]
+    return _current_studio_baseline(
+        state_key, content_studio.source_draft_baseline(table, key)
+    )
 
 
 def _entity_caption(row, key_name, label_name):
@@ -447,6 +545,217 @@ def _field_default_widget(field_type, options, value, key, *, label="Default val
         return st.number_input(label, min_value=0.0, value=current,
                                key=key, help="Use a non-negative decimal.")
     return st.text_input(label, "" if value is None else str(value), key=key)
+
+
+def _quick_type_mapping_draft(items):
+    """Give each mapping row a stable identity within its token draft."""
+    result = []
+    for index, item in enumerate(items or []):
+        if isinstance(item, dict) and {"uid", "key", "value"} <= set(item):
+            result.append({name: item[name] for name in ("uid", "key", "value")})
+        else:
+            key, value = item
+            result.append({"uid": f"saved-{index}", "key": key, "value": value})
+    return result
+
+
+def _quick_type_lookup_table(mapping_rows):
+    """Validate row identity semantics before converting rows to a mapping."""
+    seen = set()
+    for row in mapping_rows:
+        key = row["key"]
+        if key and key in seen:
+            raise content_studio.StudioIntentError(
+                f"Duplicate lookup key '{key}' must be removed or changed before Prepare."
+            )
+        if key:
+            seen.add(key)
+    return {row["key"]: row["value"] for row in mapping_rows}
+
+
+def _quick_type_studio(writes_enabled):
+    """CP2's draft-only Quick Type form.  All persistence remains in CP1."""
+    presets = db.get_all_presets()
+    st.subheader("Guided Quick Type Studio", anchor=False)
+    st.caption("This editor changes only a local complete token-list draft. Prepare freezes a reviewed candidate; Apply is the only writer.")
+    if not presets:
+        st.info("No active Preset is available."); return
+    by_code = {p["short_code"]: p for p in presets}
+    selected = st.selectbox("Active Preset", list(by_code), format_func=lambda c: _preset_label(by_code[c]),
+                            key="editor_quick_type_preset", on_change=_clear_studio_review)
+    preset = by_code[selected]
+    generation = st.session_state.get("_editor_studio_form_generation", 0)
+    widget_scope = f"editor_qt_{selected}_{generation}"
+    draft_key = f"_editor_qt_draft_{selected}_{generation}"
+    baseline_key = f"_editor_qt_baseline_{selected}_{generation}"
+    uid_key = f"_editor_qt_next_uid_{selected}_{generation}"
+    current_baseline = content_studio.configuration_draft_baseline("quick_type", selected)
+    if baseline_key in st.session_state:
+        _current_studio_baseline(baseline_key, current_baseline)
+    if draft_key not in st.session_state:
+        st.session_state[draft_key] = [
+            {**row, "uid": f"saved-{row['sort_order']}",
+             "mappings": _quick_type_mapping_draft(list((row.get("lookup_table") or {}).items())),
+             "next_mapping_uid": len(row.get("lookup_table") or {})}
+            for row in db.get_quick_type_tokens(preset["id"])
+        ]
+        st.session_state[baseline_key] = current_baseline
+        st.session_state[uid_key] = len(st.session_state[draft_key])
+    draft = st.session_state[draft_key]
+    blocks = [b for b in db.get_preset_blocks(preset["id"]) if not b.get("is_table")]
+    targets = {b["sort_order"]: b for b in blocks}
+    if _show_studio_review(_studio_signature("quick-type", selected, {"draft": draft}), writes_enabled):
+        return
+    if not targets:
+        st.warning("This Preset has no active non-table Block instances."); return
+    if st.button("Add Quick Type token", key=f"{widget_scope}_add"):
+        first_block = next(iter(targets))
+        first_field = targets[first_block]["fields"][0] if targets[first_block]["fields"] else None
+        if first_field is None: st.error("No active bound Field is available.")
+        else:
+            uid_number = st.session_state[uid_key]
+            st.session_state[uid_key] = uid_number + 1
+            draft.append({"uid": f"new-{uid_number}",
+                          "block_sort_order": first_block, "field_key": first_field["key"], "token_kind": "lookup",
+                          "lookup_table": {"x": first_field.get("value")}, "digit_width": None,
+                          "mappings": [{"uid": "new-0", "key": "x", "value": first_field.get("value")}],
+                          "next_mapping_uid": 1})
+            _clear_studio_review(); st.rerun()
+    normalized = []
+    draft_errors = []
+    for index, row in enumerate(draft):
+        uid = row["uid"]
+        token_widget = f"{widget_scope}_token_{uid}"
+        target_options = list(targets)
+        current_target = row["block_sort_order"] if row["block_sort_order"] in targets else target_options[0]
+        with st.expander(f"{index + 1}. Token", expanded=True):
+            block_no = st.selectbox("Target Block instance", target_options, index=target_options.index(current_target),
+                                    format_func=lambda n: f"{targets[n]['name']} — instance #{n} (display position shown in report order)",
+                                    key=f"{token_widget}_block", on_change=_clear_studio_review)
+            fields = targets[block_no]["fields"]; field_by_key = {f["key"]: f for f in fields}
+            if not fields: st.error("This Block instance has no active Fields."); continue
+            field_key = st.selectbox("Target Field", list(field_by_key),
+                                     index=list(field_by_key).index(row["field_key"]) if row["field_key"] in field_by_key else 0,
+                                     format_func=lambda k: f"{field_by_key[k]['label']} ({k} · {field_by_key[k]['type']})",
+                                     key=f"{token_widget}_field", on_change=_clear_studio_review)
+            field = field_by_key[field_key]
+            kinds = ["lookup"] + (["measurement"] if field["type"] in {"number", "decimal"} else [])
+            kind = st.radio("Token kind", kinds, index=kinds.index(row["token_kind"]) if row["token_kind"] in kinds else 0,
+                            horizontal=True, key=f"{token_widget}_kind", on_change=_clear_studio_review)
+            mappings = _quick_type_mapping_draft(
+                row.get("mappings", list((row.get("lookup_table") or {}).items()))
+            )
+            next_mapping_uid = int(row.get("next_mapping_uid", len(mappings)))
+            if kind == "lookup":
+                st.caption("Each lookup key is exactly one character. Values use the selected Field's type.")
+                rebuilt = []
+                for mi, mapping_row in enumerate(mappings):
+                    mapping_uid = mapping_row["uid"]
+                    mapping_widget = f"{token_widget}_map_{mapping_uid}"
+                    a, b, c = st.columns([1, 3, 1])
+                    key = a.text_input("Key", mapping_row["key"], max_chars=1,
+                                       key=f"{mapping_widget}_key", label_visibility="collapsed",
+                                       on_change=_clear_studio_review)
+                    value = b.empty()
+                    with value:
+                        typed = _field_default_widget(
+                            field["type"], field.get("options") or [], mapping_row["value"],
+                            f"{mapping_widget}_value_{field['type']}", label="Mapped value",
+                        )
+                    rebuilt.append({"uid": mapping_uid, "key": key, "value": typed})
+                    if c.button("Remove mapping", key=f"{mapping_widget}_remove"):
+                        # Retain already-rendered live values and untouched
+                        # later rows by stable identity; no positional widget
+                        # key is reused for the row that follows this one.
+                        row["mappings"] = rebuilt[:-1] + mappings[mi + 1:]
+                        row["next_mapping_uid"] = next_mapping_uid
+                        st.session_state[draft_key] = draft
+                        _clear_studio_review()
+                        st.rerun()
+                if st.button("Add mapping", key=f"{token_widget}_map_add"):
+                    rebuilt.append({"uid": f"new-{next_mapping_uid}", "key": "",
+                                    "value": field.get("value")})
+                    row["mappings"] = rebuilt
+                    row["next_mapping_uid"] = next_mapping_uid + 1
+                    _clear_studio_review(); st.rerun()
+                try:
+                    mapping = _quick_type_lookup_table(rebuilt)
+                except content_studio.StudioIntentError as error:
+                    mapping = None
+                    draft_errors.append(str(error))
+                    st.error(error)
+                width = None
+            else:
+                width_enabled = st.checkbox("Set a maximum digit width", value=row.get("digit_width") is not None,
+                                            key=f"{token_widget}_width_enabled", on_change=_clear_studio_review)
+                width = (st.number_input("Maximum digits", min_value=1, value=int(row.get("digit_width") or 1), step=1,
+                                         key=f"{token_widget}_width", on_change=_clear_studio_review)
+                         if width_enabled else None)
+                mapping, rebuilt = None, []
+            up, down, delete = st.columns(3)
+            if up.button("Up", key=f"{token_widget}_up", disabled=index == 0):
+                draft[index - 1], draft[index] = draft[index], draft[index - 1]; _clear_studio_review(); st.rerun()
+            if down.button("Down", key=f"{token_widget}_down", disabled=index == len(draft) - 1):
+                draft[index + 1], draft[index] = draft[index], draft[index + 1]; _clear_studio_review(); st.rerun()
+            if delete.button("Delete token", key=f"{token_widget}_delete"):
+                draft.pop(index); _clear_studio_review(); st.rerun()
+            normalized.append({"uid": uid, "sort_order": row.get("sort_order"), "block_sort_order": block_no,
+                               "field_key": field_key, "token_kind": kind, "lookup_table": mapping,
+                               "digit_width": int(width) if width is not None else None, "mappings": rebuilt,
+                               "next_mapping_uid": next_mapping_uid})
+    st.session_state[draft_key] = normalized
+    user_code = st.text_input("Your positive Quick Type example (optional)",
+                              key=f"{widget_scope}_user", on_change=_clear_studio_review)
+    # The UI owns one complete ordered list.  Persisted token positions are
+    # implementation identities, not a user-facing draft concern: normalize
+    # every row together after every add/delete/reorder so CP1 never receives
+    # an illegal mixture of positioned and unpositioned tokens.
+    token_data = [{"sort_order": position,
+                   **{k: row[k] for k in ("block_sort_order", "field_key", "token_kind", "lookup_table", "digit_width")}}
+                  for position, row in enumerate(normalized)]
+    generated = content_studio.quick_type_generated_examples(selected, token_data, presets)
+    st.subheader("Test the current draft", anchor=False)
+    test_code = st.text_input("Quick Type code", key=f"{widget_scope}_test_code")
+    test_signature = _studio_signature(
+        "quick-type-test", selected, {"tokens": token_data, "code": test_code}
+    )
+    test_state_key = f"_editor_qt_test_{selected}_{generation}"
+    if st.button("Test code", key=f"{widget_scope}_test"):
+        if draft_errors:
+            result = {"code": test_code, "error": draft_errors[0]}
+        else:
+            result = content_studio.quick_type_test_draft(selected, token_data, test_code)
+        st.session_state[test_state_key] = {"signature": test_signature, "result": result}
+    tested = st.session_state.get(test_state_key)
+    if tested and tested.get("signature") == test_signature:
+        result = tested["result"]
+        st.subheader("Draft test result", anchor=False)
+        if result.get("error"):
+            st.error(result["error"])
+        else:
+            st.success(f"Parsed as {result['preset']} with the current draft.")
+            _show_rows(result.get("decoded", []), "Bare code: no field overrides.")
+            _show_report(result.get("report"), "Production-path report")
+    examples = generated + ([{"label": "Your positive example", "code": user_code,
+                              "positive": True, "expected_preset": selected}]
+                            if user_code.strip() else [])
+    st.caption("Generated probes are frozen into review with their decoded values and reports.")
+    if st.button("Prepare Quick Type review", key=f"{widget_scope}_prepare", disabled=not writes_enabled):
+        try:
+            if draft_errors:
+                raise content_studio.StudioIntentError(draft_errors[0])
+            quicktype.validate_quick_type_config(token_data)
+            if user_code.strip():
+                matched, rem = quicktype.find_preset_by_prefix(user_code.strip(), presets)
+                _, error = quicktype.parse_tokens(rem, token_data) if matched and matched["short_code"] == selected else (None, "does not route to this Preset")
+                if error: raise content_studio.StudioIntentError(f"Your positive example must parse completely: {error}")
+            intents = content_studio.quick_type_draft_operations(selected, token_data,
+                       baseline=st.session_state[baseline_key])
+            signature = _studio_signature("quick-type", selected, {"draft": normalized, "examples": examples})
+            _prepare_studio_review(intents, signature, f"Edit Quick Type grammar for {selected}",
+                                   evidence_factory=content_studio.quick_type_review_evidence(selected, examples))
+        except (ValueError, content_studio.StudioIntentError) as error:
+            st.error(f"Review was not prepared: {error}")
 
 
 def _parse_select_options(raw):
@@ -727,9 +1036,9 @@ def _block_studio(rows, fields, mode, writes_enabled):
         # share the baseline for this loaded draft generation. Recapturing a
         # baseline on action change would bless older retained widget values.
         baseline_key = f"_editor_studio_block_baseline_{block['id']}_{generation}"
-        if baseline_key not in st.session_state:
-            st.session_state[baseline_key] = content_studio.block_draft_baseline(block, existing_bindings)
-        baseline = st.session_state[baseline_key]
+        baseline = _current_studio_baseline(
+            baseline_key, content_studio.block_draft_baseline(block, existing_bindings)
+        )
     draft_signature = {"action": action, "key": stable_key, "generation": generation}
     if _show_studio_review(_studio_signature("block", {"table": "Blocks", "key": stable_key}, draft_signature), writes_enabled):
         return
@@ -902,17 +1211,32 @@ def _preset_studio(rows, mode, writes_enabled):
         } for link in sorted(source_links, key=lambda link: (link["display_order"], link["sort_order"]))]
     instances = [dict(item) for item in st.session_state[state_key]]
     source_baseline_key = f"_editor_studio_preset_baseline_{action}_{stable_key}_{generation}"
-    if preset is not None and source_baseline_key not in st.session_state:
+    if preset is not None:
         # Capture once per loaded form generation. Recomputing at submission
         # would bless a second tab's composition update before the stale-draft
         # guard gets a chance to report it.
-        st.session_state[source_baseline_key] = content_studio.preset_draft_baseline(preset, source_links)
+        source_baseline = _current_studio_baseline(
+            source_baseline_key, content_studio.preset_draft_baseline(preset, source_links)
+        )
+    else:
+        source_baseline = None
     endpoint_baseline_key = f"_editor_studio_preset_endpoints_{action}_{stable_key}_{generation}"
     if endpoint_baseline_key not in st.session_state:
         # Only draft-only additions appear here. Existing Preset instances are
         # permanently bound by the source baseline above and must never be
         # silently rebased when another instance is added or removed.
         st.session_state[endpoint_baseline_key] = []
+    else:
+        # Draft-only added instances are not part of the persisted Preset
+        # baseline above, so keep their selected Block/Field endpoints fresh
+        # independently.  This is the same physical identity CP1 asserts at
+        # Prepare, moved earlier to avoid showing an obsolete draft on return.
+        for endpoint in st.session_state[endpoint_baseline_key]:
+            if content_studio.preset_instance_endpoint_baseline(
+                    endpoint["block_key"], endpoint["instance_no"]
+            ) != endpoint["baseline"]:
+                _advance_studio_draft_generation()
+                st.rerun()
 
     # Duplication copies a whole safe composition. It deliberately does not
     # offer a partial structural editor, which could otherwise be mistaken for
@@ -1068,7 +1392,7 @@ def _preset_studio(rows, mode, writes_enabled):
               "default_adicap": adicap or None}
     if prepare:
         target_action = "create" if action == "Create a new Preset" else "duplicate" if action == "Duplicate existing Preset" else "edit"
-        baseline = st.session_state.get(source_baseline_key) if preset is not None else None
+        baseline = source_baseline
         # A new instance can be added to either a brand-new or an existing
         # Preset. In both cases its selected Block/Field endpoints need the
         # captured physical baseline at review time.
@@ -1243,6 +1567,7 @@ def _ai_package_section(writes_enabled):
             st.session_state["_editor_error"] = f"Not applied: {error}"
         else:
             _clear_ai_review()
+            _advance_studio_draft_generation()
             st.session_state["_editor_ai_reset_widgets"] = True
             st.session_state["_editor_message"] = (
                 f"Applied as content revision {revision_id}. Review it under Recent revisions."
@@ -1305,6 +1630,7 @@ def _revisions():
                 else:
                     st.session_state.pop("_editor_inverse_review", None)
                     st.session_state.pop("_editor_inverse_revision", None)
+                    _advance_studio_draft_generation()
                     st.session_state["_editor_message"] = (
                         f"Revision {revision['id']} reverted as reviewed revision {new_id}."
                     )
@@ -1332,6 +1658,13 @@ if st.session_state.pop("_editor_ai_reset_widgets", False):
     st.session_state.pop("_editor_ai_upload_signature", None)
     _clear_ai_review()
 
+# Must run before any page widget is constructed: on a navigation rerun the
+# previous Content Studio widgets are still readable, but will be pruned when
+# their branch is skipped.  Restore cached values before a later return builds
+# their widgets again.
+_stash_studio_widget_state()
+_restore_studio_widget_state()
+
 st.title("✏️ Editor")
 message = st.session_state.pop("_editor_message", None)
 if message:
@@ -1356,7 +1689,7 @@ if section == "Content Studio":
     st.caption("Draft changes become a frozen review before they can be applied. Stable keys and Field type/options are immutable.")
     mode = st.radio("Lifecycle filter", ["Active", "Archived", "All"], horizontal=True,
                     key="editor_studio_filter", on_change=_clear_studio_review)
-    studio_kind = st.radio("Content Studio area", ["Fields", "Blocks", "Presets", "Snippets", "Group labels"], horizontal=True,
+    studio_kind = st.radio("Content Studio area", ["Fields", "Blocks", "Presets", "Quick Type", "Snippets", "Group labels"], horizontal=True,
                            key="editor_studio_kind", on_change=_clear_studio_review)
     studio_error = st.session_state.pop("_editor_studio_error", None)
     if studio_error:
@@ -1375,6 +1708,8 @@ if section == "Content Studio":
         _block_studio(all_blocks, all_fields, mode, writes_enabled)
     elif studio_kind == "Presets":
         _preset_studio(all_presets, mode, writes_enabled)
+    elif studio_kind == "Quick Type":
+        _quick_type_studio(writes_enabled)
     elif studio_kind == "Snippets":
         _snippet_studio(all_snippets, mode, writes_enabled)
     else:
