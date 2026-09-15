@@ -691,3 +691,30 @@ venv/bin/python -m pytest -q \
 ```
 
 CP4 is not included in this acceptance boundary.
+
+## Stage 7 CP4 acceptance — 2026-09-15
+
+The current CP4 preview tests passed **18/18**. They cover equivalent BOM/CRLF CSV
+and TSV normalization, quoting/outer trimming, invalid UTF-8/NUL/malformed
+quotes/columns/blank cells/row limits, duplicate and existing Case-ID refusal,
+one-transaction materialization, canonical immutable issued-review storage
+(including direct/nested and `dict.__ior__` mutation attempts), authoritative
+`render_saved_case` HTML equality, review staleness bindings, raw-Quick-Type
+privacy in repr/structured input, and SQL/state plus SQLite-authorizer proof
+that preparing a review writes zero Case/content rows. It also covers complete
+active Quick Type endpoint-graph refusal for unavailable Block instances,
+Fields, and archived Fields; duplicate fired warning-message multiplicity; and
+the 140 KiB cell/exact 1 MiB/250-row input boundaries. The isolated Streamlit
+page booted and prepared a decoded preview without exceptions; its only action
+is **Prepare decoded preview**.
+
+The bounded CP4 browser remediation also verifies that the invalid-Quick-Type
+and existing-ID paths each render one complete safe Streamlit error, rather
+than iterating over characters of an incorrectly shaped error value.
+
+Focused remediation regressions passed: `tests/test_stage7_bulk_preview.py`
+(**18 passed**), Quick Type/consistency/Workspace (**94 passed**), and Stage 7
+configuration (**21 passed**). `python -m py_compile` and `git diff --check`
+also passed. Independent Sol High closure verified the complete isolated suite:
+**566 passed in 352.15s**. No operational database, schema change, seed-content
+change, golden update, or CP5 work was performed. CP4 is accepted.

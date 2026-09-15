@@ -7,7 +7,7 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 7 CP1–CP3 are accepted; do not begin CP4 without a new bounded task.**
+**Stage 7 CP1–CP4 are accepted. Do not begin CP5 without a new bounded task.**
 The authoritative architecture and seven-checkpoint contract is
 `STAGE7_IMPLEMENTATION_PLAN.md`, based on the completed Stage 6 repository at
 `a23e917cc674481d6ab1e33f50ab0da13d1f33ab`. It preserves separate content-
@@ -636,7 +636,23 @@ The accepted remediation set covers physical stale owner/endpoint protection
 with an explicit read-only preserved-draft/reload flow (including the
 review-time race), order-insensitive warning membership with multiplicity,
 duplicate-Block copied-rule inverse/re-inverse, and warning-only report
-classification. CP4 remains unimplemented.
+classification.
+
+### Stage 7 CP4 — decoded bulk preview, no Case writes
+
+CP4 adds the Workspace-adjacent **Bulk Intake** page and its read-only
+`bulk_intake.py` service. It accepts only explicitly delimited UTF-8 CSV/TSV
+with an explicit header decision, applies the 1 MiB/250-row/two-cell contract,
+and normalizes the complete source before opening a database connection.
+One read transaction then parses every row against one content state, derives
+Preset-Block instances, materializes the same structured Case input shape
+Workspace saves, renders through `editor_preview`, and proves every row
+round-trips through `render_saved_case` with identical HTML. The session-local
+review binds normalized-source/content/revision/target-absence/interpretation
+digests, exposes warnings and conflicts, and invalidates on input, content, or
+target-ID change. CP4 is accepted after independent closure verification.
+There is no Case write, schema migration, batch audit, Apply, validation,
+delete, inverse, or shared/multi-Case writer; CP5 remains wholly unimplemented.
 
 ## Where to find detail
 
