@@ -300,6 +300,10 @@ def setup_database(db_name=None):
             clinical_info TEXT,
             structured_input JSON,
             rendered_html TEXT,
+            -- CP5 provenance is populated only by the bulk writer.  The
+            -- referenced audit table is created by the additive migration
+            -- immediately after this bootstrap schema is seeded.
+            batch_import_id INTEGER REFERENCES Case_Batch_Imports(id),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP
         );

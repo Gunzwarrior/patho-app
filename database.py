@@ -5,6 +5,8 @@ import hashlib
 import os
 import pandas as pd
 import template_analysis
+from dataclasses import dataclass
+from typing import Literal
 
 # Allows an isolated app boot without ever migrating the operational file.
 # Normal interactive use remains exactly ``pathology.db``.
@@ -27,7 +29,7 @@ def _table_columns(conn, table_name):
 
 
 def migrate_schema(db_name=None):
-    """Apply additive operational-safety and Stage 6 schema migrations.
+    """Apply additive operational-safety and Stage 6/7 schema migrations.
 
     This migration is deliberately additive and safe to run on every app
     start.  Existing validated cases receive exactly one history artifact;
@@ -347,6 +349,32 @@ def migrate_schema(db_name=None):
                 "ON Quick_Type_Tokens(preset_id, sort_order)"
             )
             conn.execute("INSERT INTO Schema_Migrations (name) VALUES (?)", (token_position_marker,))
+
+        # CP5 local operational provenance.  This is deliberately not part of
+        # content revisions/snapshots: it records only that a set of Cases was
+        # created together, never patient identifiers or raw Quick Type input.
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS Case_Batch_Imports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                row_count INTEGER NOT NULL,
+                normalized_input_sha256 TEXT NOT NULL,
+                content_snapshot_sha256 TEXT NOT NULL,
+                content_revision_id INTEGER NOT NULL REFERENCES Content_Revisions(id)
+            );
+        """)
+        case_columns = _table_columns(conn, "Cases")
+        if "batch_import_id" not in case_columns:
+            conn.execute(
+                "ALTER TABLE Cases ADD COLUMN batch_import_id INTEGER REFERENCES Case_Batch_Imports(id)"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS Cases_batch_import_id_idx ON Cases(batch_import_id)"
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO Schema_Migrations (name) VALUES (?)",
+            ("stage7_case_batch_import_provenance_v1",),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -1092,6 +1120,101 @@ def return_case_to_pending(case_number, reason):
         conn.close()
 
 
+@dataclass(frozen=True, slots=True)
+class CasePersistenceResult:
+    """The result of one persistence operation owned by the caller's transaction."""
+
+    case_id: int
+    created: bool
+    content_fingerprint: str
+    content_revision_id: int | None
+
+
+class CasePersistenceError(ValueError):
+    """A safe, non-patient-specific refusal from the shared Case writer."""
+
+
+def persist_case_on_connection(
+    conn, case_number, preset_id, clinical_info, structured_input, rendered_html,
+    *, status="pending", pending_reason=None, content_fingerprint=None,
+    content_revision_id=None, mode: Literal["create", "update"],
+    batch_import_id=None,
+):
+    """Persist a Case without taking ownership of transaction control.
+
+    Both the ordinary one-Case path and CP5 bulk Apply use this one serializer.
+    ``create`` is intentionally strict: it cannot overwrite a pending Case;
+    ``update`` cannot silently create one. Create is the only mode that
+    accepts a batch link. This function never begins,
+    commits, or rolls back a transaction.
+    """
+    if mode not in {"create", "update"}:
+        raise CasePersistenceError("Unsupported Case persistence mode.")
+    if mode != "create" and batch_import_id is not None:
+        raise CasePersistenceError("Batch provenance is only valid for Case creation.")
+    existing = conn.execute(
+        "SELECT id, status FROM Cases WHERE case_number = ?", (case_number,)
+    ).fetchone()
+    if ((mode == "create" and existing)
+            or (mode == "update" and not existing)
+            or (existing and existing["status"] == "validated")):
+        # A duplicate never bypasses the validated lock, and CP5 never updates.
+        raise CasePersistenceError("Case namespace is unavailable.")
+    preset_identity = conn.execute(
+        "SELECT short_code, name FROM Presets WHERE id = ?", (preset_id,)
+    ).fetchone()
+    if not preset_identity:
+        raise CasePersistenceError("Preset is unavailable.")
+    current_fingerprint = compute_case_content_fingerprint(preset_id, structured_input, conn)
+    if content_fingerprint is not None and content_fingerprint != current_fingerprint:
+        raise CasePersistenceError("Case content changed before persistence.")
+    if content_revision_id is None:
+        content_revision_id = current_content_revision_id(conn)
+    canonical_input = _canonical_json(structured_input)
+
+    if existing:
+        conn.execute(
+            """UPDATE Cases
+               SET preset_id = ?, status = ?, pending_reason = ?, clinical_info = ?,
+                   structured_input = ?, rendered_html = ?, content_fingerprint = ?,
+                   content_revision_id = ?, preset_short_code_snapshot = ?,
+                   preset_name_snapshot = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (preset_id, status, pending_reason, clinical_info, canonical_input, rendered_html,
+             current_fingerprint, content_revision_id, preset_identity["short_code"],
+             preset_identity["name"], existing["id"]),
+        )
+        case_id = existing["id"]
+        created = False
+    else:
+        cursor = conn.execute(
+            """INSERT INTO Cases
+               (case_number, preset_id, status, pending_reason, clinical_info, structured_input, rendered_html,
+                content_fingerprint, content_revision_id, preset_short_code_snapshot, preset_name_snapshot,
+                batch_import_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (case_number, preset_id, status, pending_reason, clinical_info, canonical_input, rendered_html,
+             current_fingerprint, content_revision_id, preset_identity["short_code"],
+             preset_identity["name"], batch_import_id),
+        )
+        case_id = cursor.lastrowid
+        created = True
+    if status == "validated":
+        conn.execute(
+            """INSERT INTO Case_Validation_History
+               (case_id, rendered_html, structured_input, clinical_info, preset_id, content_fingerprint,
+                preset_short_code_snapshot, preset_name_snapshot)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (case_id, rendered_html, canonical_input, clinical_info, preset_id, current_fingerprint,
+             preset_identity["short_code"], preset_identity["name"]),
+        )
+        conn.execute(
+            "INSERT INTO Case_Status_History (case_id, transition) VALUES (?, ?)",
+            (case_id, "validated"),
+        )
+    return CasePersistenceResult(case_id, created, current_fingerprint, content_revision_id)
+
+
 def save_case(case_number, preset_id, clinical_info, structured_input, rendered_html,
               status="pending", pending_reason=None, content_fingerprint=None,
               content_revision_id=None):
@@ -1103,66 +1226,16 @@ def save_case(case_number, preset_id, clinical_info, structured_input, rendered_
     re-rendered from current templates.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("BEGIN IMMEDIATE")
-        existing = cursor.execute(
-            "SELECT id, status FROM Cases WHERE case_number = ?", (case_number,)
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT 1 FROM Cases WHERE case_number = ?", (case_number,)
         ).fetchone()
-        if existing and existing["status"] == "validated":
-            # A duplicate case number is never an escape hatch around the
-            # validated-record lock.  return_case_to_pending is intentional.
-            return False
-        preset_identity = cursor.execute(
-            "SELECT short_code, name FROM Presets WHERE id = ?", (preset_id,)
-        ).fetchone()
-        if not preset_identity:
-            return False
-        current_fingerprint = compute_case_content_fingerprint(preset_id, structured_input, conn)
-        if content_fingerprint is not None and content_fingerprint != current_fingerprint:
-            # The relevant content changed after the caller rendered or
-            # acknowledged it. Refuse rather than archiving a report under a
-            # fingerprint that no longer describes the current content.
-            return False
-        content_fingerprint = current_fingerprint
-        if content_revision_id is None:
-            content_revision_id = current_content_revision_id(conn)
-        if existing:
-            cursor.execute(
-                """UPDATE Cases
-                   SET preset_id = ?, status = ?, pending_reason = ?, clinical_info = ?,
-                       structured_input = ?, rendered_html = ?, content_fingerprint = ?,
-                       content_revision_id = ?, preset_short_code_snapshot = ?,
-                       preset_name_snapshot = ?, updated_at = CURRENT_TIMESTAMP
-                   WHERE case_number = ?""",
-                (preset_id, status, pending_reason, clinical_info,
-                 _canonical_json(structured_input), rendered_html, content_fingerprint,
-                 content_revision_id, preset_identity["short_code"], preset_identity["name"], case_number),
-            )
-        else:
-            cursor.execute(
-                   """INSERT INTO Cases
-                   (case_number, preset_id, status, pending_reason, clinical_info, structured_input, rendered_html,
-                    content_fingerprint, content_revision_id, preset_short_code_snapshot, preset_name_snapshot)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (case_number, preset_id, status, pending_reason, clinical_info,
-                 _canonical_json(structured_input), rendered_html, content_fingerprint, content_revision_id,
-                 preset_identity["short_code"], preset_identity["name"]),
-            )
-        if status == "validated":
-            case_id = existing["id"] if existing else cursor.lastrowid
-            cursor.execute(
-                """INSERT INTO Case_Validation_History
-                   (case_id, rendered_html, structured_input, clinical_info, preset_id, content_fingerprint,
-                    preset_short_code_snapshot, preset_name_snapshot)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (case_id, rendered_html, _canonical_json(structured_input), clinical_info,
-                 preset_id, content_fingerprint, preset_identity["short_code"], preset_identity["name"]),
-            )
-            cursor.execute(
-                "INSERT INTO Case_Status_History (case_id, transition) VALUES (?, ?)",
-                (case_id, "validated"),
-            )
+        persist_case_on_connection(
+            conn, case_number, preset_id, clinical_info, structured_input, rendered_html,
+            status=status, pending_reason=pending_reason, content_fingerprint=content_fingerprint,
+            content_revision_id=content_revision_id, mode="update" if existing else "create",
+        )
         conn.commit()
         return True
     except Exception as e:

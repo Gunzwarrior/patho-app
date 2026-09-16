@@ -1,19 +1,16 @@
-"""Read-only decoded bulk-intake preview.
-
-This module is deliberately the CP4 boundary: it accepts a bounded two-column
-CSV/TSV source and produces pending-Case-shaped material for review, but it
-does not contain (or call) a Case persistence path.  In particular, there is
-no bulk schema, audit row, transaction upgrade, or Apply operation here.
-"""
+"""Decoded bulk-intake review and CP5 atomic pending-Case Apply."""
 
 from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
 import hashlib
+import hmac
 import io
 import json
 import math
+import os
+import sqlite3
 from typing import Any, Iterable
 
 import composition
@@ -28,6 +25,9 @@ MAX_SOURCE_BYTES = 1_048_576
 MAX_DATA_ROWS = 250
 DELIMITERS = {",", "\t"}
 MAX_SAFE_WIDGET_INTEGER = 2**53 - 1
+# An issued review is only usable in this running application session.  The
+# secret never leaves this module or the server process; it signs no raw input.
+_REVIEW_ISSUER_SECRET = os.urandom(32)
 
 
 def _canonical_json(value: Any) -> str:
@@ -98,7 +98,7 @@ class PreparedCase:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class BatchReview:
-    """Frozen CP4 review binding, intentionally incapable of applying Cases."""
+    """Frozen session-local review binding for CP4 preview and CP5 Apply."""
 
     applicable: bool
     errors: tuple[str, ...]
@@ -108,6 +108,7 @@ class BatchReview:
     content_revision_id: int | None = None
     target_case_numbers: tuple[str, ...] = ()
     interpretation_sha256: str | None = None
+    issuer_signature: str | None = None
 
     def __repr__(self) -> str:  # pragma: no cover - Case IDs stay out of logs/reprs
         return (
@@ -118,6 +119,37 @@ class BatchReview:
             f"content_revision_id={self.content_revision_id!r}, "
             f"interpretation_sha256={self.interpretation_sha256!r})"
         )
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BatchApplyResult:
+    """Safe Apply outcome; it deliberately contains neither IDs nor source text."""
+
+    applied: bool
+    error: str | None = None
+    batch_import_id: int | None = None
+    row_count: int = 0
+
+    def __bool__(self) -> bool:
+        return self.applied
+
+    def __repr__(self) -> str:  # pragma: no cover - defensive privacy boundary
+        return (
+            f"BatchApplyResult(applied={self.applied}, error={self.error!r}, "
+            f"row_count={self.row_count})"
+        )
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BatchWarningAcknowledgement:
+    """A session-local, review-bound acknowledgement of all batch warnings."""
+
+    review_issuer_signature: str
+    interpretation_sha256: str
+    signature: str
+
+    def __repr__(self) -> str:  # pragma: no cover - no patient data in reprs
+        return "BatchWarningAcknowledgement(<session-local>)"
 
 
 def parse_bulk_source(source: bytes | str, delimiter: str, first_row_is_header: bool) -> ParsedSource:
@@ -224,6 +256,28 @@ def _quick_type_value(field: dict[str, Any], value: Any) -> Any:
     return value
 
 
+def _workspace_persisted_values(block: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+    """Convert semantic render values to Workspace's saved widget wire values.
+
+    Decimal fields are deliberately ``st.text_input`` controls.  Workspace
+    therefore persists their text wire value (for example ``"7"``), while
+    report rendering consumes the normalized semantic float.  A bulk preview
+    must retain that distinction: writing a float into saved input passes the
+    report reconstruction path but crashes Streamlit when reopen seeds the
+    text widget with that float.
+    """
+    saved: dict[str, Any] = {}
+    for field in block["fields"]:
+        value = values[field["key"]]
+        if field["type"] == "decimal":
+            saved[field["key"]] = (
+                "" if value is None else rendering.format_decimal_display(value)
+            )
+        else:
+            saved[field["key"]] = value
+    return saved
+
+
 def _active_endpoint_error(conn, preset: dict[str, Any], blocks: Iterable[dict[str, Any]]) -> str | None:
     if preset.get("is_archived"):
         return "Quick Type resolves to an archived Preset."
@@ -263,6 +317,7 @@ def _prepare_row(conn, source_row: SourceRow) -> PreparedCase:
         raise BulkInputError(f"Row {source_row.row_number} has an unavailable Block instance.")
     by_instance = {block["instance_no"]: block for block in blocks}
     values: list[dict[str, Any]] = []
+    persisted_values: list[dict[str, Any]] = []
     for block in blocks:
         parsed_values = parsed_overrides.get(block["instance_no"], {})
         field_map = {field["key"]: field for field in block["fields"]}
@@ -274,7 +329,9 @@ def _prepare_row(conn, source_row: SourceRow) -> PreparedCase:
         }
         # This is the same resolved default + normalized widget material that
         # Workspace passes into the report engine and saves in structured_input.
-        values.append(editor_preview.widget_values(block, typed))
+        resolved = editor_preview.widget_values(block, typed)
+        values.append(resolved)
+        persisted_values.append(_workspace_persisted_values(block, resolved))
     if any(instance_no not in by_instance for instance_no in parsed_overrides):
         raise BulkInputError(f"Row {source_row.row_number} has an unavailable Quick Type instance.")
 
@@ -282,7 +339,7 @@ def _prepare_row(conn, source_row: SourceRow) -> PreparedCase:
         "block_instances": instances,
         "blocks": {
             f"{block['key']}#{block['instance_no']}": value
-            for block, value in zip(blocks, values)
+            for block, value in zip(blocks, persisted_values)
         },
         "wildcard_notes": [],
         "master_lock": False,
@@ -370,6 +427,74 @@ def _interpretation_digest(rows: Iterable[PreparedCase]) -> str:
     ])
 
 
+def _issuer_payload(review: BatchReview) -> str:
+    """Canonical non-clinical binding for an issued review capability."""
+    return _canonical_json({
+        "applicable": review.applicable,
+        "errors": list(review.errors),
+        "normalized_source_sha256": review.normalized_source_sha256,
+        "content_snapshot_sha256": review.content_snapshot_sha256,
+        "content_revision_id": review.content_revision_id,
+        "target_case_numbers": list(review.target_case_numbers),
+        "interpretation_sha256": review.interpretation_sha256,
+    })
+
+
+def _issue_review(review: BatchReview) -> BatchReview:
+    """Attach the server-only issuer proof after all immutable fields exist."""
+    signature = hmac.new(
+        _REVIEW_ISSUER_SECRET, _issuer_payload(review).encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return BatchReview(
+        applicable=review.applicable, errors=review.errors, rows=review.rows,
+        normalized_source_sha256=review.normalized_source_sha256,
+        content_snapshot_sha256=review.content_snapshot_sha256,
+        content_revision_id=review.content_revision_id,
+        target_case_numbers=review.target_case_numbers,
+        interpretation_sha256=review.interpretation_sha256,
+        issuer_signature=signature,
+    )
+
+
+def _is_issued_review(review: BatchReview) -> bool:
+    if not isinstance(review, BatchReview) or not review.issuer_signature:
+        return False
+    expected = hmac.new(
+        _REVIEW_ISSUER_SECRET, _issuer_payload(review).encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(review.issuer_signature, expected)
+
+
+def acknowledge_batch_warnings(review: BatchReview) -> BatchWarningAcknowledgement | None:
+    """Issue the distinct acknowledgement required for a warning-bearing batch."""
+    if not _is_issued_review(review) or not any(row.warnings for row in review.rows):
+        return None
+    payload = _canonical_json({
+        "review_issuer_signature": review.issuer_signature,
+        "interpretation_sha256": review.interpretation_sha256,
+    })
+    return BatchWarningAcknowledgement(
+        review.issuer_signature, review.interpretation_sha256,
+        hmac.new(_REVIEW_ISSUER_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest(),
+    )
+
+
+def _has_valid_warning_acknowledgement(
+    review: BatchReview, acknowledgement: BatchWarningAcknowledgement | None,
+) -> bool:
+    if not isinstance(acknowledgement, BatchWarningAcknowledgement):
+        return False
+    if (acknowledgement.review_issuer_signature != review.issuer_signature
+            or acknowledgement.interpretation_sha256 != review.interpretation_sha256):
+        return False
+    payload = _canonical_json({
+        "review_issuer_signature": acknowledgement.review_issuer_signature,
+        "interpretation_sha256": acknowledgement.interpretation_sha256,
+    })
+    expected = hmac.new(_REVIEW_ISSUER_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(acknowledgement.signature, expected)
+
+
 def prepare_bulk_review(source: bytes | str, delimiter: str, first_row_is_header: bool,
                         *, conn=None) -> BatchReview:
     """Create an immutable, no-write CP4 review for one complete batch.
@@ -416,7 +541,7 @@ def prepare_bulk_review(source: bytes | str, delimiter: str, first_row_is_header
                 content_revision_id=revision_id,
             )
         prepared = tuple(_prepare_row(conn, row) for row in parsed.rows)
-        return BatchReview(
+        return _issue_review(BatchReview(
             applicable=True,
             errors=(),
             rows=prepared,
@@ -425,7 +550,7 @@ def prepare_bulk_review(source: bytes | str, delimiter: str, first_row_is_header
             content_revision_id=revision_id,
             target_case_numbers=targets,
             interpretation_sha256=_interpretation_digest(prepared),
-        )
+        ))
     except Exception as error:
         # Do not return parser/template details: they can contain raw Quick
         # Type or content fragments.  The source is still present only in the
@@ -478,3 +603,109 @@ def review_staleness(review: BatchReview, *, conn=None) -> str | None:
             conn.rollback()
         if owns_connection:
             conn.close()
+
+
+def _same_prepared_batch(issued: BatchReview, rebuilt: tuple[PreparedCase, ...]) -> bool:
+    """Compare exact materialized rows as well as their signed digest."""
+    return (
+        issued.rows == rebuilt
+        and issued.interpretation_sha256 == _interpretation_digest(rebuilt)
+    )
+
+
+def apply_bulk_review(
+    review: BatchReview, source: bytes | str, delimiter: str, first_row_is_header: bool,
+    *, confirmed: bool = False, warning_acknowledgement: BatchWarningAcknowledgement | None = None,
+    conn=None,
+) -> BatchApplyResult:
+    """Atomically create an issued review's Cases as new pending Cases only.
+
+    All state that can race (content, revision, target namespace, parsing,
+    warning set, rendering, and saved-case reconstruction) is checked again
+    after ``BEGIN IMMEDIATE``.  A caller-supplied connection must be idle so
+    this function can own the one CP5 write transaction.
+    """
+    if not confirmed:
+        return BatchApplyResult(False, "Confirm this batch before applying it.")
+    if not _is_issued_review(review) or not review.applicable:
+        return BatchApplyResult(False, "This batch review was not issued by this session.")
+    # The review's detached rows are still checked before locking so a caller
+    # cannot replace them while retaining an old issuer proof. The source is
+    # reparsed and compared again inside the write transaction below.
+    if review.interpretation_sha256 != _interpretation_digest(review.rows):
+        return BatchApplyResult(False, "This batch review was altered after issuance.")
+    if any(row.warnings for row in review.rows) and not _has_valid_warning_acknowledgement(
+        review, warning_acknowledgement
+    ):
+        return BatchApplyResult(False, "Acknowledge the batch consistency warnings before applying it.")
+
+    owns_connection = conn is None
+    conn = conn or database.get_db_connection()
+    try:
+        if conn.in_transaction:
+            return BatchApplyResult(False, "Batch Apply requires a fresh database transaction.")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            parsed = parse_bulk_source(source, delimiter, first_row_is_header)
+            if parsed.normalized_source_sha256 != review.normalized_source_sha256:
+                raise BulkInputError("The reviewed input changed.")
+            targets = tuple(row.case_number for row in parsed.rows)
+            if targets != review.target_case_numbers:
+                raise BulkInputError("The reviewed target set changed.")
+            if len(set(targets)) != len(targets):
+                raise BulkInputError("The reviewed target set changed.")
+            snapshot_hash = content_snapshot.content_snapshot_hash(
+                content_snapshot.snapshot_from_connection(conn)
+            )
+            if snapshot_hash != review.content_snapshot_sha256:
+                raise BulkInputError("Content changed after this batch was reviewed.")
+            revision_id = database.current_content_revision_id(conn)
+            if revision_id != review.content_revision_id:
+                raise BulkInputError("Content revision changed after this batch was reviewed.")
+            if _active_grammar_error(conn):
+                raise BulkInputError("Quick Type configuration changed after this batch was reviewed.")
+            if _existing_case_numbers(conn, targets):
+                raise BulkInputError("A reviewed Case ID is now occupied.")
+            rebuilt = tuple(_prepare_row(conn, row) for row in parsed.rows)
+            if not _same_prepared_batch(review, rebuilt):
+                raise BulkInputError("Decoded batch interpretation changed after review.")
+            # This is intentionally separate from source/interpretation proof:
+            # acknowledgement is a batch-level confirmation of all warnings.
+            if any(row.warnings for row in rebuilt) and not _has_valid_warning_acknowledgement(
+                review, warning_acknowledgement
+            ):
+                raise BulkInputError("Acknowledge the batch consistency warnings before applying it.")
+
+            cursor = conn.execute(
+                """INSERT INTO Case_Batch_Imports
+                   (row_count, normalized_input_sha256, content_snapshot_sha256, content_revision_id)
+                   VALUES (?, ?, ?, ?)""",
+                (len(rebuilt), parsed.normalized_source_sha256, snapshot_hash, revision_id),
+            )
+            batch_import_id = cursor.lastrowid
+            for prepared in rebuilt:
+                database.persist_case_on_connection(
+                    conn, prepared.case_number, prepared.preset_id, prepared.clinical_info,
+                    prepared.structured_input, prepared.rendered_html,
+                    status="pending", pending_reason=None,
+                    content_revision_id=revision_id, mode="create", batch_import_id=batch_import_id,
+                )
+            conn.commit()
+            return BatchApplyResult(True, batch_import_id=batch_import_id, row_count=len(rebuilt))
+        except Exception as error:
+            conn.rollback()
+            # Keep error responses source-free even if a lower layer changes.
+            if isinstance(error, BulkInputError):
+                return BatchApplyResult(False, str(error))
+            return BatchApplyResult(False, "The batch could not be applied; no Cases were created.")
+    except sqlite3.Error:
+        if conn.in_transaction:
+            conn.rollback()
+        return BatchApplyResult(False, "The batch could not be applied; no Cases were created.")
+    finally:
+        if owns_connection:
+            conn.close()
+
+
+# Apply aliases intentionally name only the reviewed pending-creation action.
+apply_batch_review = apply_bulk_review

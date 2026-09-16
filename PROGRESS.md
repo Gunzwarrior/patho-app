@@ -7,7 +7,7 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 7 CP1–CP4 are accepted. Do not begin CP5 without a new bounded task.**
+**Stage 7 CP1–CP5 are accepted. Do not begin CP6 or CP7 without a new bounded task.**
 The authoritative architecture and seven-checkpoint contract is
 `STAGE7_IMPLEMENTATION_PLAN.md`, based on the completed Stage 6 repository at
 `a23e917cc674481d6ab1e33f50ab0da13d1f33ab`. It preserves separate content-
@@ -651,8 +651,27 @@ round-trips through `render_saved_case` with identical HTML. The session-local
 review binds normalized-source/content/revision/target-absence/interpretation
 digests, exposes warnings and conflicts, and invalidates on input, content, or
 target-ID change. CP4 is accepted after independent closure verification.
-There is no Case write, schema migration, batch audit, Apply, validation,
-delete, inverse, or shared/multi-Case writer; CP5 remains wholly unimplemented.
+CP5 subsequently adds the separate pending-only Apply boundary; CP4's preview
+remains the no-write review checkpoint.
+
+### Stage 7 CP5 — atomic pending-Case creation
+
+CP5 is accepted. An issued, session-local batch review now requires separate
+confirmation and a review-bound signed acknowledgement for any consistency
+warnings. Apply takes one `BEGIN IMMEDIATE` transaction, rechecks the exact
+source digest, content snapshot/revision, active grammar, target absence,
+warnings, reconstruction, and materialized interpretation, then creates one
+local `Case_Batch_Imports` audit and all new Cases through the shared
+connection-scoped Case persistence primitive. It is create-only pending with a
+`NULL` pending reason; it cannot validate, overwrite, delete, inverse, or
+partially retry. Any failure rolls back the audit and every Case.
+
+The additive provenance link remains outside content snapshots, AI context,
+and operational-review artifacts. Bulk values retain Workspace widget-wire
+compatibility (including decimal text values), so Cases reopen, edit, and
+validate through ordinary Workspace/Worklist flows. Review replacement or
+staleness clears confirmation and warning consent fail-closed. CP6 and CP7
+remain unimplemented.
 
 ## Where to find detail
 

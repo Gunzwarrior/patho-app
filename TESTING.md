@@ -718,3 +718,24 @@ configuration (**21 passed**). `python -m py_compile` and `git diff --check`
 also passed. Independent Sol High closure verified the complete isolated suite:
 **566 passed in 352.15s**. No operational database, schema change, seed-content
 change, golden update, or CP5 work was performed. CP4 is accepted.
+
+## Stage 7 CP5 acceptance — 2026-09-16
+
+CP5 atomic pending-Case creation is accepted. Final independent closure
+verified the complete isolated suite at **588 passed in 349.53s**, including
+the final browser stale-consent check. Independent Sol High review closed both
+CP5 blockers with no new blocker; `py_compile` and `git diff --check` passed.
+
+Focused CP5 coverage includes additive migration from a genuine pre-CP5 Case
+schema (historic `NULL` linkage and repeat migration); transaction neutrality
+and caller rollback for the shared Case primitive; reviewed-target races across
+two connections and `BEGIN IMMEDIATE` lock serialization; rollback for audit,
+rebuild, render, reconstruction, serialization, final-comparison, and Case
+insertion faults; review-specific confirmation and signed warning
+acknowledgement; Case reopen/widget hydration for text, number, decimal,
+select, and checkbox representations; and proof that batch provenance remains
+outside content snapshots, AI context, and operational-review artifacts.
+
+The final browser matrix covered warning-free Apply → Worklist → Workspace
+reopen/edit/individual validation, warning acknowledgement, and stale/replaced
+review consent. CP6 and CP7 were not started.
