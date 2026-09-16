@@ -632,8 +632,8 @@ def test_removing_current_reorder_field_repairs_stale_widget_state(mutable_db):
 
 def test_existing_block_group_and_site_edits_are_reviewed_and_persist_with_cases(mutable_db):
     _unlock()
-    save_synthetic_case(mutable_db, code="gt", number="CP5-GROUP-PENDING")
-    save_synthetic_case(mutable_db, code="gt", number="CP5-GROUP-VALIDATED", status="validated")
+    save_synthetic_case(mutable_db, code="gt", number="26PR640003")
+    save_synthetic_case(mutable_db, code="gt", number="26PR640004", status="validated")
     app = AppTest.from_file("pages/editor.py").run()
     app.radio(key="editor_studio_kind").set_value("Blocks").run()
     antrum = next(row for row in database.get_all_editor_blocks() if row["key"] == "antrum")
@@ -780,8 +780,8 @@ def test_duplicate_is_safe_with_pending_and_ad_hoc_saved_instances(mutable_db):
         )]
     finally:
         conn.close()
-    save_synthetic_case(mutable_db, number="BLOCK-DUPLICATE-PENDING")
-    save_synthetic_case(mutable_db, number="BLOCK-DUPLICATE-AD-HOC",
+    save_synthetic_case(mutable_db, number="26PR640002")
+    save_synthetic_case(mutable_db, number="26PR640001",
                         structured={"block_instances": [{"block_id": block_id, "instance_no": 700}]})
     source, draft, bindings = _source(mutable_db, "appendice")
     draft["name"] = "Appendice duplicate"

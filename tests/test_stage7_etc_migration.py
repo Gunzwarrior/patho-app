@@ -149,8 +149,8 @@ def test_cp6_routes_bare_and_suffixes_with_equivalent_reports_and_leaves_etc_bi(
 
 def test_cp6_keeps_old_pending_and_validated_cases_unchanged_and_reopenable(mutable_db):
     _unlock()
-    pending = save_synthetic_case(mutable_db, "etc2", structured={}, number="CP6-PENDING")
-    validated = save_synthetic_case(mutable_db, "etc5", structured={}, number="CP6-VALIDATED", status="validated")
+    pending = save_synthetic_case(mutable_db, "etc2", structured={}, number="26PR670002")
+    validated = save_synthetic_case(mutable_db, "etc5", structured={}, number="26PR670003", status="validated")
     pending_before, validated_before = _case_row(mutable_db, pending["case_number"]), _case_row(mutable_db, validated["case_number"])
     old_pending_report = _default_report(mutable_db, "etc2")
 
@@ -241,6 +241,6 @@ def test_cp6_inverse_reinverse_and_pending_new_etc_blocks_inverse(mutable_db):
     redo = content_changes.apply_review(content_changes.review_inverse(undo, db_name=mutable_db), db_name=mutable_db)
     assert redo > undo > first
 
-    save_synthetic_case(mutable_db, "etc", structured={}, number="CP6-ETC-BLOCKER")
+    save_synthetic_case(mutable_db, "etc", structured={}, number="26PR670001")
     with pytest.raises(content_changes.ChangeError, match="pending case depends"):
         content_changes.review_inverse(redo, db_name=mutable_db)

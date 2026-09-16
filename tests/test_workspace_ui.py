@@ -65,7 +65,7 @@ def _reopen_case(app, case_number):
 
 def test_reopen_archived_pending_preset_is_case_local_not_new_choice(mutable_workspace, mutable_db):
     preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
-    assert db_module.save_case("ARCHIVED-REOPEN", preset["id"], "", {}, "<p>draft</p>")
+    assert db_module.save_case("26PR300004", preset["id"], "", {}, "<p>draft</p>")
     content_editing.record_initial_snapshot("a" * 64)
     review = content_studio.review(
         [content_studio.operation("archive", "Presets", "dai")], _snapshot_hash(mutable_db),
@@ -73,7 +73,7 @@ def test_reopen_archived_pending_preset_is_case_local_not_new_choice(mutable_wor
     )
     content_changes.apply_review(review, db_name=mutable_db)
 
-    _reopen_case(mutable_workspace, "ARCHIVED-REOPEN")
+    _reopen_case(mutable_workspace, "26PR300004")
     selector = mutable_workspace.selectbox(key="preset_select")
     assert selector.value == preset["id"] and "Appendice (dai)" in selector.options
     mutable_workspace.session_state["_do_workspace_reset"] = True
@@ -90,7 +90,7 @@ def test_reopen_pending_case_resolves_archived_ad_hoc_block_under_active_preset(
         "block_instances": [{"block_id": ad_hoc["block_id"], "instance_no": 700}],
         "blocks": {"vesicule_biliaire#700": {}},
     }
-    assert db_module.save_case("ACTIVE-PRESET-ARCHIVED-AD-HOC", dai["id"], "", structured, "<p>draft</p>")
+    assert db_module.save_case("26PR300003", dai["id"], "", structured, "<p>draft</p>")
     content_editing.record_initial_snapshot("a" * 64)
     review = content_studio.review(
         [content_studio.operation("archive", "Blocks", "vesicule_biliaire")], _snapshot_hash(mutable_db),
@@ -99,7 +99,7 @@ def test_reopen_pending_case_resolves_archived_ad_hoc_block_under_active_preset(
     content_changes.apply_review(review, db_name=mutable_db)
     assert db_module.get_preset_by_id(dai["id"])["is_archived"] == 0
 
-    _reopen_case(mutable_workspace, "ACTIVE-PRESET-ARCHIVED-AD-HOC")
+    _reopen_case(mutable_workspace, "26PR300003")
 
     assert mutable_workspace.session_state["_case_block_instances"] == structured["block_instances"]
 
@@ -167,12 +167,12 @@ def test_unlimited_decimal_quick_type_overflow_is_atomic_and_visible(mutable_db)
     content_changes.apply_review(review)
 
     app = AppTest.from_file("pages/workspace.py").run()
-    app.text_input(key="case_id_0").set_value("KEEP-THIS-DRAFT").run()
+    app.text_input(key="case_id_0").set_value("26PR300016").run()
     app.text_input(key="qt_input_0").set_value("dai3" + "9" * 400).run()
 
     assert not app.exception
     assert app.session_state.filtered_state.get("_form_generation", 0) == 0
-    assert app.text_input(key="case_id_0").value == "KEEP-THIS-DRAFT"
+    assert app.text_input(key="case_id_0").value == "26PR300016"
     assert any("finite" in item.value.lower() for item in app.error)
     assert not any("✅ dai" in item.value for item in app.success)
 
@@ -203,7 +203,7 @@ def test_queued_quick_type_code_is_reparsed_after_grammar_change(mutable_db):
     dai = next(preset for preset in db_module.get_all_presets()
                if preset["short_code"] == "dai")
     app = AppTest.from_file("pages/workspace.py").run()
-    app.text_input(key="case_id_0").set_value("KEEP-CURRENT-CASE").run()
+    app.text_input(key="case_id_0").set_value("26PR300015").run()
     # This is the callback/application boundary: dai3 was accepted while the
     # original grammar mapped 3 to appendicite_type=periappendicite.
     app.session_state["_pending_quicktype_code"] = "dai3"
@@ -236,7 +236,7 @@ def test_queued_quick_type_code_is_reparsed_after_grammar_change(mutable_db):
     type_key = f"field_{block['block_id']}_{block['sort_order']}_appendicite_type_1"
     assert app.checkbox(key=checkbox_key).value is True
     assert app.selectbox(key=type_key).value != "periappendicite"
-    assert app.text_input(key="case_id_1").value == "KEEP-CURRENT-CASE"
+    assert app.text_input(key="case_id_1").value == "26PR300015"
 
 
 @pytest.mark.parametrize("action", ["compose_up_1", "compose_down_0", "compose_remove_1", "compose_add"])
@@ -249,7 +249,7 @@ def test_reopened_composition_keeps_its_layout_position_after_first_edit(mutable
     app = mutable_workspace
     _select_preset(app, _preset_id("etc_bi"))
     generation = app.session_state["_form_generation"]
-    app.text_input(key=f"case_id_{generation}").set_value("COMPOSITION-REOPEN").run()
+    app.text_input(key=f"case_id_{generation}").set_value("26PR300008").run()
     _button_by_label(app, "💾 Save as Pending").click().run()
 
     def position():
@@ -258,7 +258,7 @@ def test_reopened_composition_keeps_its_layout_position_after_first_edit(mutable
 
     # Each reopen previously reintroduced the banner and the first-edit reset.
     for _ in range(2):
-        _reopen_case(app, "COMPOSITION-REOPEN")
+        _reopen_case(app, "26PR300008")
         assert any("reopened" in message.value for message in app.success)
         before = position()
         app.button(key=action).click().run()
@@ -273,7 +273,7 @@ def test_wildcard_targets_duplicate_instance_and_follows_composition(mutable_wor
     app = mutable_workspace
     _select_preset(app, _preset_id("etc_bi"))
     generation = app.session_state["_form_generation"]
-    app.text_input(key=f"case_id_{generation}").set_value("WILDCARD-DUPLICATE").run()
+    app.text_input(key=f"case_id_{generation}").set_value("26PR300025").run()
     instances = app.session_state["_case_block_instances"]
     second = (instances[1]["block_id"], instances[1]["instance_no"])
     target = app.selectbox(key=f"wildcard_target_instance_{generation}")
@@ -292,9 +292,9 @@ def test_wildcard_targets_duplicate_instance_and_follows_composition(mutable_wor
     micro = app.text_area(key=f"final_micro_edit_{generation}").value
     assert micro.index("NOTE SECOND SPECIMEN") < micro.index("**2.")
     _button_by_label(app, "💾 Save as Pending").click().run()
-    saved = db_module.get_case_by_number("WILDCARD-DUPLICATE")
+    saved = db_module.get_case_by_number("26PR300025")
     assert saved["structured_input"]["wildcard_notes"][0]["target_idx"] == 0
-    _reopen_case(app, "WILDCARD-DUPLICATE")
+    _reopen_case(app, "26PR300025")
     generation = app.session_state["_form_generation"]
     micro = app.text_area(key=f"final_micro_edit_{generation}").value
     assert micro.index("NOTE SECOND SPECIMEN") < micro.index("**2.")
@@ -312,14 +312,14 @@ def test_thyroid_liquid_volume_workspace_and_reopen(mutable_workspace, value, ex
     app = mutable_workspace
     _select_preset(app, _preset_id("etc0"))
     generation = app.session_state["_form_generation"]
-    app.text_input(key=f"case_id_{generation}").set_value("THYROID-VOLUME").run()
+    app.text_input(key=f"case_id_{generation}").set_value("26PR300020").run()
     volume = next(widget for widget in app.text_input if "liquid_volume_ml" in (widget.key or ""))
     volume.set_value(value).run()
     micro = app.text_area(key=f"final_micro_edit_{generation}").value
     assert expected in micro
     assert "None" not in micro
     _button_by_label(app, "💾 Save as Pending").click().run()
-    _reopen_case(app, "THYROID-VOLUME")
+    _reopen_case(app, "26PR300020")
     generation = app.session_state["_form_generation"]
     assert expected in app.text_area(key=f"final_micro_edit_{generation}").value
 
@@ -328,7 +328,7 @@ class TestPresetSwitchReset:
     def test_switching_thyroid_variants_preserves_case_id_and_resets_fields(self, workspace):
         _select_preset(workspace, _preset_id("etc0"))
         first_generation = workspace.session_state["_form_generation"]
-        workspace.text_input(key=f"case_id_{first_generation}").set_value("CASE-42").run()
+        workspace.text_input(key=f"case_id_{first_generation}").set_value("26PR300007").run()
 
         old_pattern = next(widget for widget in workspace.selectbox if widget.label == "Aspect cytologique")
         old_pattern.set_value("etc3").run()
@@ -336,18 +336,18 @@ class TestPresetSwitchReset:
 
         new_generation = workspace.session_state["_form_generation"]
         assert new_generation == first_generation + 1
-        assert workspace.session_state[f"case_id_{new_generation}"] == "CASE-42"
+        assert workspace.session_state[f"case_id_{new_generation}"] == "26PR300007"
         new_pattern = next(widget for widget in workspace.selectbox if widget.label == "Aspect cytologique")
         assert new_pattern.value == "etc5"
 
 
 class TestQuickTypeApply:
     def test_success_applies_preset_and_overrides_atomically(self, workspace):
-        workspace.text_input(key="case_id_0").set_value("CASE-37").run()
+        workspace.text_input(key="case_id_0").set_value("26PR300006").run()
         workspace.text_input(key="qt_input_0").set_value("dai37").run()
 
         assert workspace.session_state["_form_generation"] == 1
-        assert workspace.session_state["case_id_1"] == "CASE-37"
+        assert workspace.session_state["case_id_1"] == "26PR300006"
         assert workspace.selectbox(key="preset_select").value == _preset_id("dai")
         assert any("dai" in message.value for message in workspace.success)
         assert any(
@@ -371,22 +371,22 @@ class TestQuickTypeApply:
 
 class TestSaveAndSafetyGates:
     def test_save_pending_resets_generation_and_persists_isolated_case(self, mutable_workspace):
-        first_generation = _select_appendix_with_case_id(mutable_workspace, "PENDING-1")
+        first_generation = _select_appendix_with_case_id(mutable_workspace, "26PR300017")
 
         _button_by_label(mutable_workspace, "💾 Save as Pending").click().run()
 
         assert mutable_workspace.session_state["_form_generation"] == first_generation + 1
         assert mutable_workspace.selectbox(key="preset_select").value == _preset_id("dai")
         assert mutable_workspace.text_input(key=f"case_id_{first_generation + 1}").value == ""
-        saved = db_module.get_case_by_number("PENDING-1")
+        saved = db_module.get_case_by_number("26PR300017")
         assert saved["status"] == "pending"
         assert saved["pending_reason"] == "IHC"
-        assert any("PENDING-1" in message.value for message in mutable_workspace.success)
+        assert any("26PR300017" in message.value for message in mutable_workspace.success)
 
     def test_multiblock_case_composition_round_trips_on_reopen(self, mutable_workspace):
         _select_preset(mutable_workspace, _preset_id("gt"))
         generation = mutable_workspace.session_state["_form_generation"]
-        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("GT-COMPOSE-1").run()
+        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("26PR300012").run()
 
         preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "gt")
         expected_instances = composition.derive_block_instances(
@@ -394,13 +394,13 @@ class TestSaveAndSafetyGates:
         )
         _button_by_label(mutable_workspace, "💾 Save as Pending").click().run()
 
-        saved = db_module.get_case_by_number("GT-COMPOSE-1")
+        saved = db_module.get_case_by_number("26PR300012")
         assert saved["structured_input"]["block_instances"] == expected_instances
 
         reopened = AppTest.from_file("pages/workspace.py")
         reopened.run()
         assert not reopened.exception
-        reopened.session_state["_reopen_case_number"] = "GT-COMPOSE-1"
+        reopened.session_state["_reopen_case_number"] = "26PR300012"
         reopened.session_state["_do_case_reopen"] = True
         reopened.run()
 
@@ -410,13 +410,13 @@ class TestSaveAndSafetyGates:
     def test_reopen_old_case_falls_back_to_preset_instances(self, mutable_workspace):
         preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "gt")
         assert db_module.save_case(
-            "GT-LEGACY-1", preset["id"], "", {"blocks": {}}, "", status="pending"
+            "26PR300013", preset["id"], "", {"blocks": {}}, "", status="pending"
         )
         expected_instances = composition.derive_block_instances(
             db_module.get_preset_blocks(preset["id"])
         )
 
-        mutable_workspace.session_state["_reopen_case_number"] = "GT-LEGACY-1"
+        mutable_workspace.session_state["_reopen_case_number"] = "26PR300013"
         mutable_workspace.session_state["_do_case_reopen"] = True
         mutable_workspace.run()
 
@@ -426,7 +426,7 @@ class TestSaveAndSafetyGates:
     def test_reorder_and_remove_composition_round_trip(self, mutable_workspace):
         _select_preset(mutable_workspace, _preset_id("gt"))
         generation = mutable_workspace.session_state["_form_generation"]
-        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("GT-REORDER-1").run()
+        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("26PR300014").run()
 
         initial = list(mutable_workspace.session_state["_case_block_instances"])
         mutable_workspace.button(key="compose_down_0").click().run()
@@ -439,7 +439,7 @@ class TestSaveAndSafetyGates:
 
         reopened = AppTest.from_file("pages/workspace.py")
         reopened.run()
-        reopened.session_state["_reopen_case_number"] = "GT-REORDER-1"
+        reopened.session_state["_reopen_case_number"] = "26PR300014"
         reopened.session_state["_do_case_reopen"] = True
         reopened.run()
         assert not reopened.exception
@@ -458,7 +458,7 @@ class TestSaveAndSafetyGates:
     def test_add_block_uses_bare_defaults_and_round_trips(self, mutable_workspace):
         _select_preset(mutable_workspace, _preset_id("gt"))
         generation = mutable_workspace.session_state["_form_generation"]
-        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("GT-ADD-1").run()
+        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("26PR300011").run()
         add_widget = mutable_workspace.selectbox(key="compose_add_block")
         appendix = next(block for block in db_module.get_all_blocks() if block["key"] == "appendice")
         add_widget.set_value(appendix["id"]).run()
@@ -468,7 +468,7 @@ class TestSaveAndSafetyGates:
         assert added["block_id"] == appendix["id"]
         assert added["instance_no"] == 1000
         _button_by_label(mutable_workspace, "💾 Save as Pending").click().run()
-        saved = db_module.get_case_by_number("GT-ADD-1")
+        saved = db_module.get_case_by_number("26PR300011")
         assert saved["structured_input"]["blocks"]["appendice#1000"]["appendicite_type"] == "endo"
 
     def test_quick_type_resets_composition_to_preset_defaults(self, workspace):
@@ -485,8 +485,8 @@ class TestSaveAndSafetyGates:
 
     def test_existing_case_disables_save_until_overwrite_is_confirmed(self, mutable_workspace):
         dai = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
-        assert db_module.save_case("DUP-1", dai["id"], "", {}, "", status="pending", pending_reason="IHC")
-        _select_appendix_with_case_id(mutable_workspace, "DUP-1")
+        assert db_module.save_case("26PR300010", dai["id"], "", {}, "", status="pending", pending_reason="IHC")
+        _select_appendix_with_case_id(mutable_workspace, "26PR300010")
 
         save_button = _button_by_label(mutable_workspace, "💾 Save as Pending")
         assert save_button.disabled is True
@@ -500,7 +500,7 @@ class TestSaveAndSafetyGates:
         assert _button_by_label(mutable_workspace, "💾 Save as Pending").disabled is False
 
     def test_inconsistent_appendix_requires_confirmation_before_save(self, mutable_workspace):
-        _select_appendix_with_case_id(mutable_workspace, "CONSISTENT-1")
+        _select_appendix_with_case_id(mutable_workspace, "26PR300009")
         false_membranes = next(
             widget for widget in mutable_workspace.checkbox if widget.label == "Fausses membranes"
         )
@@ -519,12 +519,12 @@ class TestSaveAndSafetyGates:
 
     def test_validated_reopen_is_frozen_and_only_offers_audited_return(self, mutable_workspace):
         preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
-        assert db_module.save_case("VALIDATED-UI-1", preset["id"], "", {}, "<p>frozen report</p>", status="validated")
+        assert db_module.save_case("26PR300024", preset["id"], "", {}, "<p>frozen report</p>", status="validated")
         conn = db_module.get_db_connection()
         conn.execute("UPDATE Blocks SET micro_template = 'CURRENT TEMPLATE MUST NOT RENDER' WHERE key = 'appendice'")
         conn.commit()
         conn.close()
-        _reopen_case(mutable_workspace, "VALIDATED-UI-1")
+        _reopen_case(mutable_workspace, "26PR300024")
 
         assert not any(button.label.startswith("💾 Save") for button in mutable_workspace.button)
         return_button = _button_by_label(mutable_workspace, "↩️ Return to Pending")
@@ -537,7 +537,7 @@ class TestSaveAndSafetyGates:
         preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
         frozen_html = "<p>frozen after preset deletion</p>"
         assert db_module.save_case(
-            "VALIDATED-DELETED-PRESET-UI", preset["id"], "", {}, frozen_html, status="validated"
+            "26PR300022", preset["id"], "", {}, frozen_html, status="validated"
         )
         content_editing.record_initial_snapshot("a" * 64)
         review = content_studio.review(
@@ -545,9 +545,9 @@ class TestSaveAndSafetyGates:
             _snapshot_hash(mutable_db), summary="delete validated case preset", db_name=mutable_db,
         )
         content_changes.apply_review(review, db_name=mutable_db)
-        assert db_module.get_case_by_number("VALIDATED-DELETED-PRESET-UI")["preset_id"] is None
+        assert db_module.get_case_by_number("26PR300022")["preset_id"] is None
 
-        _reopen_case(mutable_workspace, "VALIDATED-DELETED-PRESET-UI")
+        _reopen_case(mutable_workspace, "26PR300022")
 
         assert any("frozen after preset deletion" in markdown.value for markdown in mutable_workspace.markdown)
         assert not any("references a preset that no longer exists" in error.value for error in mutable_workspace.error)
@@ -556,15 +556,15 @@ class TestSaveAndSafetyGates:
         mutable_workspace.checkbox(key=f"return_pending_confirm_{generation}").set_value(True).run()
         _button_by_label(mutable_workspace, "↩️ Return to Pending").click().run()
 
-        saved = db_module.get_case_by_number("VALIDATED-DELETED-PRESET-UI")
+        saved = db_module.get_case_by_number("26PR300022")
         assert saved["status"] == "validated"
         assert saved["rendered_html"] == frozen_html
         assert any("Could not return this case to pending" in error.value for error in mutable_workspace.error)
 
     def test_new_case_button_leaves_frozen_validated_view(self, mutable_workspace):
         preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
-        assert db_module.save_case("VALIDATED-NEW-CASE-1", preset["id"], "", {}, "<p>frozen</p>", status="validated")
-        _reopen_case(mutable_workspace, "VALIDATED-NEW-CASE-1")
+        assert db_module.save_case("26PR300023", preset["id"], "", {}, "<p>frozen</p>", status="validated")
+        _reopen_case(mutable_workspace, "26PR300023")
         frozen_generation = mutable_workspace.session_state["_form_generation"]
 
         _button_by_label(mutable_workspace, "➕ New Case").click().run()
@@ -578,8 +578,8 @@ class TestSaveAndSafetyGates:
 
     def test_validated_case_number_shows_only_the_hard_stop_message(self, mutable_workspace):
         preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
-        assert db_module.save_case("VALIDATED-COLLISION-1", preset["id"], "", {}, "<p>frozen</p>", status="validated")
-        _select_appendix_with_case_id(mutable_workspace, "VALIDATED-COLLISION-1")
+        assert db_module.save_case("26PR300021", preset["id"], "", {}, "<p>frozen</p>", status="validated")
+        _select_appendix_with_case_id(mutable_workspace, "26PR300021")
 
         assert not any("already exists" in warning.value for warning in mutable_workspace.warning)
         assert not any("overwrite the existing case anyway" in checkbox.label for checkbox in mutable_workspace.checkbox)
@@ -589,10 +589,10 @@ class TestSaveAndSafetyGates:
 
     def test_validated_history_shows_return_to_pending_reason(self, mutable_workspace):
         preset = next(p for p in db_module.get_all_presets() if p["short_code"] == "dai")
-        assert db_module.save_case("AUDIT-UI-1", preset["id"], "", {}, "<p>first validation</p>", status="validated")
-        assert db_module.return_case_to_pending("AUDIT-UI-1", "wrong validation status")
-        assert db_module.save_case("AUDIT-UI-1", preset["id"], "", {}, "<p>second validation</p>", status="validated")
-        _reopen_case(mutable_workspace, "AUDIT-UI-1")
+        assert db_module.save_case("26PR300005", preset["id"], "", {}, "<p>first validation</p>", status="validated")
+        assert db_module.return_case_to_pending("26PR300005", "wrong validation status")
+        assert db_module.save_case("26PR300005", preset["id"], "", {}, "<p>second validation</p>", status="validated")
+        _reopen_case(mutable_workspace, "26PR300005")
 
         assert any("wrong validation status" in markdown.value for markdown in mutable_workspace.markdown)
         validation_lines = [
@@ -608,12 +608,12 @@ class TestSaveAndSafetyGates:
             "block_instances": [{"block_id": blocks[0]["block_id"], "instance_no": blocks[0]["sort_order"]}],
             "blocks": {}, "wildcard_notes": [], "master_lock": False,
         }
-        assert db_module.save_case("ACK-UI-1", preset["id"], "", structured, "<p>old</p>")
+        assert db_module.save_case("26PR300001", preset["id"], "", structured, "<p>old</p>")
         conn = db_module.get_db_connection()
         conn.execute("UPDATE Blocks SET micro_template = micro_template || ' ' WHERE id = ?", (blocks[0]["block_id"],))
         conn.commit()
         conn.close()
-        _reopen_case(mutable_workspace, "ACK-UI-1")
+        _reopen_case(mutable_workspace, "26PR300001")
 
         assert _button_by_label(mutable_workspace, "💾 Save as Pending").disabled is True
         acknowledgement = next(widget for widget in mutable_workspace.checkbox if "acknowledge the content change" in widget.label)
@@ -627,12 +627,12 @@ class TestSaveAndSafetyGates:
             "block_instances": [{"block_id": blocks[0]["block_id"], "instance_no": blocks[0]["sort_order"]}],
             "blocks": {}, "wildcard_notes": [], "master_lock": False,
         }
-        assert db_module.save_case("ACK-UI-2", preset["id"], "", structured, "<p>old</p>")
+        assert db_module.save_case("26PR300002", preset["id"], "", structured, "<p>old</p>")
         conn = db_module.get_db_connection()
         conn.execute("UPDATE Blocks SET micro_template = micro_template || ' first' WHERE id = ?", (blocks[0]["block_id"],))
         conn.commit()
         conn.close()
-        _reopen_case(mutable_workspace, "ACK-UI-2")
+        _reopen_case(mutable_workspace, "26PR300002")
 
         acknowledgement = next(widget for widget in mutable_workspace.checkbox if "acknowledge the content change" in widget.label)
         acknowledgement.set_value(True).run()
@@ -658,7 +658,7 @@ class TestSaveAndSafetyGates:
         preset_id = _preset_id("dai")
         _select_preset(mutable_workspace, preset_id)
         generation = mutable_workspace.session_state["_form_generation"]
-        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("RENAME-IN-PROGRESS-1").run()
+        mutable_workspace.text_input(key=f"case_id_{generation}").set_value("26PR300018").run()
         original_label = mutable_workspace.session_state["_preset_display_labels"][preset_id]
         conn = db_module.get_db_connection()
         conn.execute("UPDATE Presets SET name = ? WHERE id = ?", ("Appendice renommé", preset_id))
@@ -678,7 +678,7 @@ class TestSaveAndSafetyGates:
 
         assert mutable_workspace.selectbox(key="preset_select").value == preset_id
         assert mutable_workspace.session_state["_form_generation"] == generation
-        assert mutable_workspace.text_input(key=f"case_id_{generation}").value == "RENAME-IN-PROGRESS-1"
+        assert mutable_workspace.text_input(key=f"case_id_{generation}").value == "26PR300018"
         assert mutable_workspace.session_state["_preset_display_labels"][preset_id] == original_label
 
         mutable_workspace.session_state["_do_workspace_reset"] = True
@@ -715,13 +715,13 @@ def test_saved_case_preview_matches_workspace_reopen(mutable_workspace, code, ma
     conn.execute(
         """INSERT INTO Cases(case_number,preset_id,clinical_info,structured_input,rendered_html,status,content_fingerprint)
            VALUES(?,?,?,?,?,'pending',?)""",
-        ("SYNTHETIC-PARITY", preset_id, "Contexte libre", json.dumps(structured), "Previously saved", fingerprint),
+        ("26PR300019", preset_id, "Contexte libre", json.dumps(structured), "Previously saved", fingerprint),
     )
     conn.commit()
-    case = dict(conn.execute("SELECT * FROM Cases WHERE case_number='SYNTHETIC-PARITY'").fetchone())
+    case = dict(conn.execute("SELECT * FROM Cases WHERE case_number='26PR300019'").fetchone())
     preview = editor_preview.render_saved_case(conn, case)
     conn.close()
-    _reopen_case(app, "SYNTHETIC-PARITY")
+    _reopen_case(app, "26PR300019")
     generation = app.session_state["_form_generation"]
     assert app.text_input(key=f"final_title_edit_{generation}").value == preview["title"]
     assert app.text_input(key=f"clin_info_{generation}").value == preview["clinical_info"]

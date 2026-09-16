@@ -156,7 +156,7 @@ def test_validation_covers_macros_grouping_addenda_pending_cases_and_discrete_br
     gastric = _preset("gt")
     data = _case_data(gastric["id"])
     before_fingerprint = database.compute_case_content_fingerprint(gastric["id"], data)
-    assert database.save_case("EDITOR-PENDING-1", gastric["id"], "", data, "<p>draft</p>")
+    assert database.save_case("26PR520002", gastric["id"], "", data, "<p>draft</p>")
     field = _row("Fields", "key", "hp_positive")
     # Its addendum is shared across gastric Blocks; successful save proves
     # candidate default + saved pending contexts (including grouping/addenda)
@@ -168,7 +168,7 @@ def test_validation_covers_macros_grouping_addenda_pending_cases_and_discrete_br
     assert database.compute_case_content_fingerprint(gastric["id"], data) != before_fingerprint
     checkbox = _row("Fields", "key", "false_membranes")
     content_editing.save_edit("Fields", "false_membranes", {"default_value": "1"}, checkbox["row_hash"])
-    assert database.get_case_by_number("EDITOR-PENDING-1")["status"] == "pending"
+    assert database.get_case_by_number("26PR520002")["status"] == "pending"
 
 
 def test_checkbox_and_select_nondefault_branches_are_rendered_before_commit(mutable_db):
@@ -222,7 +222,7 @@ def test_field_addendum_snippets_drive_impact_and_pending_fingerprints(mutable_d
     )
     gastric = _preset("gt")
     data = _case_data(gastric["id"])
-    assert database.save_case("ADDENDUM-SNIPPET-1", gastric["id"], "", data, "<p>draft</p>")
+    assert database.save_case("26PR520001", gastric["id"], "", data, "<p>draft</p>")
     before = database.compute_case_content_fingerprint(gastric["id"], data)
     usage = database.get_snippet_usage("absence_malignite")
     assert usage["pending_case_count"] == 1

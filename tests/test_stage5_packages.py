@@ -66,7 +66,7 @@ def connection(path):
     return conn
 
 
-def save_synthetic_case(path, code="dai", structured=None, number="SYNTHETIC-PENDING", status="pending"):
+def save_synthetic_case(path, code="dai", structured=None, number="26PR610002", status="pending"):
     conn = connection(path)
     try:
         preset = conn.execute("SELECT * FROM Presets WHERE short_code=?", (code,)).fetchone()
@@ -84,7 +84,7 @@ def save_synthetic_case(path, code="dai", structured=None, number="SYNTHETIC-PEN
 
 
 def test_context_privacy_allowlisted_queries_and_contract_example(mutable_db, monkeypatch):
-    save_synthetic_case(mutable_db, number="PATIENT-ID-CANARY")
+    save_synthetic_case(mutable_db, number="26PR610001")
     conn = connection(mutable_db)
     conn.execute("INSERT INTO Content_Revisions(origin,summary) VALUES ('manual_edit','AUDIT-CANARY')")
     conn.commit()
@@ -100,7 +100,7 @@ def test_context_privacy_allowlisted_queries_and_contract_example(mutable_db, mo
     conn.set_authorizer(authorize)
     monkeypatch.setattr(database, "get_db_connection", lambda: conn)
     exported = packages.export_ai_context()
-    assert b"PATIENT-ID-CANARY" not in exported and b"SAVED-CANARY" not in exported and b"AUDIT-CANARY" not in exported
+    assert b"26PR610001" not in exported and b"SAVED-CANARY" not in exported and b"AUDIT-CANARY" not in exported
     assert queried == set(content_snapshot.BASE_TABLES) | set(content_snapshot.RELATION_TABLES)
     payload = json.loads(exported)
     assert set(payload) == {"format", "snapshot_sha256", "instructions", "snapshot"}
@@ -451,8 +451,8 @@ def test_pending_locks_stale_impact_and_all_pending_validation(mutable_db):
         "final_micro_edit": "", "final_conc_edit": "",
         "wildcard_notes": [{"target_idx": 0, "text": "LOCAL-NOTE", "target_name": "Spécimen", "note_type": "Autre"}],
     })
-    save_synthetic_case(mutable_db, code="vb", number="UNAFFECTED")
-    save_synthetic_case(mutable_db, number="VALIDATED", status="validated")
+    save_synthetic_case(mutable_db, code="vb", number="26PR610003")
+    save_synthetic_case(mutable_db, number="26PR610004", status="validated")
     conn = connection(mutable_db)
     conn.execute("UPDATE Cases SET content_fingerprint='older' WHERE id=?", (case["id"],))
     conn.commit()
@@ -468,7 +468,7 @@ def test_pending_locks_stale_impact_and_all_pending_validation(mutable_db):
     assert impact["after"]["report"]["clinical_info"] == "Contexte sauvegardé"
     assert result.data["validated_pending_count"] == 2
     conn = connection(mutable_db)
-    conn.execute("UPDATE Cases SET structured_input='[]' WHERE case_number='UNAFFECTED'")
+    conn.execute("UPDATE Cases SET structured_input='[]' WHERE case_number='26PR610003'")
     conn.commit()
     conn.close()
     with pytest.raises(packages.PackageError) as error:

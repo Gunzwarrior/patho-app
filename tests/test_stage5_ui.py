@@ -209,7 +209,7 @@ def test_readable_complete_review_and_recovery_gate(mutable_db):
 
 
 def test_affected_pending_report_is_readable_and_session_only(mutable_db):
-    saved = save_synthetic_case(mutable_db, number="LOCAL-PENDING-UI")
+    saved = save_synthetic_case(mutable_db, number="26PR620001")
     package = _file(envelope(mutable_db, [{
         "op": "update", "table": "Blocks", "key": "appendice",
         "set": {"micro_template": "Microscopie candidate complète."},
@@ -224,7 +224,7 @@ def test_affected_pending_report_is_readable_and_session_only(mutable_db):
     assert any("Microscopie candidate complète." in item.value for item in app.code)
     assert any(item.label == "Last saved report" for item in app.expander)
     feedback_blocks = [item.value for item in app.code if item.language == "json"]
-    assert all("LOCAL-PENDING-UI" not in value for value in feedback_blocks)
+    assert all("26PR620001" not in value for value in feedback_blocks)
 
 
 def test_successful_apply_clears_forms_preserves_section_and_records_revision(mutable_db):
@@ -336,19 +336,19 @@ def test_workspace_validated_artifact_uses_restricted_html(mutable_db):
     conn.execute(
         """INSERT INTO Cases(case_number,preset_id,clinical_info,structured_input,rendered_html,status)
            VALUES(?,?,?,?,?,'validated')""",
-        ("SYNTHETIC-HTML", preset["id"], "", "{}", dangerous),
+        ("26PR620003", preset["id"], "", "{}", dangerous),
     )
     conn.commit()
     conn.close()
     app = AppTest.from_file("pages/workspace.py").run()
-    next(item for item in app.text_input if item.label == "Case number").set_value("SYNTHETIC-HTML")
+    next(item for item in app.text_input if item.label == "Case number").set_value("26PR620003")
     next(button for button in app.button if button.label == "Reopen").click().run()
 
     displayed = "\n".join(item.value for item in app.markdown)
     assert "SAFE-WORKSPACE" in displayed and "text-align: center" in displayed
     assert "outside.test" not in displayed and "onerror" not in displayed
     assert "PRIVATE-WORKSPACE" not in displayed and "<script" not in displayed
-    saved = database.get_case_by_number("SYNTHETIC-HTML")
+    saved = database.get_case_by_number("26PR620003")
     assert saved["rendered_html"] == dangerous
 
 

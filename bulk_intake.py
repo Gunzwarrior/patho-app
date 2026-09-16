@@ -209,7 +209,12 @@ def parse_bulk_source(source: bytes | str, delimiter: str, first_row_is_header: 
             raise BulkInputError(f"Row {line} must contain exactly two cells.")
         if not cells[0] or not cells[1]:
             raise BulkInputError(f"Row {line} has a blank Case ID or Quick Type.")
-        rows.append(SourceRow(line, cells[0], cells[1]))
+        try:
+            case_number = database.normalize_case_number(cells[0])
+        except database.CaseNumberError as error:
+            raise BulkInputError(f"Row {line} has an unsupported Case ID.") from error
+        # Keep Quick Type untouched: its grammar remains case-sensitive.
+        rows.append(SourceRow(line, case_number, cells[1]))
     normalized_pairs = [[row.case_number, row.quick_type] for row in rows]
     return ParsedSource(
         delimiter=delimiter,

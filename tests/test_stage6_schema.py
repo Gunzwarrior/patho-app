@@ -69,8 +69,8 @@ def _remove_stage6_columns(db_name):
 def test_stage6_migration_is_additive_idempotent_and_preserves_cases(mutable_db):
     preset = _preset("gt")
     data = _case_input(database.get_preset_blocks(preset["id"]))
-    assert database.save_case("STAGE6-PENDING", preset["id"], "pending context", data, "<p>pending report</p>")
-    assert database.save_case("STAGE6-VALID", preset["id"], "validated context", data, "<p>validated report</p>", status="validated")
+    assert database.save_case("26PR200004", preset["id"], "pending context", data, "<p>pending report</p>")
+    assert database.save_case("26PR200008", preset["id"], "validated context", data, "<p>validated report</p>", status="validated")
     conn = database.get_db_connection()
     try:
         before_cases = [dict(row) for row in conn.execute(
@@ -162,12 +162,12 @@ def _save_revalidated_case(case_number):
 
 
 def test_stage6_history_backfill_uses_its_own_preset_without_case_fallback(mutable_db):
-    dai, gt = _save_revalidated_case("STAGE6-HISTORY-BACKFILL")
+    dai, gt = _save_revalidated_case("26PR200002")
     conn = database.get_db_connection()
     try:
         case = conn.execute(
             "SELECT id, preset_id, status, rendered_html FROM Cases WHERE case_number = ?",
-            ("STAGE6-HISTORY-BACKFILL",),
+            ("26PR200002",),
         ).fetchone()
         conn.execute(
             """INSERT INTO Case_Validation_History
@@ -193,7 +193,7 @@ def test_stage6_history_backfill_uses_its_own_preset_without_case_fallback(mutab
     try:
         case_after = dict(conn.execute(
             "SELECT id, preset_id, status, rendered_html FROM Cases WHERE case_number = ?",
-            ("STAGE6-HISTORY-BACKFILL",),
+            ("26PR200002",),
         ).fetchone())
         history = [dict(row) for row in conn.execute(
             """SELECT id, preset_id, rendered_html, structured_input,
@@ -219,15 +219,15 @@ def test_stage6_history_backfill_uses_its_own_preset_without_case_fallback(mutab
 
 
 def test_stage6_history_identity_repair_corrects_only_proven_legacy_backfill(mutable_db):
-    dai, gt = _save_revalidated_case("STAGE6-HISTORY-REPAIR")
+    dai, gt = _save_revalidated_case("26PR200003")
     assert database.save_case(
-        "STAGE6-UNRELATED-HISTORY", dai["id"], "unrelated", _case_input(database.get_preset_blocks(dai["id"])),
+        "26PR200007", dai["id"], "unrelated", _case_input(database.get_preset_blocks(dai["id"])),
         "<p>unrelated validated report</p>", status="validated",
     )
     conn = database.get_db_connection()
     try:
         case = dict(conn.execute(
-            "SELECT * FROM Cases WHERE case_number = ?", ("STAGE6-HISTORY-REPAIR",)
+            "SELECT * FROM Cases WHERE case_number = ?", ("26PR200003",)
         ).fetchone())
         history = [dict(row) for row in conn.execute(
             "SELECT * FROM Case_Validation_History WHERE case_id = ? ORDER BY id", (case["id"],)
@@ -235,7 +235,7 @@ def test_stage6_history_identity_repair_corrects_only_proven_legacy_backfill(mut
         unrelated = dict(conn.execute(
             """SELECT h.* FROM Case_Validation_History h JOIN Cases c ON c.id = h.case_id
                WHERE c.case_number = ?""",
-            ("STAGE6-UNRELATED-HISTORY",),
+            ("26PR200007",),
         ).fetchone())
         for row in history:
             conn.execute(
@@ -344,13 +344,13 @@ def test_stage6_history_repair_preserves_post_marker_identity_after_preset_renam
         conn.commit()
     finally:
         conn.close()
-    dai, _ = _save_revalidated_case("STAGE6-POST-MARKER")
+    dai, _ = _save_revalidated_case("26PR200005")
     conn = database.get_db_connection()
     try:
         history = dict(conn.execute(
             """SELECT h.* FROM Case_Validation_History h JOIN Cases c ON c.id = h.case_id
                WHERE c.case_number = ? ORDER BY h.id LIMIT 1""",
-            ("STAGE6-POST-MARKER",),
+            ("26PR200005",),
         ).fetchone())
         conn.execute("UPDATE Presets SET name = ? WHERE id = ?", ("Appendice renommée", dai["id"]))
         conn.execute(
@@ -379,7 +379,7 @@ def test_stage6_history_repair_preserves_post_marker_identity_after_preset_renam
 def test_stage6_history_repair_preserves_unavailable_historical_preset_identity(mutable_db):
     preset = _preset("dai")
     assert database.save_case(
-        "STAGE6-UNAVAILABLE", preset["id"], "unavailable", _case_input(database.get_preset_blocks(preset["id"])),
+        "26PR200006", preset["id"], "unavailable", _case_input(database.get_preset_blocks(preset["id"])),
         "<p>unavailable report</p>", status="validated",
     )
     conn = sqlite3.connect(mutable_db)
@@ -389,7 +389,7 @@ def test_stage6_history_repair_preserves_unavailable_historical_preset_identity(
         history = dict(conn.execute(
             """SELECT h.* FROM Case_Validation_History h JOIN Cases c ON c.id = h.case_id
                WHERE c.case_number = ?""",
-            ("STAGE6-UNAVAILABLE",),
+            ("26PR200006",),
         ).fetchone())
         conn.execute("DELETE FROM Presets WHERE id = ?", (preset["id"],))
         conn.execute(
@@ -418,10 +418,10 @@ def test_stage6_history_repair_preserves_unavailable_historical_preset_identity(
 def test_saving_and_validating_a_case_freezes_its_live_preset_identity(mutable_db):
     preset = _preset("dai")
     data = _case_input(database.get_preset_blocks(preset["id"]))
-    assert database.save_case("STAGE6-FROZEN", preset["id"], "", data, "<p>pending</p>")
-    assert database.save_case("STAGE6-FROZEN", preset["id"], "", data, "<p>validated</p>", status="validated")
-    case = database.get_case_by_number("STAGE6-FROZEN")
-    history = database.get_case_validation_history("STAGE6-FROZEN")
+    assert database.save_case("26PR200001", preset["id"], "", data, "<p>pending</p>")
+    assert database.save_case("26PR200001", preset["id"], "", data, "<p>validated</p>", status="validated")
+    case = database.get_case_by_number("26PR200001")
+    history = database.get_case_validation_history("26PR200001")
     assert (case["preset_short_code_snapshot"], case["preset_name_snapshot"]) == ("dai", "Appendice")
     assert [(row["preset_short_code_snapshot"], row["preset_name_snapshot"]) for row in history] == [
         ("dai", "Appendice")

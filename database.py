@@ -6,11 +6,39 @@ import os
 import pandas as pd
 import template_analysis
 from dataclasses import dataclass
+from datetime import date
 from typing import Literal
 
 # Allows an isolated app boot without ever migrating the operational file.
 # Normal interactive use remains exactly ``pathology.db``.
 DB_NAME = os.environ.get("PATHOPILOT_DB_NAME", "pathology.db")
+
+CASE_ACCESSION_SITE = "PR"
+_EXPLICIT_CASE_ACCESSION_RE = re.compile(r"^(?P<year>\d{2})(?P<site>PR)(?P<number>\d+)$", re.IGNORECASE)
+
+
+class CaseNumberError(ValueError):
+    """Raised when input cannot name one supported Case accession."""
+
+
+def normalize_case_number(value, *, current_date: date | None = None) -> str:
+    """Resolve a Case ID to its canonical accession identity.
+
+    A bare numeric entry belongs to the operational calendar year at the
+    moment it is entered. An explicit ``YYPR<number>`` accession names its
+    own year, including a previous year. This deliberately has no relation
+    to a Case row's ``created_at`` timestamp.
+    """
+    if not isinstance(value, str):
+        raise CaseNumberError("Case ID must be text.")
+    candidate = value.strip()
+    if candidate.isdigit():
+        year = (current_date or date.today()).strftime("%y")
+        return f"{year}{CASE_ACCESSION_SITE}{candidate}"
+    match = _EXPLICIT_CASE_ACCESSION_RE.fullmatch(candidate)
+    if match:
+        return f"{match.group('year')}{CASE_ACCESSION_SITE}{match.group('number')}"
+    raise CaseNumberError("Case ID must be digits or a YYPR<number> accession.")
 
 
 def get_db_connection():
@@ -920,8 +948,13 @@ def get_all_cases(status=None, search_term=None):
         params.append(status)
     if search_term:
         query += " AND (c.case_number LIKE ? OR c.clinical_info LIKE ?)"
-        like_term = f"%{search_term}%"
-        params.extend([like_term, like_term])
+        # Valid short/full Case-ID searches use the canonical namespace;
+        # free-text clinical searches remain deliberately unconstrained.
+        try:
+            case_search = normalize_case_number(search_term)
+        except CaseNumberError:
+            case_search = search_term
+        params.extend([f"%{case_search}%", f"%{search_term}%"])
     query += " ORDER BY COALESCE(c.updated_at, c.created_at) DESC"
     rows = conn.execute(query, params).fetchall()
     conn.close()
@@ -949,8 +982,12 @@ def get_pending_cases():
 def get_case_by_number(case_number):
     """Returns a saved Case as a dict, with structured_input already parsed
     from JSON, or None if no case with that number exists."""
+    try:
+        canonical_case_number = normalize_case_number(case_number)
+    except CaseNumberError:
+        return None
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM Cases WHERE case_number = ?", (case_number,)).fetchone()
+    row = conn.execute("SELECT * FROM Cases WHERE case_number = ?", (canonical_case_number,)).fetchone()
     conn.close()
     if not row:
         return None
@@ -1058,10 +1095,14 @@ def compute_case_content_fingerprint(preset_id, structured_input, conn=None, *, 
 
 
 def get_case_validation_history(case_number):
+    try:
+        canonical_case_number = normalize_case_number(case_number)
+    except CaseNumberError:
+        return []
     conn = get_db_connection()
     rows = conn.execute(
         """SELECT h.* FROM Case_Validation_History h JOIN Cases c ON c.id = h.case_id
-           WHERE c.case_number = ? ORDER BY h.id""", (case_number,)
+           WHERE c.case_number = ? ORDER BY h.id""", (canonical_case_number,)
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
@@ -1069,11 +1110,15 @@ def get_case_validation_history(case_number):
 
 def get_case_status_history(case_number):
     """Audited lifecycle transitions, including return-to-pending reasons."""
+    try:
+        canonical_case_number = normalize_case_number(case_number)
+    except CaseNumberError:
+        return []
     conn = get_db_connection()
     rows = conn.execute(
         """SELECT h.transition, h.reason, h.created_at
            FROM Case_Status_History h JOIN Cases c ON c.id = h.case_id
-           WHERE c.case_number = ? ORDER BY h.id""", (case_number,)
+           WHERE c.case_number = ? ORDER BY h.id""", (canonical_case_number,)
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
@@ -1087,11 +1132,15 @@ def delete_pending_case(case_number):
     is removed only after the Case is gone and only when no Cases still refer
     to it.
     """
+    try:
+        canonical_case_number = normalize_case_number(case_number)
+    except CaseNumberError:
+        return False
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
         case = conn.execute(
-            "SELECT id, status, batch_import_id FROM Cases WHERE case_number = ?", (case_number,)
+            "SELECT id, status, batch_import_id FROM Cases WHERE case_number = ?", (canonical_case_number,)
         ).fetchone()
         if not case or case["status"] != "pending":
             conn.rollback()
@@ -1133,10 +1182,14 @@ def return_case_to_pending(case_number, reason):
     """
     if not reason or not reason.strip():
         return False
+    try:
+        canonical_case_number = normalize_case_number(case_number)
+    except CaseNumberError:
+        return False
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        case = conn.execute("SELECT * FROM Cases WHERE case_number = ?", (case_number,)).fetchone()
+        case = conn.execute("SELECT * FROM Cases WHERE case_number = ?", (canonical_case_number,)).fetchone()
         if not case or case["status"] != "validated":
             return False
         try:
@@ -1192,12 +1245,16 @@ def persist_case_on_connection(
     accepts a batch link. This function never begins,
     commits, or rolls back a transaction.
     """
+    try:
+        canonical_case_number = normalize_case_number(case_number)
+    except CaseNumberError as error:
+        raise CasePersistenceError(str(error)) from error
     if mode not in {"create", "update"}:
         raise CasePersistenceError("Unsupported Case persistence mode.")
     if mode != "create" and batch_import_id is not None:
         raise CasePersistenceError("Batch provenance is only valid for Case creation.")
     existing = conn.execute(
-        "SELECT id, status FROM Cases WHERE case_number = ?", (case_number,)
+        "SELECT id, status FROM Cases WHERE case_number = ?", (canonical_case_number,)
     ).fetchone()
     if ((mode == "create" and existing)
             or (mode == "update" and not existing)
@@ -1237,7 +1294,7 @@ def persist_case_on_connection(
                 content_fingerprint, content_revision_id, preset_short_code_snapshot, preset_name_snapshot,
                 batch_import_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (case_number, preset_id, status, pending_reason, clinical_info, canonical_input, rendered_html,
+            (canonical_case_number, preset_id, status, pending_reason, clinical_info, canonical_input, rendered_html,
              current_fingerprint, content_revision_id, preset_identity["short_code"],
              preset_identity["name"], batch_import_id),
         )
@@ -1271,12 +1328,13 @@ def save_case(case_number, preset_id, clinical_info, structured_input, rendered_
     """
     conn = get_db_connection()
     try:
+        canonical_case_number = normalize_case_number(case_number)
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute(
-            "SELECT 1 FROM Cases WHERE case_number = ?", (case_number,)
+            "SELECT 1 FROM Cases WHERE case_number = ?", (canonical_case_number,)
         ).fetchone()
         persist_case_on_connection(
-            conn, case_number, preset_id, clinical_info, structured_input, rendered_html,
+            conn, canonical_case_number, preset_id, clinical_info, structured_input, rendered_html,
             status=status, pending_reason=pending_reason, content_fingerprint=content_fingerprint,
             content_revision_id=content_revision_id, mode="update" if existing else "create",
         )

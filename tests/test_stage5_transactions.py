@@ -60,7 +60,7 @@ def test_provenance_migration_is_additive_and_idempotent(mutable_db):
 
 def test_apply_requires_snapshot_then_commits_exact_content_and_audit(mutable_db):
     save_synthetic_case(mutable_db)
-    save_synthetic_case(mutable_db, number="FROZEN", status="validated")
+    save_synthetic_case(mutable_db, number="26PR630002", status="validated")
     ops = graph() + [{"op": "update", "table": "Blocks", "key": "appendice", "set": {"micro_template": "Correction."}}]
     review = run(mutable_db, ops)
     before = state(mutable_db)
@@ -141,7 +141,7 @@ def test_inverse_restores_hash_and_original_ids_and_is_itself_reversible(mutable
 def test_apply_rejects_all_stale_states(mutable_db, mutation):
     unlock()
     case = save_synthetic_case(mutable_db)
-    save_synthetic_case(mutable_db, number="FROZEN", status="validated")
+    save_synthetic_case(mutable_db, number="26PR630002", status="validated")
     review = run(mutable_db)
     conn = connection(mutable_db)
     if mutation == "content":
@@ -152,7 +152,7 @@ def test_apply_rejects_all_stale_states(mutable_db, mutation):
         conn.execute("UPDATE Snippets SET id=id+1000 WHERE shortcut='absence_malignite'")
     elif mutation == "arrival":
         conn.close()
-        save_synthetic_case(mutable_db, number="ARRIVED")
+        save_synthetic_case(mutable_db, number="26PR630001")
         conn = connection(mutable_db)
     elif mutation == "edit":
         conn.execute("UPDATE Cases SET structured_input='{} ' WHERE id=?", (case["id"],))
@@ -165,7 +165,7 @@ def test_apply_rejects_all_stale_states(mutable_db, mutation):
     elif mutation == "validate":
         conn.execute("UPDATE Cases SET status='validated' WHERE id=?", (case["id"],))
     else:
-        conn.execute("UPDATE Cases SET status='pending' WHERE case_number='FROZEN'")
+        conn.execute("UPDATE Cases SET status='pending' WHERE case_number='26PR630002'")
     conn.commit()
     conn.close()
     before = state(mutable_db)

@@ -13,13 +13,13 @@ import editor_preview
 
 
 def test_csv_tsv_bom_and_quoting_normalize_to_one_source_digest():
-    csv_source = b"\xef\xbb\xbfCase ID,Quick Type\r\n  CP4-A  ,  dai37  \r\n\"CP4,B\",etc2\r\n"
-    tsv_source = "header\tcode\nCP4-A\tdai37\n\"CP4,B\"\tetc2\n"
+    csv_source = b"\xef\xbb\xbfCase ID,Quick Type\r\n  26PR40001  ,  dai37  \r\n\"26PR40002\",etc2\r\n"
+    tsv_source = "header\tcode\n26PR40001\tdai37\n\"26PR40002\"\tetc2\n"
     csv_rows = bulk_intake.parse_bulk_source(csv_source, ",", True)
     tsv_rows = bulk_intake.parse_bulk_source(tsv_source, "\t", True)
 
     assert [(row.case_number, row.quick_type) for row in csv_rows.rows] == [
-        ("CP4-A", "dai37"), ("CP4,B", "etc2"),
+        ("26PR40001", "dai37"), ("26PR40002", "etc2"),
     ]
     assert csv_rows.normalized_source_sha256 == tsv_rows.normalized_source_sha256
 
@@ -44,7 +44,7 @@ def test_preview_materializes_workspace_shape_round_trips_and_never_writes(mutab
         before_cases = conn.execute("SELECT COUNT(*) FROM Cases").fetchone()[0]
         before_changes = conn.total_changes
         review = bulk_intake.prepare_bulk_review(
-            "Case ID,Quick Type\nCP4-APPENDIX,dai37\nCP4-THYROID,etc2\n", ",", True, conn=conn,
+            "Case ID,Quick Type\n26PR40003,dai37\n26PR40004,etc2\n", ",", True, conn=conn,
         )
         assert review.applicable, review.errors
         assert conn.total_changes == before_changes
@@ -79,7 +79,7 @@ def test_preview_materializes_workspace_shape_round_trips_and_never_writes(mutab
         assert fresh["block_instances"] != detached["block_instances"]
         assert review.interpretation_sha256 == issued_digest
         assert "dai37" not in repr(review)
-        assert "CP4-APPENDIX" not in repr(review)
+        assert "26PR40003" not in repr(review)
     finally:
         conn.close()
 
@@ -97,7 +97,7 @@ def test_preview_is_read_only_under_sqlite_authorizer(mutable_db):
 
     try:
         conn.set_authorizer(authorizer)
-        review = bulk_intake.prepare_bulk_review("CP4-AUTH,dai37", ",", False, conn=conn)
+        review = bulk_intake.prepare_bulk_review("26PR40005,dai37", ",", False, conn=conn)
         assert review.applicable, review.errors
         assert seen_writes == []
     finally:
@@ -111,16 +111,16 @@ def test_duplicate_and_existing_case_ids_make_the_whole_preview_inapplicable(mut
         preset_id = conn.execute("SELECT id FROM Presets WHERE short_code='dai'").fetchone()[0]
     finally:
         conn.close()
-    assert database.save_case("CP4-EXISTS", preset_id, "", {"blocks": {}}, "<p>saved</p>")
+    assert database.save_case("26PR40006", preset_id, "", {"blocks": {}}, "<p>saved</p>")
 
-    duplicate = bulk_intake.prepare_bulk_review("CP4-DUP,dai\nCP4-DUP,etc2", ",", False)
-    existing = bulk_intake.prepare_bulk_review("CP4-EXISTS,dai", ",", False)
+    duplicate = bulk_intake.prepare_bulk_review("26PR40007,dai\n26PR40007,etc2", ",", False)
+    existing = bulk_intake.prepare_bulk_review("26PR40006,dai", ",", False)
     assert not duplicate.applicable and "Duplicate" in duplicate.errors[0]
     assert not existing.applicable and "already exist" in existing.errors[0]
 
 
 def test_review_binds_content_and_exact_target_namespace(mutable_db):
-    review = bulk_intake.prepare_bulk_review("CP4-STALE,dai37", ",", False)
+    review = bulk_intake.prepare_bulk_review("26PR40008,dai37", ",", False)
     assert review.applicable
     conn = database.get_db_connection()
     try:
@@ -133,7 +133,7 @@ def test_review_binds_content_and_exact_target_namespace(mutable_db):
 
     # A newly occupied exact target also invalidates a fresh review, while an
     # unrelated Case would not be part of the CP4 review binding.
-    fresh = bulk_intake.prepare_bulk_review("CP4-STALE-TARGET,dai37", ",", False)
+    fresh = bulk_intake.prepare_bulk_review("26PR40009,dai37", ",", False)
     row = fresh.rows[0]
     assert database.save_case(row.case_number, row.preset_id, row.clinical_info,
                               row.structured_input, row.rendered_html)
@@ -150,7 +150,7 @@ def test_unreachable_active_quick_type_grammar_refuses_the_whole_review(mutable_
         conn.commit()
     finally:
         conn.close()
-    review = bulk_intake.prepare_bulk_review("CP4-GRAMMAR,dai", ",", False)
+    review = bulk_intake.prepare_bulk_review("26PR40010,dai", ",", False)
     assert not review.applicable
     assert review.errors == ("Active Quick Type configuration or endpoint graph is invalid.",)
 
@@ -167,7 +167,7 @@ def test_invalid_active_quick_type_endpoints_refuse_even_a_bare_code(mutable_db,
         conn.commit()
     finally:
         conn.close()
-    review = bulk_intake.prepare_bulk_review("CP4-ENDPOINT,dai", ",", False)
+    review = bulk_intake.prepare_bulk_review("26PR40011,dai", ",", False)
     assert not review.applicable
     assert review.errors == ("Active Quick Type configuration or endpoint graph is invalid.",)
 
@@ -188,7 +188,7 @@ def test_warning_multiplicity_is_preserved_in_frozen_review_and_digest(mutable_d
         conn.commit()
     finally:
         conn.close()
-    base = bulk_intake.prepare_bulk_review("CP4-WARN,dai11f", ",", False)
+    base = bulk_intake.prepare_bulk_review("26PR40012,dai11f", ",", False)
     assert base.applicable
     # Insert distinct matching predicates with the same presentation text
     # only after the baseline digest has captured the original rule set.
@@ -206,23 +206,23 @@ def test_warning_multiplicity_is_preserved_in_frozen_review_and_digest(mutable_d
         conn.commit()
     finally:
         conn.close()
-    review = bulk_intake.prepare_bulk_review("CP4-WARN,dai11f", ",", False)
+    review = bulk_intake.prepare_bulk_review("26PR40012,dai11f", ",", False)
     assert review.applicable
     assert review.rows[0].warnings.count(shared) == 2
     assert review.interpretation_sha256 != base.interpretation_sha256
 
 
 def test_csv_field_ceiling_and_exact_source_boundaries_match_cp4_contract():
-    large_cell = "CP4-LARGE," + ("x" * (140 * 1024))
-    assert bulk_intake.parse_bulk_source(large_cell, ",", False).rows[0].case_number == "CP4-LARGE"
+    large_cell = "26PR40013," + ("x" * (140 * 1024))
+    assert bulk_intake.parse_bulk_source(large_cell, ",", False).rows[0].case_number == "26PR40013"
 
-    exact_limit = "A," + ("x" * (bulk_intake.MAX_SOURCE_BYTES - 2))
+    exact_limit = "1," + ("x" * (bulk_intake.MAX_SOURCE_BYTES - 2))
     assert len(exact_limit.encode("utf-8")) == bulk_intake.MAX_SOURCE_BYTES
     assert bulk_intake.parse_bulk_source(exact_limit, ",", False).rows[0].quick_type
     with pytest.raises(bulk_intake.BulkInputError, match="1 MiB"):
         bulk_intake.parse_bulk_source(exact_limit + "x", ",", False)
 
-    exact_rows = "\n".join(f"CP4-ROW-{number},dai" for number in range(250))
+    exact_rows = "\n".join(f"26PR401{number:03d},dai" for number in range(250))
     assert len(bulk_intake.parse_bulk_source(exact_rows, ",", False).rows) == 250
 
 
@@ -233,17 +233,17 @@ def test_bulk_page_renders_each_safe_batch_error_once(mutable_db):
         preset_id = conn.execute("SELECT id FROM Presets WHERE short_code='dai'").fetchone()[0]
     finally:
         conn.close()
-    assert database.save_case("CP4-UI-EXISTS", preset_id, "", {"blocks": {}}, "<p>saved</p>")
+    assert database.save_case("26PR40014", preset_id, "", {"blocks": {}}, "<p>saved</p>")
 
     app = AppTest.from_file("pages/bulk_intake.py").run()
-    app.text_area(key="bulk_paste_source").set_value("CP4-UI-INVALID,not-a-code").run()
+    app.text_area(key="bulk_paste_source").set_value("26PR40015,not-a-code").run()
     app.button(key="bulk_prepare").click().run()
     assert [item.value for item in app.error] == ["Row 1 has an invalid Quick Type."]
     assert "not-a-code" not in app.error[0].value
 
     # Existing-ID refusal shares the same ``for error in review.errors``
     # presentation path and stays a single, readable safe message.
-    app.text_area(key="bulk_paste_source").set_value("CP4-UI-EXISTS,dai").run()
+    app.text_area(key="bulk_paste_source").set_value("26PR40014,dai").run()
     app.button(key="bulk_prepare").click().run()
     assert [item.value for item in app.error] == [
         "One or more Case IDs already exist and cannot be imported."

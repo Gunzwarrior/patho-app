@@ -15,7 +15,21 @@ after its final referencing Case is gone. Worklist exposes deliberate,
 pending-only deletion with immediate disappearance after success. Isolated
 PR1 + Stage 2 safety coverage passed 26 tests; Stage 7 bulk-provenance
 regression coverage passed 23 tests; `py_compile` and `git diff --check`
-passed. No operational database was opened or modified. PR2 has not begun.
+passed. No operational database was opened or modified.
+
+**PR2 — Canonical Case accession identity: implemented locally, awaiting
+targeted manual acceptance (2026-09-16).** `database.normalize_case_number()`
+is the shared boundary: digits resolve to the current local calendar year's
+`YYPR<number>` accession; explicit `YYPR<number>` accepts outer whitespace
+and case variation; numeric leading zeroes are preserved; unsupported forms
+are refused. Workspace duplicate/save, Quick Type-assisted Case creation,
+Bulk Intake parsing/review/apply, Worklist search/reopen, and public Case
+lookup/lifecycle/persistence operations use canonical IDs. Quick Type grammar
+remains case-sensitive. No schema or operational-data migration was added.
+Focused isolated coverage passed 37 tests across PR2 identity, PR1 lifecycle/
+Worklist UI, Quick Type grammar, and Stage 7 consolidation; compilation and
+`git diff --check` passed. The full suite was deliberately not run. No
+operational database was opened or modified.
 
 **Stage 7 final acceptance is complete. The focused Stage 7 suite passed 96
 tests; the final full suite passed 597 tests in 351.87s; browser acceptance,

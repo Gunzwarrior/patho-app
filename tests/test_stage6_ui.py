@@ -126,7 +126,7 @@ def test_validated_preset_deletion_renders_case_detachment_in_frozen_review(muta
         f"{block['key']}#{block['sort_order']}": {}
         for block in database.get_preset_blocks(preset["id"])
     }}
-    assert database.save_case("UI-VALIDATED-PRESET-DELETE", preset["id"], "", structured,
+    assert database.save_case("26PR540001", preset["id"], "", structured,
                               "<p>frozen</p>", status="validated")
 
     app = _app(mutable_db)
@@ -141,7 +141,7 @@ def test_validated_preset_deletion_renders_case_detachment_in_frozen_review(muta
     assert any("unavailable for a future Return to pending" in item for item in
                app.session_state["_editor_studio_review"].data["warnings"])
     assert any("unavailable for a future Return to pending" in item.value for item in app.warning)
-    assert database.get_case_by_number("UI-VALIDATED-PRESET-DELETE")["preset_id"] == preset["id"]
+    assert database.get_case_by_number("26PR540001")["preset_id"] == preset["id"]
 
 
 def test_field_stale_draft_before_prepare_refuses_untouched_old_value(mutable_db):

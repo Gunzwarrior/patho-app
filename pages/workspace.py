@@ -524,7 +524,18 @@ if validated_case:
     st.stop()
 
 c1, c2, c3 = st.columns([1, 2, 1])
-with c1: case_id = st.text_input("📁 Case ID", key=f"case_id_{form_gen}")
+with c1:
+    case_id_input = st.text_input("📁 Case ID", key=f"case_id_{form_gen}")
+case_id = None
+case_id_error = None
+if case_id_input.strip():
+    try:
+        # Resolve before the duplicate guard or any save path. The field keeps
+        # the fast short entry visible; persistence always receives this value.
+        case_id = db.normalize_case_number(case_id_input)
+    except db.CaseNumberError as error:
+        case_id_error = str(error)
+        st.error(f"⚠️ {case_id_error}")
 with c2:
     presets = db.get_all_presets()
     _loaded_pending = st.session_state.get("_loaded_case_number")
@@ -572,7 +583,7 @@ with c3:
 # spent writing a report, rather than after. A match is only a real
 # conflict if this case wasn't the one legitimately loaded via reopen —
 # resaving the case you just reopened is supposed to overwrite it.
-existing_case = db.get_case_by_number(case_id) if case_id.strip() else None
+existing_case = db.get_case_by_number(case_id) if case_id else None
 is_legit_resave = existing_case and case_id == st.session_state.get("_loaded_case_number")
 duplicate_conflict = existing_case is not None and not is_legit_resave
 pending_duplicate_conflict = duplicate_conflict and existing_case["status"] == "pending"
@@ -1060,7 +1071,7 @@ if selected_preset_id is not None:
     c_pending, c_validated, c_copy = st.columns(3)
 
     with c_pending:
-        if st.button("💾 Save as Pending", width="stretch", disabled=not (overwrite_confirmed and consistency_confirmed and content_acknowledged)):
+        if st.button("💾 Save as Pending", width="stretch", disabled=not (overwrite_confirmed and consistency_confirmed and content_acknowledged and case_id_error is None)):
             if case_id:
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
                                  status="pending", pending_reason=pending_reason_value,
@@ -1077,7 +1088,7 @@ if selected_preset_id is not None:
                 st.warning("⚠️ Please enter a Case ID before saving.")
 
     with c_validated:
-        if st.button("✅ Save as Validated", width="stretch", type="primary", disabled=not (overwrite_confirmed and consistency_confirmed and content_acknowledged)):
+        if st.button("✅ Save as Validated", width="stretch", type="primary", disabled=not (overwrite_confirmed and consistency_confirmed and content_acknowledged and case_id_error is None)):
             if case_id:
                 if db.save_case(case_id, preset["id"], clinical_info, structured_input, final_html,
                                  status="validated", pending_reason=None,

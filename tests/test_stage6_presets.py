@@ -166,11 +166,11 @@ def test_reorder_changes_only_display_order_and_explicit_pending_keeps_saved_ord
         mutable_db, "etc_bi", structured={"block_instances": [
             {"block_id": links[0]["block_id"], "instance_no": links[0]["sort_order"]},
             {"block_id": links[1]["block_id"], "instance_no": links[1]["sort_order"]},
-        ]}, number="EXPLICIT-PRESET-ORDER",
+        ]}, number="26PR660001",
     )
     # Legacy pending Case follows the default and therefore belongs in the
     # normal acknowledgement impact preview after the composition reorder.
-    legacy = save_synthetic_case(mutable_db, "etc_bi", structured={}, number="LEGACY-PRESET-ORDER")
+    legacy = save_synthetic_case(mutable_db, "etc_bi", structured={}, number="26PR660002")
     reordered = list(reversed(instances))
     operations = content_studio.preset_draft_operations(
         "edit", "etc_bi", draft, reordered, source_key="etc_bi",
@@ -267,7 +267,7 @@ def test_preset_source_identity_is_stale_after_a_second_tab_composition_change(m
 
 def test_preset_lifecycle_archives_and_restores_but_pending_cases_block_deletion(mutable_db):
     _unlock()
-    save_synthetic_case(mutable_db, "dai", number="PRESET-LIFECYCLE-PENDING")
+    save_synthetic_case(mutable_db, "dai", number="26PR660003")
     delete = content_studio.lifecycle_plan("delete", "Presets", "dai", db_name=mutable_db)
     assert delete["operations"] == []
     assert any("pending" in reason.lower() for reason in delete["refusal_reasons"])

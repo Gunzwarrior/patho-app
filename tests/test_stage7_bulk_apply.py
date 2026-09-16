@@ -24,7 +24,7 @@ def _counts(conn):
 
 
 def test_apply_creates_one_linked_audit_and_normal_pending_cases(mutable_db):
-    source = "CP5-ONE,dai37\nCP5-TWO,etc2"
+    source = "26PR420011,dai37\n26PR420021,etc2"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     assert review.applicable, review.errors
 
@@ -85,12 +85,12 @@ def test_apply_creates_one_linked_audit_and_normal_pending_cases(mutable_db):
 
 def test_bulk_created_decimal_case_reopens_through_workspace_widget_hydration(mutable_db):
     """Bulk input must use the same decimal text wire type as Workspace saves."""
-    source = "CP5-WORKSPACE-DECIMAL,dai37"
+    source = "26PR420021,dai37"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     assert review.applicable, review.errors
     assert bulk_intake.apply_bulk_review(review, source, ",", False, confirmed=True)
 
-    saved = database.get_case_by_number("CP5-WORKSPACE-DECIMAL")
+    saved = database.get_case_by_number("26PR420021")
     appendix = database.get_preset_blocks(saved["preset_id"])[0]
     saved_value = saved["structured_input"]["blocks"]["appendice#0"]["appendix_size_cm"]
     # Workspace's decimal control is text_input; a semantic float is valid
@@ -138,10 +138,10 @@ def test_bulk_cases_persist_workspace_wire_values_for_every_supported_field_type
     finally:
         conn.close()
 
-    review = bulk_intake.prepare_bulk_review("CP5-WIDGET-TYPES,dai37", ",", False)
+    review = bulk_intake.prepare_bulk_review("26PR420020,dai37", ",", False)
     assert review.applicable, review.errors
-    assert bulk_intake.apply_bulk_review(review, "CP5-WIDGET-TYPES,dai37", ",", False, confirmed=True)
-    saved = database.get_case_by_number("CP5-WIDGET-TYPES")
+    assert bulk_intake.apply_bulk_review(review, "26PR420020,dai37", ",", False, confirmed=True)
+    saved = database.get_case_by_number("26PR420020")
     values = saved["structured_input"]["blocks"]["appendice#0"]
     assert values["appendicite_type"] == "periappendicite"  # select
     assert values["appendix_size_cm"] == "7"                # decimal text_input
@@ -170,14 +170,14 @@ def test_replacement_review_clears_checked_confirmation_and_warning_acknowledgem
     finally:
         conn.close()
     app = AppTest.from_file("pages/bulk_intake.py").run()
-    app.text_area(key="bulk_paste_source").set_value("CP5-OLD,dai11f").run()
+    app.text_area(key="bulk_paste_source").set_value("26PR420010,dai11f").run()
     app.button(key="bulk_prepare").click().run()
     app.checkbox(key="bulk_apply_confirm").set_value(True).run()
     app.checkbox(key="bulk_warning_acknowledged").set_value(True).run()
 
     # The changed source discards OLD before NEW is issued. Both controls
     # must be freshly false even though their widget keys are stable.
-    app.text_area(key="bulk_paste_source").set_value("CP5-NEW,dai11f").run()
+    app.text_area(key="bulk_paste_source").set_value("26PR420009,dai11f").run()
     app.button(key="bulk_prepare").click().run()
     assert app.checkbox(key="bulk_apply_confirm").value is False
     assert app.checkbox(key="bulk_warning_acknowledged").value is False
@@ -189,7 +189,7 @@ def test_replacement_review_clears_checked_confirmation_and_warning_acknowledgem
 
 
 def test_apply_requires_confirmation_issued_review_and_warning_acknowledgement(mutable_db):
-    source = "CP5-GATE,dai37"
+    source = "26PR420006,dai37"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     assert not bulk_intake.apply_bulk_review(review, source, ",", False)
     assert not bulk_intake.apply_bulk_review(
@@ -208,7 +208,7 @@ def test_apply_requires_confirmation_issued_review_and_warning_acknowledgement(m
         conn.commit()
     finally:
         conn.close()
-    warning_source = "CP5-WARN,dai11f"
+    warning_source = "26PR420019,dai11f"
     warning_review = bulk_intake.prepare_bulk_review(warning_source, ",", False)
     assert warning_review.applicable and warning_review.rows[0].warnings
     rejected = bulk_intake.apply_bulk_review(
@@ -224,21 +224,21 @@ def test_apply_requires_confirmation_issued_review_and_warning_acknowledgement(m
 
 
 def test_apply_rechecks_source_content_and_target_absence_without_partial_rows(mutable_db):
-    source = "CP5-RACE-ONE,dai37\nCP5-RACE-TWO,etc2"
+    source = "26PR420014,dai37\n26PR420022,etc2"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     assert review.applicable
     conn = database.get_db_connection()
     try:
         before = _counts(conn)
         source_changed = bulk_intake.apply_bulk_review(
-            review, "CP5-RACE-ONE,dai\nCP5-RACE-TWO,etc2", ",", False, confirmed=True, conn=conn
+            review, "26PR420014,dai\n26PR420022,etc2", ",", False, confirmed=True, conn=conn
         )
         assert not source_changed and "input changed" in source_changed.error
         assert _counts(conn) == before
     finally:
         conn.close()
 
-    content_review = bulk_intake.prepare_bulk_review("CP5-CONTENT,dai37", ",", False)
+    content_review = bulk_intake.prepare_bulk_review("26PR420005,dai37", ",", False)
     conn = database.get_db_connection()
     try:
         shortcut = conn.execute("SELECT shortcut FROM Snippets ORDER BY shortcut LIMIT 1").fetchone()[0]
@@ -247,7 +247,7 @@ def test_apply_rechecks_source_content_and_target_absence_without_partial_rows(m
     finally:
         conn.close()
     content_changed = bulk_intake.apply_bulk_review(
-        content_review, "CP5-CONTENT,dai37", ",", False, confirmed=True
+        content_review, "26PR420005,dai37", ",", False, confirmed=True
     )
     assert not content_changed and "Content changed" in content_changed.error
 
@@ -256,30 +256,30 @@ def test_apply_rechecks_source_content_and_target_absence_without_partial_rows(m
     altered_row = replace(content_review.rows[0], rendered_html="<p>altered</p>")
     altered = replace(content_review, rows=(altered_row,))
     altered_result = bulk_intake.apply_bulk_review(
-        altered, "CP5-CONTENT,dai37", ",", False, confirmed=True
+        altered, "26PR420005,dai37", ",", False, confirmed=True
     )
     assert not altered_result and "altered" in altered_result.error
 
     # Exact target occupancy is checked after the write lock, not merely by
     # the preview-side stale indicator.
-    target_review = bulk_intake.prepare_bulk_review("CP5-TARGET,dai37", ",", False)
+    target_review = bulk_intake.prepare_bulk_review("26PR420016,dai37", ",", False)
     row = target_review.rows[0]
     assert database.save_case(row.case_number, row.preset_id, row.clinical_info,
                               row.structured_input, row.rendered_html)
     target_taken = bulk_intake.apply_bulk_review(
-        target_review, "CP5-TARGET,dai37", ",", False, confirmed=True
+        target_review, "26PR420016,dai37", ",", False, confirmed=True
     )
     assert not target_taken and "occupied" in target_taken.error
     conn = database.get_db_connection()
     try:
         assert conn.execute("SELECT COUNT(*) FROM Case_Batch_Imports").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM Cases WHERE case_number='CP5-TARGET'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM Cases WHERE case_number='26PR420016'").fetchone()[0] == 1
     finally:
         conn.close()
 
 
 def test_apply_rolls_back_audit_and_every_case_when_inner_write_fails(mutable_db, monkeypatch):
-    source = "CP5-ROLLBACK-ONE,dai37\nCP5-ROLLBACK-TWO,etc2"
+    source = "26PR420015,dai37\n26PR420023,etc2"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     original = database.persist_case_on_connection
     calls = 0
@@ -302,7 +302,7 @@ def test_apply_rolls_back_audit_and_every_case_when_inner_write_fails(mutable_db
 
 
 def test_apply_rolls_back_when_batch_audit_insert_fails(mutable_db):
-    source = "CP5-AUDIT-FAIL,dai37"
+    source = "26PR420003,dai37"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     conn = database.get_db_connection()
     try:
@@ -328,13 +328,13 @@ def test_migration_is_repeatable_and_ordinary_cases_have_no_batch_link(mutable_d
         preset_id = conn.execute("SELECT id FROM Presets WHERE short_code='dai'").fetchone()[0]
     finally:
         conn.close()
-    assert database.save_case("CP5-HISTORIC", preset_id, "", {"blocks": {}}, "<p>saved</p>")
+    assert database.save_case("26PR420007", preset_id, "", {"blocks": {}}, "<p>saved</p>")
     database.migrate_schema(mutable_db)
     database.migrate_schema(mutable_db)
     conn = database.get_db_connection()
     try:
         assert conn.execute(
-            "SELECT batch_import_id FROM Cases WHERE case_number='CP5-HISTORIC'"
+            "SELECT batch_import_id FROM Cases WHERE case_number='26PR420007'"
         ).fetchone()[0] is None
         assert conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='index' AND name='Cases_batch_import_id_idx'"
@@ -350,7 +350,7 @@ def test_migration_upgrades_a_genuine_pre_cp5_case_schema_without_backfill(mutab
         preset_id = conn.execute("SELECT id FROM Presets WHERE short_code='dai'").fetchone()[0]
     finally:
         conn.close()
-    assert database.save_case("CP5-PRE-MIGRATION", preset_id, "", {"blocks": {}}, "<p>historic</p>")
+    assert database.save_case("26PR420012", preset_id, "", {"blocks": {}}, "<p>historic</p>")
 
     legacy_path = tmp_path / "pre_cp5.sqlite"
     shutil.copy(mutable_db, legacy_path)
@@ -378,7 +378,7 @@ def test_migration_upgrades_a_genuine_pre_cp5_case_schema_without_backfill(mutab
         columns = {row[1]: row for row in upgraded.execute("PRAGMA table_info(Cases)")}
         assert "batch_import_id" in columns and columns["batch_import_id"][3] == 0
         assert upgraded.execute(
-            "SELECT batch_import_id FROM Cases WHERE case_number='CP5-PRE-MIGRATION'"
+            "SELECT batch_import_id FROM Cases WHERE case_number='26PR420012'"
         ).fetchone()[0] is None
         assert upgraded.execute(
             "SELECT 1 FROM sqlite_master WHERE type='index' AND name='Cases_batch_import_id_idx'"
@@ -388,7 +388,7 @@ def test_migration_upgrades_a_genuine_pre_cp5_case_schema_without_backfill(mutab
 
 
 def test_shared_case_persistence_is_transaction_neutral_and_caller_owns_rollback(mutable_db):
-    review = bulk_intake.prepare_bulk_review("CP5-NEUTRAL,dai37", ",", False)
+    review = bulk_intake.prepare_bulk_review("26PR420008,dai37", ",", False)
     row = review.rows[0]
     conn = database.get_db_connection()
     try:
@@ -411,7 +411,7 @@ def test_two_connections_cannot_claim_one_reviewed_target_namespace(mutable_db):
     first = database.get_db_connection()
     second = database.get_db_connection()
     try:
-        review = bulk_intake.prepare_bulk_review("CP5-TWO-CONNECTIONS,dai37", ",", False, conn=first)
+        review = bulk_intake.prepare_bulk_review("26PR420017,dai37", ",", False, conn=first)
         row = review.rows[0]
         second.execute("BEGIN IMMEDIATE")
         database.persist_case_on_connection(
@@ -421,7 +421,7 @@ def test_two_connections_cannot_claim_one_reviewed_target_namespace(mutable_db):
         )
         second.commit()
         result = bulk_intake.apply_bulk_review(
-            review, "CP5-TWO-CONNECTIONS,dai37", ",", False, confirmed=True, conn=first,
+            review, "26PR420017,dai37", ",", False, confirmed=True, conn=first,
         )
         assert not result and "occupied" in result.error
     finally:
@@ -429,7 +429,7 @@ def test_two_connections_cannot_claim_one_reviewed_target_namespace(mutable_db):
         second.close()
     conn = database.get_db_connection()
     try:
-        assert conn.execute("SELECT COUNT(*) FROM Cases WHERE case_number='CP5-TWO-CONNECTIONS'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM Cases WHERE case_number='26PR420017'").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM Case_Batch_Imports").fetchone()[0] == 0
     finally:
         conn.close()
@@ -437,7 +437,7 @@ def test_two_connections_cannot_claim_one_reviewed_target_namespace(mutable_db):
 
 def test_apply_write_lock_serializes_a_simultaneous_second_connection(mutable_db, monkeypatch):
     """A competitor arriving after CP5 acquires BEGIN IMMEDIATE cannot double-create."""
-    source = "CP5-CONCURRENT-TARGET,dai37"
+    source = "26PR420004,dai37"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     original_absence_check = bulk_intake._existing_case_numbers
     attempts = []
@@ -467,7 +467,7 @@ def test_apply_write_lock_serializes_a_simultaneous_second_connection(mutable_db
     assert attempts == ["locked"]
     conn = database.get_db_connection()
     try:
-        assert conn.execute("SELECT COUNT(*) FROM Cases WHERE case_number='CP5-CONCURRENT-TARGET'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM Cases WHERE case_number='26PR420004'").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM Case_Batch_Imports").fetchone()[0] == 1
     finally:
         conn.close()
@@ -478,7 +478,7 @@ def test_apply_write_lock_serializes_a_simultaneous_second_connection(mutable_db
 ])
 def test_apply_rolls_back_every_phase_after_a_review_is_issued(mutable_db, monkeypatch, boundary):
     """Every CP5 post-lock phase leaves no Case or audit on failure."""
-    source = f"CP5-PHASE-{boundary},dai37"
+    source = f"26PR429{('rebuild', 'render', 'reconstruction', 'serialization', 'final_comparison', 'case_insert').index(boundary):03d},dai37"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
 
     def fail(*_args, **_kwargs):
@@ -518,19 +518,19 @@ def test_warning_acknowledgement_is_rejected_when_carried_to_a_different_review(
         conn.commit()
     finally:
         conn.close()
-    old_review = bulk_intake.prepare_bulk_review("CP5-ACK-OLD,dai11f", ",", False)
-    new_review = bulk_intake.prepare_bulk_review("CP5-ACK-NEW,dai11f", ",", False)
+    old_review = bulk_intake.prepare_bulk_review("26PR420002,dai11f", ",", False)
+    new_review = bulk_intake.prepare_bulk_review("26PR420001,dai11f", ",", False)
     acknowledgement = bulk_intake.acknowledge_batch_warnings(old_review)
     assert acknowledgement is not None
     result = bulk_intake.apply_bulk_review(
-        new_review, "CP5-ACK-NEW,dai11f", ",", False, confirmed=True,
+        new_review, "26PR420001,dai11f", ",", False, confirmed=True,
         warning_acknowledgement=acknowledgement,
     )
     assert not result and "Acknowledge" in result.error
 
 
 def test_batch_provenance_never_enters_content_ai_or_operational_exports(mutable_db, tmp_path):
-    source = "CP5-PRIVATE-CASE,dai37"
+    source = "26PR420013,dai37"
     before = content_snapshot.export_content_snapshot(mutable_db)
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     assert bulk_intake.apply_bulk_review(review, source, ",", False, confirmed=True)
@@ -544,7 +544,7 @@ def test_batch_provenance_never_enters_content_ai_or_operational_exports(mutable
     snapshot_path.write_text(snapshot_text, encoding="utf-8")
     operational_text = json.dumps(operational_review.generate(snapshot_path, artifact_path), ensure_ascii=False)
     for exported in (snapshot_text, ai_context, operational_text):
-        assert "CP5-PRIVATE-CASE" not in exported
+        assert "26PR420013" not in exported
         assert "dai37" not in exported
         assert "Case_Batch_Imports" not in exported
 
@@ -561,13 +561,13 @@ def test_batch_provenance_never_enters_content_ai_or_operational_exports(mutable
 
 def test_v1_and_v2_snapshot_restore_preserve_historic_and_batch_cases(mutable_db):
     """Content-only recovery must leave the CP5 operational schema untouched."""
-    source = "CP7-RESTORE-BATCH,dai37"
+    source = "26PR420024,dai37"
     review = bulk_intake.prepare_bulk_review(source, ",", False)
     assert review.applicable, review.errors
     assert bulk_intake.apply_bulk_review(review, source, ",", False, confirmed=True)
     prepared = review.rows[0]
     assert database.save_case(
-        "CP7-RESTORE-HISTORIC", prepared.preset_id, prepared.clinical_info,
+        "26PR420025", prepared.preset_id, prepared.clinical_info,
         prepared.structured_input, prepared.rendered_html,
     )
 
@@ -604,7 +604,7 @@ def test_v1_and_v2_snapshot_restore_preserve_historic_and_batch_cases(mutable_db
 def test_bulk_apply_page_resets_after_success_and_worklist_shows_the_case(mutable_db):
     app = AppTest.from_file("pages/bulk_intake.py").run()
     assert not app.exception
-    app.text_area(key="bulk_paste_source").set_value("CP5-UI,dai37").run()
+    app.text_area(key="bulk_paste_source").set_value("26PR420018,dai37").run()
     app.button(key="bulk_prepare").click().run()
     assert not app.exception
     app.checkbox(key="bulk_apply_confirm").set_value(True).run()
@@ -615,4 +615,4 @@ def test_bulk_apply_page_resets_after_success_and_worklist_shows_the_case(mutabl
 
     # Worklist reads the ordinary Case collection; page-link routing itself
     # requires multipage app metadata and is covered at the app level.
-    assert any(case["case_number"] == "CP5-UI" for case in database.get_all_cases())
+    assert any(case["case_number"] == "26PR420018" for case in database.get_all_cases())

@@ -216,7 +216,7 @@ def test_final_graph_rejects_active_standalone_block_with_archived_field(mutable
 
 def test_standalone_validated_preset_detach_is_refused(mutable_db):
     unlock()
-    case = save_synthetic_case(mutable_db, number="DETACH", status="validated")
+    case = save_synthetic_case(mutable_db, number="26PR650004", status="validated")
     with pytest.raises(content_changes.ChangeError, match="Preset deletion"):
         review(mutable_db, [content_studio.case_preset_reference(case["id"], case["preset_id"], None)])
     assert row(mutable_db, "SELECT preset_id FROM Cases WHERE id=?", (case["id"],))["preset_id"] == case["preset_id"]
@@ -304,7 +304,7 @@ def test_create_and_inverse_cover_configuration_tables_with_ordinary_ownership(m
 
 def test_validated_preset_detachment_and_deletion_restore_ids_on_inverse(mutable_db):
     unlock()
-    case = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="DELETE-PRESET", status="validated"))
+    case = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="26PR650003", status="validated"))
     conn = connection(mutable_db)
     try:
         preset = dict(conn.execute("SELECT * FROM Presets WHERE id=?", (case["preset_id"],)).fetchone())
@@ -342,7 +342,7 @@ def test_case_reference_phase_fault_rolls_back_inverse_content_and_detachment(mu
     """A failure after inverse reattachment preparation is one atomic rollback."""
     unlock()
     case = freeze_case_preset_identity(
-        mutable_db, save_synthetic_case(mutable_db, number="INVERSE-PHASE-ROLLBACK", status="validated")
+        mutable_db, save_synthetic_case(mutable_db, number="26PR650008", status="validated")
     )
     _preset, intents = preset_deletion_intents(mutable_db, case)
     deletion = content_changes.apply_review(review(mutable_db, intents), db_name=mutable_db)
@@ -375,7 +375,7 @@ def test_block_deletion_warns_for_validated_reconstruction_loss_and_inverse_rest
         conn.close()
     assert len(instances) > 1
     case = freeze_case_preset_identity(mutable_db, save_synthetic_case(
-        mutable_db, code="gt", number="VALIDATED-MULTIBLOCK-BLOCK-DELETE", status="validated",
+        mutable_db, code="gt", number="26PR650012", status="validated",
         structured={"block_instances": instances, "blocks": {}, "wildcard_notes": [], "master_lock": False},
     ))
     deletion = review(mutable_db, [content_studio.operation("delete", "Blocks", "antrum")])
@@ -384,7 +384,7 @@ def test_block_deletion_warns_for_validated_reconstruction_loss_and_inverse_rest
 
     revision = content_changes.apply_review(deletion, db_name=mutable_db)
     assert row(mutable_db, "SELECT status,preset_id,rendered_html FROM Cases WHERE id=?", (case["id"],))["status"] == "validated"
-    assert not database.return_case_to_pending("VALIDATED-MULTIBLOCK-BLOCK-DELETE", "must refuse")
+    assert not database.return_case_to_pending("26PR650012", "must refuse")
 
     undo = content_changes.apply_review(content_changes.review_inverse(revision, db_name=mutable_db), db_name=mutable_db)
     conn = connection(mutable_db)
@@ -416,7 +416,7 @@ def test_destructive_review_is_stale_when_affected_validated_case_arrives(mutabl
     assert not any("Return to pending" in warning for warning in prepared.data["warnings"])
 
     case = save_synthetic_case(
-        mutable_db, code="gt", number="VALIDATED-ARRIVED-AFTER-REVIEW", status="validated",
+        mutable_db, code="gt", number="26PR650009", status="validated",
         structured={"block_instances": _gt_explicit_instances(mutable_db), "blocks": {}},
     )
     with pytest.raises(content_changes.StaleReviewError, match="Local state changed"):
@@ -430,14 +430,14 @@ def test_destructive_review_is_stale_when_affected_validated_case_arrives(mutabl
     ("structured_input", '{"block_instances":[],"blocks":{}}'),
     ("clinical_info", "Changed after the signed warning"),
     ("preset_id", None),
-    ("case_number", "VALIDATED-RENAMED-AFTER-REVIEW"),
+    ("case_number", "26PR650016"),
     ("status", "pending"),
 ])
 def test_destructive_review_binds_validated_case_reconstruction_state(
         mutable_db, column, value):
     unlock()
     case = save_synthetic_case(
-        mutable_db, code="gt", number="VALIDATED-INPUT-RACE", status="validated",
+        mutable_db, code="gt", number="26PR650010", status="validated",
         structured={"block_instances": _gt_explicit_instances(mutable_db), "blocks": {}},
     )
     prepared = review(mutable_db, [content_studio.operation("delete", "Blocks", "antrum")])
@@ -466,7 +466,7 @@ def test_reviewed_destructive_inverse_is_stale_when_validated_case_arrives(mutab
     assert not any("Return to pending" in warning for warning in destructive_inverse.data["warnings"])
 
     save_synthetic_case(
-        mutable_db, code="gt", number="VALIDATED-INVERSE-RACE", status="validated",
+        mutable_db, code="gt", number="26PR650011", status="validated",
         structured={"block_instances": _gt_explicit_instances(mutable_db), "blocks": {}},
     )
     with pytest.raises(content_changes.StaleReviewError, match="Local state changed"):
@@ -478,7 +478,7 @@ def test_reviewed_destructive_inverse_is_stale_when_validated_case_arrives(mutab
 def test_unchanged_validated_case_state_allows_destructive_apply(mutable_db):
     unlock()
     save_synthetic_case(
-        mutable_db, code="gt", number="VALIDATED-UNCHANGED-REVIEW", status="validated",
+        mutable_db, code="gt", number="26PR650013", status="validated",
         structured={"block_instances": _gt_explicit_instances(mutable_db), "blocks": {}},
     )
     prepared = review(mutable_db, [content_studio.operation("delete", "Blocks", "antrum")])
@@ -502,7 +502,7 @@ def test_generalized_inverse_refuses_pending_dependency_and_reports_pending_impa
         content_studio.operation("update", "Blocks", "appendice", {"micro_template": "{{ snippet('inverse_pending') }}"}),
     ]
     created = content_changes.apply_review(review(mutable_db, create), db_name=mutable_db)
-    save_synthetic_case(mutable_db, number="INVERSE-BLOCKER")
+    save_synthetic_case(mutable_db, number="26PR650007")
     with pytest.raises(content_changes.ChangeError, match="pending case depends"):
         content_changes.review_inverse(created, db_name=mutable_db)
 
@@ -553,8 +553,8 @@ def test_multi_column_update_allows_one_unchanged_value(mutable_db):
 
 def test_preset_deletion_expands_to_complete_matching_case_detachments(mutable_db):
     unlock()
-    first = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="DETACH-ONE", status="validated"))
-    second = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="DETACH-TWO", status="validated"))
+    first = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="26PR650014", status="validated"))
+    second = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="26PR650015", status="validated"))
     preset, incomplete = preset_deletion_intents(mutable_db, first)
     prepared = review(mutable_db, incomplete)
     assert {ref["case_id"] for ref in prepared.data["case_references"]} == {first["id"], second["id"]}
@@ -567,8 +567,8 @@ def test_preset_deletion_expands_to_complete_matching_case_detachments(mutable_d
 
 def test_case_reference_audit_identity_mismatch_and_inverse_fault_roll_back(mutable_db, monkeypatch):
     unlock()
-    case = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="AUDIT-IDENTITY-DAI", status="validated"))
-    other_case = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, code="gt", number="AUDIT-IDENTITY-GT", status="validated"))
+    case = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, number="26PR650001", status="validated"))
+    other_case = freeze_case_preset_identity(mutable_db, save_synthetic_case(mutable_db, code="gt", number="26PR650002", status="validated"))
     _preset, intents = preset_deletion_intents(mutable_db, case)
     _other_preset, other_intents = preset_deletion_intents(mutable_db, other_case)
     intents.extend(other_intents)

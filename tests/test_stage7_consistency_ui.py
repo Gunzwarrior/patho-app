@@ -41,7 +41,7 @@ def _save_triggering_pending(path):
     structured = {"blocks": {"appendice#0": {
         "appendicite_type": "phlegmoneuse", "false_membranes": True,
     }}}
-    assert database.save_case("CP3-WARNING-PENDING", preset_id, "", structured, "<p>saved</p>")
+    assert database.save_case("26PR550003", preset_id, "", structured, "<p>saved</p>")
 
 
 def _block_duplicate_source(path, key="appendice"):
@@ -71,7 +71,7 @@ def test_rule_review_freezes_matching_probes_and_warning_only_pending_delta(muta
     conn = sqlite3.connect(mutable_db)
     conn.row_factory = sqlite3.Row
     try:
-        before_case = dict(conn.execute("SELECT * FROM Cases WHERE case_number='CP3-WARNING-PENDING'").fetchone())
+        before_case = dict(conn.execute("SELECT * FROM Cases WHERE case_number='26PR550003'").fetchone())
     finally:
         conn.close()
     added = {"field_a_key": "false_membranes", "field_a_values": [True],
@@ -98,7 +98,7 @@ def test_rule_review_freezes_matching_probes_and_warning_only_pending_delta(muta
     assert added["message"] not in added_probe["nonmatching"]["warnings"]
 
     impact = review.data["consistency_warning_impact"]
-    pending = next(item for item in impact["pending_cases"] if item["case_number"] == "CP3-WARNING-PENDING")
+    pending = next(item for item in impact["pending_cases"] if item["case_number"] == "26PR550003")
     assert pending["warning_changed"] is True
     assert pending["rendering_changed"] is False
     assert pending["fingerprint_changed"] is False
@@ -110,7 +110,7 @@ def test_rule_review_freezes_matching_probes_and_warning_only_pending_delta(muta
     conn = sqlite3.connect(mutable_db)
     conn.row_factory = sqlite3.Row
     try:
-        after_case = dict(conn.execute("SELECT * FROM Cases WHERE case_number='CP3-WARNING-PENDING'").fetchone())
+        after_case = dict(conn.execute("SELECT * FROM Cases WHERE case_number='26PR550003'").fetchone())
     finally:
         conn.close()
     assert after_case == before_case
@@ -119,7 +119,7 @@ def test_rule_review_freezes_matching_probes_and_warning_only_pending_delta(muta
     inverse = content_changes.review_inverse(revision, db_name=mutable_db)
     assert inverse.data["guided_evidence"]["kind"] == "consistency"
     reversed_pending = next(item for item in inverse.data["consistency_warning_impact"]["pending_cases"]
-                            if item["case_number"] == "CP3-WARNING-PENDING")
+                            if item["case_number"] == "26PR550003")
     assert reversed_pending["warning_changed"] is True
     assert reversed_pending["fingerprint_changed"] is False
 
@@ -224,7 +224,7 @@ def test_rule_only_default_and_pending_changes_are_not_generic_report_output(mut
         preset_id = conn.execute("SELECT id FROM Presets WHERE short_code='dai'").fetchone()[0]
     finally:
         conn.close()
-    assert database.save_case("CP3-DEFAULT-PENDING", preset_id, "", {}, "<p>saved</p>")
+    assert database.save_case("26PR550001", preset_id, "", {}, "<p>saved</p>")
     added = {"field_a_key": "appendix_size_cm", "field_a_values": [8],
              "field_b_key": "appendicite_type", "field_b_values": ["endo"],
              "message": "CP3 default warning."}
@@ -236,7 +236,7 @@ def test_rule_only_default_and_pending_changes_are_not_generic_report_output(mut
     default = next(item for item in review.data["consistency_warning_impact"]["default_presets"]
                    if item["preset_code"] == "dai")
     pending = next(item for item in review.data["consistency_warning_impact"]["pending_cases"]
-                   if item["case_number"] == "CP3-DEFAULT-PENDING")
+                   if item["case_number"] == "26PR550001")
     assert default["warning_changed"] is True and default["rendering_changed"] is False
     assert pending["warning_changed"] is True and pending["rendering_changed"] is False
     assert pending["fingerprint_changed"] is False and review.data["pending_cases"] == []
@@ -247,14 +247,14 @@ def test_rule_only_default_and_pending_changes_are_not_generic_report_output(mut
     inverse_preset = next(item for item in inverse.data["presets"] if item["code"] == "dai")
     assert inverse_preset["affected"] is True and inverse_preset["output_changed"] is False
     inverse_pending = next(item for item in inverse.data["consistency_warning_impact"]["pending_cases"]
-                           if item["case_number"] == "CP3-DEFAULT-PENDING")
+                           if item["case_number"] == "26PR550001")
     assert inverse_pending["warning_changed"] is True and inverse_pending["rendering_changed"] is False
 
 
 def test_warning_impact_is_order_insensitive_and_multiplicity_safe():
     """Rule retrieval order is not warning semantics; duplicate messages still count."""
     def record(warnings, *, fingerprint="same"):
-        return {"case_number": "CP3-ORDER", "fingerprint": fingerprint,
+        return {"case_number": "26PR550002", "fingerprint": fingerprint,
                 "report": {"warnings": warnings, "html": "same", "micro_plain": "same"}}
 
     before_presets = {"p": record(["Order A", "Order B"])}

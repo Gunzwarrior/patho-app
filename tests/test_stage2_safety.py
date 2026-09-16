@@ -48,35 +48,35 @@ def test_connections_enforce_foreign_keys_and_migration_is_idempotent(mutable_db
 def test_migration_backfills_validated_case_history_once(mutable_db):
     preset = _preset("dai")
     blocks = database.get_preset_blocks(preset["id"])
-    assert database.save_case("BACKFILL-1", preset["id"], "ctx", _case_input(blocks), "<p>frozen</p>", status="validated")
+    assert database.save_case("26PR100003", preset["id"], "ctx", _case_input(blocks), "<p>frozen</p>", status="validated")
     conn = database.get_db_connection()
     conn.execute("DELETE FROM Case_Validation_History")
-    conn.execute("UPDATE Cases SET content_fingerprint = NULL WHERE case_number = ?", ("BACKFILL-1",))
+    conn.execute("UPDATE Cases SET content_fingerprint = NULL WHERE case_number = ?", ("26PR100003",))
     conn.commit()
     conn.close()
 
     database.migrate_schema(mutable_db)
-    history = database.get_case_validation_history("BACKFILL-1")
+    history = database.get_case_validation_history("26PR100003")
     assert len(history) == 1
     assert history[0]["rendered_html"] == "<p>frozen</p>"
-    assert history[0]["content_fingerprint"] == database.get_case_by_number("BACKFILL-1")["content_fingerprint"]
+    assert history[0]["content_fingerprint"] == database.get_case_by_number("26PR100003")["content_fingerprint"]
     assert history[0]["content_fingerprint"] is not None
     database.migrate_schema(mutable_db)
-    assert len(database.get_case_validation_history("BACKFILL-1")) == 1
+    assert len(database.get_case_validation_history("26PR100003")) == 1
 
 
 def test_fingerprint_schema_upgrade_runs_once_without_masking_later_content_changes(mutable_db):
     preset = _preset("dai")
     data = _case_input(database.get_preset_blocks(preset["id"]))
-    assert database.save_case("FP-MIGRATION-1", preset["id"], "", data, "<p>draft</p>")
+    assert database.save_case("26PR100006", preset["id"], "", data, "<p>draft</p>")
     conn = database.get_db_connection()
-    conn.execute("UPDATE Cases SET content_fingerprint = 'legacy-stage2-format' WHERE case_number = ?", ("FP-MIGRATION-1",))
+    conn.execute("UPDATE Cases SET content_fingerprint = 'legacy-stage2-format' WHERE case_number = ?", ("26PR100006",))
     conn.execute("DELETE FROM Schema_Migrations WHERE name = ?", ("stage2_relevant_content_fingerprint_v2",))
     conn.commit()
     conn.close()
 
     database.migrate_schema(mutable_db)
-    upgraded = database.get_case_by_number("FP-MIGRATION-1")["content_fingerprint"]
+    upgraded = database.get_case_by_number("26PR100006")["content_fingerprint"]
     assert upgraded == database.compute_case_content_fingerprint(preset["id"], data)
     assert upgraded != "legacy-stage2-format"
 
@@ -86,7 +86,7 @@ def test_fingerprint_schema_upgrade_runs_once_without_masking_later_content_chan
     conn.close()
     assert database.compute_case_content_fingerprint(preset["id"], data) != upgraded
     database.migrate_schema(mutable_db)
-    assert database.get_case_by_number("FP-MIGRATION-1")["content_fingerprint"] == upgraded
+    assert database.get_case_by_number("26PR100006")["content_fingerprint"] == upgraded
 
 
 def test_preset_link_fingerprint_upgrade_is_conservative_for_legacy_pending_cases(mutable_db):
@@ -95,10 +95,10 @@ def test_preset_link_fingerprint_upgrade_is_conservative_for_legacy_pending_case
     blocks = database.get_preset_blocks(gastric["id"])
     safe_legacy = {}
     explicit = {"block_instances": [{"block_id": blocks[0]["block_id"], "instance_no": blocks[0]["sort_order"]}]}
-    assert database.save_case("LINK-FP-SAFE-LEGACY", appendix["id"], "", safe_legacy, "<p>safe</p>")
-    assert database.save_case("LINK-FP-AMBIGUOUS", gastric["id"], "", explicit, "<p>ambiguous</p>")
-    assert database.save_case("LINK-FP-STALE", appendix["id"], "", safe_legacy, "<p>stale</p>")
-    assert database.save_case("LINK-FP-VALIDATED", gastric["id"], "", explicit, "<p>frozen</p>", status="validated")
+    assert database.save_case("26PR100008", appendix["id"], "", safe_legacy, "<p>safe</p>")
+    assert database.save_case("26PR100007", gastric["id"], "", explicit, "<p>ambiguous</p>")
+    assert database.save_case("26PR100009", appendix["id"], "", safe_legacy, "<p>stale</p>")
+    assert database.save_case("26PR100011", gastric["id"], "", explicit, "<p>frozen</p>", status="validated")
     conn = database.get_db_connection()
     safe_legacy_fingerprint = database.compute_case_content_fingerprint(
         appendix["id"], safe_legacy, conn, include_preset_link=False
@@ -119,15 +119,15 @@ def test_preset_link_fingerprint_upgrade_is_conservative_for_legacy_pending_case
     ) == ambiguous_legacy
     ambiguous_current = database.compute_case_content_fingerprint(gastric["id"], explicit, conn)
     assert ambiguous_current != ambiguous_legacy
-    conn.execute("UPDATE Cases SET content_fingerprint=? WHERE case_number='LINK-FP-SAFE-LEGACY'", (safe_legacy_fingerprint,))
-    conn.execute("UPDATE Cases SET content_fingerprint=? WHERE case_number='LINK-FP-AMBIGUOUS'", (ambiguous_legacy,))
-    conn.execute("UPDATE Cases SET content_fingerprint='already-stale' WHERE case_number='LINK-FP-STALE'")
+    conn.execute("UPDATE Cases SET content_fingerprint=? WHERE case_number='26PR100008'", (safe_legacy_fingerprint,))
+    conn.execute("UPDATE Cases SET content_fingerprint=? WHERE case_number='26PR100007'", (ambiguous_legacy,))
+    conn.execute("UPDATE Cases SET content_fingerprint='already-stale' WHERE case_number='26PR100009'")
     validated_before = dict(conn.execute(
-        "SELECT rendered_html,content_fingerprint FROM Cases WHERE case_number='LINK-FP-VALIDATED'"
+        "SELECT rendered_html,content_fingerprint FROM Cases WHERE case_number='26PR100011'"
     ).fetchone())
     history_before = dict(conn.execute(
         "SELECT rendered_html,content_fingerprint FROM Case_Validation_History "
-        "WHERE case_id=(SELECT id FROM Cases WHERE case_number='LINK-FP-VALIDATED')"
+        "WHERE case_id=(SELECT id FROM Cases WHERE case_number='26PR100011')"
     ).fetchone())
     conn.execute("DELETE FROM Schema_Migrations WHERE name='stage6_explicit_preset_link_fingerprint_v2'")
     conn.commit()
@@ -135,31 +135,31 @@ def test_preset_link_fingerprint_upgrade_is_conservative_for_legacy_pending_case
 
     database.migrate_schema(mutable_db)
 
-    assert database.get_case_by_number("LINK-FP-SAFE-LEGACY")["content_fingerprint"] == safe_current
+    assert database.get_case_by_number("26PR100008")["content_fingerprint"] == safe_current
     # The old fingerprint matches after the invisible unlink, but migration
     # must leave it mismatched from the new link-aware fingerprint.
-    assert database.get_case_by_number("LINK-FP-AMBIGUOUS")["content_fingerprint"] == ambiguous_legacy
-    assert database.get_case_by_number("LINK-FP-STALE")["content_fingerprint"] == "already-stale"
-    assert dict(database.get_case_by_number("LINK-FP-VALIDATED"))["rendered_html"] == validated_before["rendered_html"]
+    assert database.get_case_by_number("26PR100007")["content_fingerprint"] == ambiguous_legacy
+    assert database.get_case_by_number("26PR100009")["content_fingerprint"] == "already-stale"
+    assert dict(database.get_case_by_number("26PR100011"))["rendered_html"] == validated_before["rendered_html"]
     conn = database.get_db_connection()
     assert dict(conn.execute(
-        "SELECT rendered_html,content_fingerprint FROM Cases WHERE case_number='LINK-FP-VALIDATED'"
+        "SELECT rendered_html,content_fingerprint FROM Cases WHERE case_number='26PR100011'"
     ).fetchone()) == validated_before
     assert dict(conn.execute(
         "SELECT rendered_html,content_fingerprint FROM Case_Validation_History "
-        "WHERE case_id=(SELECT id FROM Cases WHERE case_number='LINK-FP-VALIDATED')"
+        "WHERE case_id=(SELECT id FROM Cases WHERE case_number='26PR100011')"
     ).fetchone()) == history_before
     conn.close()
 
     database.migrate_schema(mutable_db)
-    assert database.get_case_by_number("LINK-FP-AMBIGUOUS")["content_fingerprint"] == ambiguous_legacy
+    assert database.get_case_by_number("26PR100007")["content_fingerprint"] == ambiguous_legacy
 
 
 def test_preset_link_fingerprint_v2_invalidates_explicit_case_rebaselined_by_v1(mutable_db):
     gastric = _preset("gt")
     block = database.get_preset_blocks(gastric["id"])[0]
     explicit = {"block_instances": [{"block_id": block["block_id"], "instance_no": block["sort_order"]}]}
-    assert database.save_case("LINK-FP-V1-AMBIGUOUS", gastric["id"], "", explicit, "<p>draft</p>")
+    assert database.save_case("26PR100010", gastric["id"], "", explicit, "<p>draft</p>")
     conn = database.get_db_connection()
     # Simulate the superseded v1 migration having recorded its unsafe
     # link-aware baseline. v2 cannot recover history, so it must fail closed.
@@ -170,20 +170,20 @@ def test_preset_link_fingerprint_v2_invalidates_explicit_case_rebaselined_by_v1(
 
     database.migrate_schema(mutable_db)
 
-    assert database.get_case_by_number("LINK-FP-V1-AMBIGUOUS")["content_fingerprint"] is None
+    assert database.get_case_by_number("26PR100010")["content_fingerprint"] is None
 
 
 def test_validated_case_is_immutable_until_explicit_audited_return(mutable_db):
     preset = _preset("dai")
     blocks = database.get_preset_blocks(preset["id"])
     original = _case_input(blocks)
-    assert database.save_case("VALID-1", preset["id"], "ctx", original, "<p>validated</p>", status="validated")
-    assert not database.save_case("VALID-1", preset["id"], "changed", original, "<p>changed</p>", status="pending")
-    assert database.get_case_by_number("VALID-1")["rendered_html"] == "<p>validated</p>"
-    assert not database.return_case_to_pending("VALID-1", "")
-    assert database.return_case_to_pending("VALID-1", "validated by mistake")
-    assert database.get_case_by_number("VALID-1")["status"] == "pending"
-    assert len(database.get_case_validation_history("VALID-1")) == 1
+    assert database.save_case("26PR100016", preset["id"], "ctx", original, "<p>validated</p>", status="validated")
+    assert not database.save_case("26PR100016", preset["id"], "changed", original, "<p>changed</p>", status="pending")
+    assert database.get_case_by_number("26PR100016")["rendered_html"] == "<p>validated</p>"
+    assert not database.return_case_to_pending("26PR100016", "")
+    assert database.return_case_to_pending("26PR100016", "validated by mistake")
+    assert database.get_case_by_number("26PR100016")["status"] == "pending"
+    assert len(database.get_case_validation_history("26PR100016")) == 1
     conn = database.get_db_connection()
     event = conn.execute("SELECT transition, reason FROM Case_Status_History ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
@@ -200,14 +200,14 @@ def test_validation_and_return_transitions_roll_back_with_their_audit_rows(mutab
         BEGIN SELECT RAISE(ABORT, 'validation history failure'); END;
     """)
     conn.close()
-    assert not database.save_case("ATOMIC-VALIDATE-1", preset["id"], "", data, "<p>report</p>", status="validated")
-    assert database.get_case_by_number("ATOMIC-VALIDATE-1") is None
+    assert not database.save_case("26PR100002", preset["id"], "", data, "<p>report</p>", status="validated")
+    assert database.get_case_by_number("26PR100002") is None
 
     conn = database.get_db_connection()
     conn.execute("DROP TRIGGER fail_validation_history")
     conn.commit()
     conn.close()
-    assert database.save_case("ATOMIC-RETURN-1", preset["id"], "", data, "<p>report</p>", status="validated")
+    assert database.save_case("26PR100001", preset["id"], "", data, "<p>report</p>", status="validated")
     conn = database.get_db_connection()
     conn.executescript("""
         CREATE TRIGGER fail_return_history
@@ -216,8 +216,8 @@ def test_validation_and_return_transitions_roll_back_with_their_audit_rows(mutab
         BEGIN SELECT RAISE(ABORT, 'return history failure'); END;
     """)
     conn.close()
-    assert not database.return_case_to_pending("ATOMIC-RETURN-1", "test rollback")
-    assert database.get_case_by_number("ATOMIC-RETURN-1")["status"] == "validated"
+    assert not database.return_case_to_pending("26PR100001", "test rollback")
+    assert database.get_case_by_number("26PR100001")["status"] == "validated"
 
 
 def test_fingerprint_is_case_specific_and_composition_order_sensitive(mutable_db):
@@ -270,8 +270,8 @@ def test_fingerprint_tracks_each_composition_shape_but_not_preset_category(mutab
 def test_pending_save_records_fingerprint_and_content_revision(mutable_db):
     preset = _preset("dai")
     data = _case_input(database.get_preset_blocks(preset["id"]))
-    assert database.save_case("PENDING-FP-1", preset["id"], "", data, "<p>draft</p>")
-    saved = database.get_case_by_number("PENDING-FP-1")
+    assert database.save_case("26PR100012", preset["id"], "", data, "<p>draft</p>")
+    saved = database.get_case_by_number("26PR100012")
     assert saved["content_fingerprint"] == database.compute_case_content_fingerprint(preset["id"], data)
     assert saved["content_revision_id"] is not None
 
@@ -281,7 +281,7 @@ def test_save_rejects_a_fingerprint_that_became_stale_before_write(mutable_db):
     data = _case_input(database.get_preset_blocks(preset["id"]))
     stale_fingerprint = database.compute_case_content_fingerprint(preset["id"], data)
     assert database.save_case(
-        "STALE-FP-1", preset["id"], "", data, "<p>original</p>",
+        "26PR100015", preset["id"], "", data, "<p>original</p>",
         content_fingerprint=stale_fingerprint,
     )
     conn = database.get_db_connection()
@@ -290,10 +290,10 @@ def test_save_rejects_a_fingerprint_that_became_stale_before_write(mutable_db):
     conn.close()
 
     assert not database.save_case(
-        "STALE-FP-1", preset["id"], "", data, "<p>must not persist</p>",
+        "26PR100015", preset["id"], "", data, "<p>must not persist</p>",
         content_fingerprint=stale_fingerprint,
     )
-    assert database.get_case_by_number("STALE-FP-1")["rendered_html"] == "<p>original</p>"
+    assert database.get_case_by_number("26PR100015")["rendered_html"] == "<p>original</p>"
 
 
 def test_snapshot_round_trip_preserves_content_ids_and_composed_case(mutable_db):
@@ -301,7 +301,7 @@ def test_snapshot_round_trip_preserves_content_ids_and_composed_case(mutable_db)
     blocks = database.get_preset_blocks(gastric["id"])
     composed = _case_input([blocks[2], blocks[0], blocks[2]])
     composed["block_instances"][2]["instance_no"] = 1000
-    assert database.save_case("COMPOSED-SNAPSHOT-1", gastric["id"], "", composed, "<p>draft</p>")
+    assert database.save_case("26PR100004", gastric["id"], "", composed, "<p>draft</p>")
     before_ids = {row["key"]: row["id"] for row in database.get_all_editor_blocks()}
     conn = database.get_db_connection()
     before_quick_type_ids = [row["id"] for row in conn.execute("SELECT id FROM Quick_Type_Tokens ORDER BY id")]
@@ -323,14 +323,14 @@ def test_snapshot_round_trip_preserves_content_ids_and_composed_case(mutable_db)
     conn = database.get_db_connection()
     assert [row["id"] for row in conn.execute("SELECT id FROM Quick_Type_Tokens ORDER BY id")] == before_quick_type_ids
     conn.close()
-    assert database.get_case_by_number("COMPOSED-SNAPSHOT-1")["structured_input"] == composed
+    assert database.get_case_by_number("26PR100004")["structured_input"] == composed
 
 
 def test_snapshot_restore_preserves_detached_validated_case_without_live_reconstruction(mutable_db):
     content_editing.record_initial_snapshot("a" * 64)
     preset = _preset("dai")
     structured = _case_input(database.get_preset_blocks(preset["id"]))
-    assert database.save_case("DETACHED-VALIDATED-RESTORE", preset["id"], "", structured,
+    assert database.save_case("26PR100005", preset["id"], "", structured,
                               "<p>frozen detached artifact</p>", status="validated")
     deletion = content_studio.review(
         [content_studio.operation("delete", "Presets", "dai")],
@@ -338,7 +338,7 @@ def test_snapshot_restore_preserves_detached_validated_case_without_live_reconst
         summary="detach validated Preset for recovery",
     )
     content_changes.apply_review(deletion)
-    detached_before = dict(database.get_case_by_number("DETACHED-VALIDATED-RESTORE"))
+    detached_before = dict(database.get_case_by_number("26PR100005"))
     assert detached_before["preset_id"] is None
     snapshot = content_snapshot.export_content_snapshot()
 
@@ -352,14 +352,14 @@ def test_snapshot_restore_preserves_detached_validated_case_without_live_reconst
     assert ok, error
     assert content_snapshot.content_snapshot_hash(content_snapshot.export_content_snapshot()) == \
         content_snapshot.content_snapshot_hash(snapshot)
-    assert dict(database.get_case_by_number("DETACHED-VALIDATED-RESTORE")) == detached_before
+    assert dict(database.get_case_by_number("26PR100005")) == detached_before
     assert database.get_snippet_by_shortcut("restore_detached_temporary") is None
 
 
 def test_snapshot_refuses_changes_to_content_needed_by_saved_case(mutable_db):
     preset = _preset("dai")
     data = _case_input(database.get_preset_blocks(preset["id"]))
-    assert database.save_case("RESTORE-REFUSE-1", preset["id"], "", data, "<p>draft</p>")
+    assert database.save_case("26PR100014", preset["id"], "", data, "<p>draft</p>")
     snapshot = content_snapshot.export_content_snapshot()
     snapshot["tables"]["Blocks"] = [
         {**row, "micro_template": "different"} if row["key"] == "appendice" else row
@@ -373,7 +373,7 @@ def test_snapshot_refuses_changes_to_content_needed_by_saved_case(mutable_db):
 def test_snapshot_refuses_new_render_dependency_for_saved_case(mutable_db):
     preset = _preset("dai")
     data = _case_input(database.get_preset_blocks(preset["id"]))
-    assert database.save_case("RESTORE-ADDITION-1", preset["id"], "", data, "<p>draft</p>")
+    assert database.save_case("26PR100013", preset["id"], "", data, "<p>draft</p>")
     snapshot = content_snapshot.export_content_snapshot()
     changed = copy.deepcopy(snapshot)
     changed["tables"]["Fields"].append({
@@ -389,7 +389,7 @@ def test_snapshot_refuses_new_render_dependency_for_saved_case(mutable_db):
     changed["tables"]["Block_Fields"].sort(key=lambda row: (row["block_key"], row["field_key"]))
     ok, error = content_snapshot.restore_content_snapshot(changed)
     assert not ok
-    assert "RESTORE-ADDITION-1" in error
+    assert "26PR100013" in error
     assert content_snapshot.export_content_snapshot() == snapshot
 
 

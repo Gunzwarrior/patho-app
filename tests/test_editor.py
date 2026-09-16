@@ -49,7 +49,7 @@ def test_navigator_impact_uses_saved_case_composition(mutable_db):
     appendix = next(block for block in db_module.get_all_editor_blocks() if block["key"] == "appendice")
     gallbladder = next(block for block in db_module.get_all_editor_blocks() if block["key"] == "vesicule_biliaire")
     assert db_module.save_case(
-        "EDITOR-IMPACT-1", gastric["id"], "",
+        "26PR510001", gastric["id"], "",
         {"block_instances": [{"block_id": appendix["id"], "instance_no": 1000}]},
         "", status="pending",
     )

@@ -12,10 +12,10 @@ def _save(case_number, *, status):
 
 
 def test_worklist_offers_confirmed_deletion_only_for_pending_cases(mutable_db, monkeypatch):
-    _save("WORKLIST-PENDING", status="pending")
-    _save("WORKLIST-VALIDATED", status="validated")
-    pending = database.get_case_by_number("WORKLIST-PENDING")
-    validated = database.get_case_by_number("WORKLIST-VALIDATED")
+    _save("20001", status="pending")
+    _save("20002", status="validated")
+    pending = database.get_case_by_number("20001")
+    validated = database.get_case_by_number("20002")
 
     # AppTest does not populate multipage metadata required by the existing
     # cross-page Reopen link. It is outside this control's behavior.
@@ -25,29 +25,29 @@ def test_worklist_offers_confirmed_deletion_only_for_pending_cases(mutable_db, m
     delete_key = f"worklist_delete_{pending['id']}"
     assert app.button(key=delete_key).disabled
     assert not any(button.key == f"worklist_delete_{validated['id']}" for button in app.button)
-    assert any("WORKLIST-PENDING" in warning.value for warning in app.warning)
+    assert any(pending["case_number"] in warning.value for warning in app.warning)
 
     app.checkbox(key=f"worklist_delete_confirm_{pending['id']}").set_value(True).run()
     assert not app.button(key=delete_key).disabled
     app.button(key=delete_key).click().run()
 
     assert not app.exception
-    assert database.get_case_by_number("WORKLIST-PENDING") is None
-    assert database.get_case_by_number("WORKLIST-VALIDATED")["status"] == "validated"
+    assert database.get_case_by_number("20001") is None
+    assert database.get_case_by_number("20002")["status"] == "validated"
     assert any("permanently deleted" in success.value for success in app.success)
 
 
 def test_consecutive_deletions_keep_the_next_confirmation_control_open(mutable_db, monkeypatch):
-    _save("WORKLIST-FIRST", status="pending")
-    _save("WORKLIST-SECOND", status="pending")
-    first = database.get_case_by_number("WORKLIST-FIRST")
-    second = database.get_case_by_number("WORKLIST-SECOND")
+    _save("20003", status="pending")
+    _save("20004", status="pending")
+    first = database.get_case_by_number("20003")
+    second = database.get_case_by_number("20004")
 
     monkeypatch.setattr(st, "page_link", lambda *args, **kwargs: None)
     app = AppTest.from_file("pages/worklist.py").run()
     app.checkbox(key=f"worklist_delete_confirm_{first['id']}").set_value(True).run()
     app.button(key=f"worklist_delete_{first['id']}").click().run()
-    assert database.get_case_by_number("WORKLIST-FIRST") is None
+    assert database.get_case_by_number("20003") is None
 
     app.checkbox(key=f"worklist_delete_confirm_{second['id']}").set_value(True).run()
     assert app.session_state["_worklist_open_delete_case_id"] == second["id"]
@@ -55,4 +55,4 @@ def test_consecutive_deletions_keep_the_next_confirmation_control_open(mutable_d
     app.button(key=f"worklist_delete_{second['id']}").click().run()
 
     assert not app.exception
-    assert database.get_case_by_number("WORKLIST-SECOND") is None
+    assert database.get_case_by_number("20004") is None
