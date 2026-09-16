@@ -1,7 +1,7 @@
 # Stage 7 implementation plan — Quick Type Studio and bulk pending-case intake
 
-**Approved architectural/checkpoint contract; planning documentation only.
-Stage 7 implementation has not begun.**
+**Approved architectural/checkpoint contract. CP1–CP6 are complete and
+committed; CP7 is the final consolidation checkpoint.**
 
 Authority: `EDITOR_UI_PROPOSAL.md` Stage 7, the completed Stage 6 contract in
 `STAGE6_IMPLEMENTATION_PLAN.md`, and the accepted Stage 7 planning pass. The

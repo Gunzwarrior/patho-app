@@ -570,11 +570,6 @@ def prepare_bulk_review(source: bytes | str, delimiter: str, first_row_is_header
             conn.close()
 
 
-# Names intentionally describe preview/review, never persistence.
-prepare_bulk_preview = prepare_bulk_review
-prepare_batch_review = prepare_bulk_review
-
-
 def review_staleness(review: BatchReview, *, conn=None) -> str | None:
     """Return a safe stale reason without modifying the database.
 
@@ -705,7 +700,3 @@ def apply_bulk_review(
     finally:
         if owns_connection:
             conn.close()
-
-
-# Apply aliases intentionally name only the reviewed pending-creation action.
-apply_batch_review = apply_bulk_review

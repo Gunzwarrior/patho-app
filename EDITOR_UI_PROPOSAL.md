@@ -1,13 +1,16 @@
 # EDITOR_UI_PROPOSAL.md — Tier 3 Editor UI: post-review design
 
 Status: **Stages 1–6 are complete. Stage 6 / CP7 is accepted after final
-independent verification; Stage 7 has not begun.**
+independent verification. Stage 7 final acceptance is complete: its focused
+suite passed 96 tests; the final suite passed 597 tests in 351.87s; browser
+acceptance, `py_compile`, and `git diff --check` passed. Independent Sol
+review found no functional or safety violation; stale completion documentation
+was its sole remaining blocker.**
 
 This is the approved design baseline and forward roadmap. Stages 1–5 record
 the implemented safety foundation and optional reviewed AI workflow. Stages
-6–7 record the remaining product outcomes. Stage 6 follows its approved bounded
-implementation plan. Stage 7 is planned but not yet implemented; its approved
-architectural/checkpoint contract is `STAGE7_IMPLEMENTATION_PLAN.md`.
+6–7 record the implemented product outcomes. Stage 7 follows its approved
+architectural/checkpoint contract, `STAGE7_IMPLEMENTATION_PLAN.md`.
 
 Sol’s review identified real blockers in the previous write-capable stages.
 This revision accepts those findings where they are concrete, records
@@ -54,7 +57,7 @@ redesign.
 8. **Quick Type is the preferred high-speed path.** One configurable base
    Preset plus memorable modifiers is preferable to proliferating Presets such
    as `etc2`, `etc3`, and `etc5`. Quick Type authoring and safe bulk creation
-   of pending cases from `(case ID, Quick Type)` rows are explicit roadmap
+   of pending cases from `(case ID, Quick Type)` rows are completed product
    outcomes, not speculative extras.
 9. **AI context must be economical and private.** The AI export contains only
    the compact content/configuration context and authoring instructions needed

@@ -761,3 +761,25 @@ Focused cleanup checks passed **66 in 28.84s** across Stage 7 configuration,
 CP6 compatibility, Quick Type parser, and Quick Type Studio UI tests.
 `venv/bin/python -m py_compile` and `git diff --check` passed; the full suite
 was not rerun after this runtime-only cleanup.
+
+## Stage 7 CP7 consolidation — 2026-09-16
+
+CP7 retained the frozen CP1–CP6 architecture: one reviewed Content Studio
+authoring path for Quick Type and consistency rules; the transaction-neutral
+shared Case persistence primitive; and one reviewed, atomic, pending-only bulk
+workflow. The only production cleanup removed the three unused bulk-service
+compatibility aliases (`prepare_bulk_preview`, `prepare_batch_review`, and
+`apply_batch_review`); callers use `prepare_bulk_review` and
+`apply_bulk_review` exclusively. No schema, migration, CP6 runtime helper, or
+Stage 5 package-v1 behavior was added or changed.
+
+`tests/test_stage7_consolidation.py` locks the canonical bulk boundary and
+verifies the Editor and Bulk Intake UI modules contain no SQL mutation path.
+The CP5 recovery regression also restores both v1 and v2 content snapshots
+around an ordinary historic Case and a batch-linked Case, proving that Cases
+and `Case_Batch_Imports` survive content-only recovery unchanged.
+Final acceptance passed the focused Stage 7 suite (**96 passed**) and the full
+isolated suite (**597 passed in 351.87s**). Browser acceptance, `py_compile`,
+and `git diff --check` also passed. Independent Sol review found no functional
+or safety violation; stale completion documentation was the sole remaining
+blocker.

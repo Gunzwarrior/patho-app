@@ -7,8 +7,11 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 7 CP1–CP6 are accepted. CP6 is applied and browser-verified; do not
-begin CP7.**
+**Stage 7 final acceptance is complete. The focused Stage 7 suite passed 96
+tests; the final full suite passed 597 tests in 351.87s; browser acceptance,
+`py_compile`, and `git diff --check` passed. Independent Sol review found no
+functional or safety violation; stale completion documentation was the sole
+remaining blocker. This final Stage 7 closure is ready to commit.**
 The authoritative architecture and seven-checkpoint contract is
 `STAGE7_IMPLEMENTATION_PLAN.md`, based on the completed Stage 6 repository at
 `a23e917cc674481d6ab1e33f50ab0da13d1f33ab`. It preserves separate content-
@@ -596,9 +599,9 @@ not any later local work.
 ## Editor UI implementation boundary
 
 `EDITOR_UI_PROPOSAL.md` preserves the frozen implemented safety baseline and
-forward roadmap. Stages 1–6 are complete; Stage 7 follows the bounded
-contract in `STAGE7_IMPLEMENTATION_PLAN.md`. Do not begin a future checkpoint
-without following that approved contract.
+forward roadmap. Stages 1–7 are complete. Future work needs its own bounded
+authorization; Stage 7 remains governed by the completed contract in
+`STAGE7_IMPLEMENTATION_PLAN.md`.
 
 ### Stage 7 CP1 — configuration-authoring safety foundation
 
@@ -684,7 +687,14 @@ surface is therefore only the resulting content plus normal Quick Type,
 Content Studio, and reviewed-inverse machinery. Focused compatibility tests
 cover exact routing/report equivalence, archived pending reopening/fingerprint
 behavior, unchanged legacy Cases, generic rollback/stale review, and generic
-inverse/re-inverse/blocker behavior. CP7 remains unstarted.
+inverse/re-inverse/blocker behavior. CP7 then removed the unused bulk-service
+compatibility aliases, leaving one canonical preview/Apply workflow, and added
+source regressions for that boundary and for the absence of UI SQL mutation
+paths. No new schema or migration-specific runtime surface was added. Final
+acceptance passed the focused Stage 7 suite (**96 passed**), the full isolated
+suite (**597 passed in 351.87s**), browser acceptance, `py_compile`, and
+`git diff --check`. Independent Sol review found no functional/safety
+violation; stale completion documentation was the sole remaining blocker.
 
 ## Where to find detail
 

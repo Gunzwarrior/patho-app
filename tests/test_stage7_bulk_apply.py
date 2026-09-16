@@ -1,5 +1,6 @@
 """Stage 7 CP5: atomic creation of reviewed pending Cases."""
 
+import copy
 from dataclasses import replace
 import json
 import shutil
@@ -556,6 +557,48 @@ def test_batch_provenance_never_enters_content_ai_or_operational_exports(mutable
         }
     finally:
         conn.close()
+
+
+def test_v1_and_v2_snapshot_restore_preserve_historic_and_batch_cases(mutable_db):
+    """Content-only recovery must leave the CP5 operational schema untouched."""
+    source = "CP7-RESTORE-BATCH,dai37"
+    review = bulk_intake.prepare_bulk_review(source, ",", False)
+    assert review.applicable, review.errors
+    assert bulk_intake.apply_bulk_review(review, source, ",", False, confirmed=True)
+    prepared = review.rows[0]
+    assert database.save_case(
+        "CP7-RESTORE-HISTORIC", prepared.preset_id, prepared.clinical_info,
+        prepared.structured_input, prepared.rendered_html,
+    )
+
+    v2 = content_snapshot.export_content_snapshot(mutable_db)
+    v1 = copy.deepcopy(v2)
+    v1["format"] = content_snapshot.FORMAT_V1
+    for table in ("Fields", "Blocks", "Presets", "Snippets"):
+        for row in v1["tables"][table]:
+            row.pop("is_archived")
+    for row in v1["tables"]["Preset_Blocks"]:
+        row.pop("display_order")
+
+    conn = database.get_db_connection()
+    try:
+        cases_before = [dict(row) for row in conn.execute("SELECT * FROM Cases ORDER BY id")]
+        audits_before = [dict(row) for row in conn.execute("SELECT * FROM Case_Batch_Imports ORDER BY id")]
+    finally:
+        conn.close()
+
+    for snapshot in (v1, v2):
+        ok, error = content_snapshot.restore_content_snapshot(snapshot, db_name=mutable_db)
+        assert ok, error
+        conn = database.get_db_connection()
+        try:
+            assert [dict(row) for row in conn.execute("SELECT * FROM Cases ORDER BY id")] == cases_before
+            assert [dict(row) for row in conn.execute(
+                "SELECT * FROM Case_Batch_Imports ORDER BY id"
+            )] == audits_before
+            assert content_snapshot.export_content_snapshot(mutable_db) == v2
+        finally:
+            conn.close()
 
 
 def test_bulk_apply_page_resets_after_success_and_worklist_shows_the_case(mutable_db):
