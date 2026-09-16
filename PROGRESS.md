@@ -7,6 +7,23 @@ record from earlier rounds.
 
 ## Current status
 
+**PR4 — Production preflight: complete; ready for `v1.0.0-rc1`
+(2026-09-16).** The repository was clean before these documentation updates at
+`5482506 Add operational database backups`. PR1 and PR2 are complete and
+manually accepted; their planned combined targeted Sol High review/remediation
+cycle passed. Operational Worklist cleanup is complete: it is empty, with no
+development/test Cases and no `ZRET`. The accepted PR3 timer is enabled and
+active; its newest operational snapshot was recent and independently returned
+`PRAGMA integrity_check = ok`, and `latest_pending_cases.html` was current.
+The accepted restore and off-site recovery drill remains valid. The production
+LXC timezone was corrected and verified as `Europe/Paris`; Python
+`date.today()` and `datetime.now()` follow that local calendar. PathoPilot
+normally runs on port 8501. The manually verified access boundary permits
+home-LAN use and remote phone use through Tailscale, while direct public-IP
+access without Tailscale fails. The final isolated pre-RC suite passed **622
+tests in 355.05s (0:05:55)**. No complete historical browser review was
+required; PR4 manually exercised only PR1–PR3 functionality.
+
 **PR3 — Automatic operational database backup and pending rescue: complete and
 manually accepted (2026-09-16).**
 `backup_operational_db.py` is standalone stdlib tooling: an explicit live DB
@@ -41,8 +58,9 @@ PR1 + Stage 2 safety coverage passed 26 tests; Stage 7 bulk-provenance
 regression coverage passed 23 tests; `py_compile` and `git diff --check`
 passed. No operational database was opened or modified.
 
-**PR2 — Canonical Case accession identity: implemented locally, awaiting
-targeted manual acceptance (2026-09-16).** `database.normalize_case_number()`
+**PR2 — Canonical Case accession identity: complete and manually accepted
+(2026-09-16).** The planned combined targeted Sol High review/remediation cycle
+with PR1 passed. `database.normalize_case_number()`
 is the shared boundary: digits resolve to the current local calendar year's
 `YYPR<number>` accession; explicit `YYPR<number>` accepts outer whitespace
 and case variation; numeric leading zeroes are preserved; unsupported forms
@@ -52,8 +70,9 @@ lookup/lifecycle/persistence operations use canonical IDs. Quick Type grammar
 remains case-sensitive. No schema or operational-data migration was added.
 Focused isolated coverage passed 37 tests across PR2 identity, PR1 lifecycle/
 Worklist UI, Quick Type grammar, and Stage 7 consolidation; compilation and
-`git diff --check` passed. The full suite was deliberately not run. No
-operational database was opened or modified.
+`git diff --check` passed. The full suite was deliberately deferred until PR4,
+where the final isolated pre-RC suite passed 622 tests in 355.05s. No
+operational database was opened or modified during implementation verification.
 
 **Stage 7 final acceptance is complete. The focused Stage 7 suite passed 96
 tests; the final full suite passed 597 tests in 351.87s; browser acceptance,

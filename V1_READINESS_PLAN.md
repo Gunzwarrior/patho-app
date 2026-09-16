@@ -4,9 +4,10 @@
 
 The Editor/authoring program is complete.
 
-Stages 1–7 are implemented, reviewed, tested, and committed. No Stage 8 is planned.
+Stages 1–7 and PR0–PR4 are implemented, reviewed, tested, and committed. No
+Stage 8 is planned.
 
-The remaining work before first production use is a deliberately bounded **v1 production-readiness pass** focused on:
+The deliberately bounded **v1 production-readiness scope** was:
 
 1. permanent Case deletion;
 2. canonical Case identity across accession years;
@@ -14,7 +15,10 @@ The remaining work before first production use is a deliberately bounded **v1 pr
 4. final production preflight;
 5. a short release-candidate soak period.
 
-This plan is the authoritative roadmap for the transition from completed Stage 7 to `v1.0.0`.
+PR4 passed on 2026-09-16. The repository is ready to be marked
+`v1.0.0-rc1` and enter the defined release-candidate soak period. This plan
+remains the authoritative roadmap for the transition from completed Stage 7 to
+`v1.0.0`.
 
 Do not expand it into another general architecture or Editor program without an observed production need.
 
@@ -50,6 +54,8 @@ This baseline is the rollback point before PR1–PR3.
 ---
 
 # PR1 — Permanent pending-Case deletion
+
+**Status: complete and manually accepted (2026-09-16).**
 
 ## Product contract
 
@@ -150,6 +156,9 @@ Repository inspection found six validated development Cases expected to be recon
 ---
 
 # PR2 — Canonical Case accession identity
+
+**Status: complete and manually accepted (2026-09-16).** The planned combined
+PR1 + PR2 targeted Sol High review/remediation cycle also passed.
 
 PR2 begins only after PR1 and development/test Case cleanup.
 
@@ -318,6 +327,8 @@ Do not request another broad adversarial review of the entire application.
 
 # PR3 — Automatic operational database backup and pending rescue
 
+**Status: complete and manually accepted (2026-09-16).**
+
 PR3 should remain primarily external operational tooling, not a new PathoPilot subsystem.
 
 ## Goal
@@ -435,6 +446,8 @@ A successful restore drill matters more than an expensive independent model revi
 ---
 
 # PR4 — Production preflight
+
+**Status: complete (2026-09-16); ready for `v1.0.0-rc1`.**
 
 After PR1–PR3:
 
