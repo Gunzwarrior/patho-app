@@ -26,6 +26,20 @@ def test_normalizer_resolves_supported_short_and_explicit_forms_without_losing_z
             database.normalize_case_number(unsupported, current_date=january_2027)
 
 
+@pytest.mark.parametrize("unsupported", ("１２３", "٢٣", "²", "26PR１２３", "２６PR123"))
+def test_normalizer_rejects_unicode_numeral_lookalikes(unsupported):
+    with pytest.raises(database.CaseNumberError):
+        database.normalize_case_number(unsupported, current_date=date(2027, 1, 3))
+
+
+def test_normalized_ascii_accessions_are_idempotent():
+    january_2027 = date(2027, 1, 3)
+
+    for supplied in ("00123", "27PR00123", " 26pr00123 "):
+        canonical = database.normalize_case_number(supplied, current_date=january_2027)
+        assert database.normalize_case_number(canonical, current_date=january_2027) == canonical
+
+
 def test_case_id_normalization_does_not_change_quick_type_grammar(db):
     preset, overrides, error = quicktype.parse_quick_type("DAI37")
 
@@ -120,3 +134,15 @@ def test_bulk_intake_normalizes_before_duplicate_detection_review_and_apply(muta
     existing = bulk_intake.prepare_bulk_review(f"{short_id},dai\n", ",", False)
     assert not existing.applicable
     assert existing.errors == ("One or more Case IDs already exist and cannot be imported.",)
+
+
+def test_bulk_ascii_and_full_width_pair_is_refused_without_creating_cases(mutable_db):
+    review = bulk_intake.prepare_bulk_review("123,dai\n１２３,etc2\n", ",", False)
+
+    assert not review.applicable
+    assert review.errors == ("Row 2 has an unsupported Case ID.",)
+    conn = database.get_db_connection()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM Cases").fetchone()[0] == 0
+    finally:
+        conn.close()

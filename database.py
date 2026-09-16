@@ -14,7 +14,10 @@ from typing import Literal
 DB_NAME = os.environ.get("PATHOPILOT_DB_NAME", "pathology.db")
 
 CASE_ACCESSION_SITE = "PR"
-_EXPLICIT_CASE_ACCESSION_RE = re.compile(r"^(?P<year>\d{2})(?P<site>PR)(?P<number>\d+)$", re.IGNORECASE)
+_SHORT_CASE_NUMBER_RE = re.compile(r"^[0-9]+$")
+_EXPLICIT_CASE_ACCESSION_RE = re.compile(
+    r"^(?P<year>[0-9]{2})(?P<site>[Pp][Rr])(?P<number>[0-9]+)$"
+)
 
 
 class CaseNumberError(ValueError):
@@ -32,7 +35,7 @@ def normalize_case_number(value, *, current_date: date | None = None) -> str:
     if not isinstance(value, str):
         raise CaseNumberError("Case ID must be text.")
     candidate = value.strip()
-    if candidate.isdigit():
+    if _SHORT_CASE_NUMBER_RE.fullmatch(candidate):
         year = (current_date or date.today()).strftime("%y")
         return f"{year}{CASE_ACCESSION_SITE}{candidate}"
     match = _EXPLICIT_CASE_ACCESSION_RE.fullmatch(candidate)
