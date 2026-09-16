@@ -6,6 +6,12 @@ st.title("📋 Worklist")
 if delete_notice := st.session_state.pop("_worklist_delete_notice", None):
     st.success(delete_notice)
 
+
+def _keep_delete_control_open(case_id):
+    """Keep a remounted pending-Case deletion expander open on rerun."""
+    st.session_state["_worklist_open_delete_case_id"] = case_id
+
+
 c1, c2 = st.columns([1, 2])
 with c1:
     status_filter = st.selectbox("Status", ["All", "Pending", "Validated"])
@@ -49,7 +55,10 @@ for case in cases:
                 query_params={"reopen": case["case_number"]},
             )
         if case["status"] == "pending":
-            with st.expander("Permanent deletion"):
+            with st.expander(
+                "Permanent deletion",
+                expanded=st.session_state.get("_worklist_open_delete_case_id") == case["id"],
+            ):
                 st.warning(
                     f"Permanently delete pending Case '{case['case_number']}'? "
                     "Its saved report and Case history will be removed."
@@ -57,6 +66,8 @@ for case in cases:
                 confirmed = st.checkbox(
                     f"I understand that Case '{case['case_number']}' cannot be recovered",
                     key=f"worklist_delete_confirm_{case['id']}",
+                    on_change=_keep_delete_control_open,
+                    args=(case["id"],),
                 )
                 if st.button(
                     "🗑️ Delete permanently",
@@ -64,6 +75,7 @@ for case in cases:
                     disabled=not confirmed,
                 ):
                     if db.delete_pending_case(case["case_number"]):
+                        st.session_state.pop("_worklist_open_delete_case_id", None)
                         st.session_state["_worklist_delete_notice"] = (
                             f"Case '{case['case_number']}' was permanently deleted."
                         )
