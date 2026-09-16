@@ -7,6 +7,30 @@ record from earlier rounds.
 
 ## Current status
 
+**PR3 — Automatic operational database backup and pending rescue: complete and
+manually accepted (2026-09-16).**
+`backup_operational_db.py` is standalone stdlib tooling: an explicit live DB
+source is snapshotted through SQLite `Connection.backup()`, integrity-checked,
+then published as a uniquely named backup alongside atomically replaced
+`latest_pending_cases.html`. The rescue page is generated from saved fields in
+the verified backup only; it never re-renders against current content. Initial
+configurable retention is 288 ten-minute snapshots (48 hours) plus 14 older
+daily snapshots. The accepted root-run systemd timer is enabled in the
+unprivileged LXC: app/operational DB `/root/patho-app/pathology.db`, backup
+mount `/mnt/pathopilot-backups`, host backing path
+`/mnt/storage/work/anapath/pathopilot-backups`. An automatic timer-triggered
+backup completed successfully. Manual acceptance independently verified SQLite
+integrity, readable rescue output, recognizable pending-Case capture, and a
+disposable `/tmp/pathopilot-restore-drill.db` boot/reopen; normal PathoPilot
+then restarted successfully against the operational DB. The daily off-site
+Google Drive archive retains the newest snapshot and rescue HTML; a downloaded
+archive contained both, and its extracted SQLite snapshot independently passed
+integrity verification. Focused temporary-DB coverage
+passed 5 tests (independent readability, active WAL writer snapshot, bounded
+retention, failed rescue publication preservation, and disposable restore);
+`py_compile`, `systemd-analyze verify`, and `git diff --check` passed. No
+operational database was opened or modified during automated verification.
+
 **PR1 — Permanent pending-Case deletion: complete and manually accepted
 (2026-09-16).** A single transactional deletion operation resolves the Case
 inside its write transaction, refuses missing/currently validated Cases,

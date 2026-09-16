@@ -1,0 +1,11 @@
+[Unit]
+Description=Run PathoPilot backup every ten minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+Unit=pathopilot-backup.service
+
+[Install]
+WantedBy=timers.target

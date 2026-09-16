@@ -1,0 +1,10 @@
+[Unit]
+Description=PathoPilot SQLite backup and pending-Case rescue
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/pathopilot/backup.env
+ExecStart=/usr/bin/env python3 ${PATHOPILOT_APP_DIR}/backup_operational_db.py
