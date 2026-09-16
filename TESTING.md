@@ -739,3 +739,25 @@ outside content snapshots, AI context, and operational-review artifacts.
 The final browser matrix covered warning-free Apply → Worklist → Workspace
 reopen/edit/individual validation, warning acknowledgement, and stale/replaced
 review consent. CP6 and CP7 were not started.
+
+## Stage 7 CP6 acceptance and cleanup — 2026-09-16
+
+CP6 was successfully applied and browser-verified. The isolated full suite
+before cleanup passed **594 in 357.56s**. Browser sanity checks also passed.
+The temporary bounded migration
+assistant was then removed from the Editor and Content Studio runtime; no
+replacement state, flag, or migration-specific UI remains.
+
+Focused cleanup verification covers the applied-content routing contract and
+report equality against each legacy thyroid variant; unchanged `etc_bi`;
+untouched pending and validated legacy Cases; archived pending reconstruction/
+fingerprint stability; generic rollback/stale review; generic inverse/
+re-inverse and pending-Case inverse blockers; and absence of CP6 runtime
+surface. Its test-only fixture uses the permanent generic Content Studio
+operation grammar to model the applied rows, rather than retaining a product
+migration planner.
+
+Focused cleanup checks passed **66 in 28.84s** across Stage 7 configuration,
+CP6 compatibility, Quick Type parser, and Quick Type Studio UI tests.
+`venv/bin/python -m py_compile` and `git diff --check` passed; the full suite
+was not rerun after this runtime-only cleanup.

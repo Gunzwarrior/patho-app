@@ -7,7 +7,8 @@ record from earlier rounds.
 
 ## Current status
 
-**Stage 7 CP1–CP5 are accepted. Do not begin CP6 or CP7 without a new bounded task.**
+**Stage 7 CP1–CP6 are accepted. CP6 is applied and browser-verified; do not
+begin CP7.**
 The authoritative architecture and seven-checkpoint contract is
 `STAGE7_IMPLEMENTATION_PLAN.md`, based on the completed Stage 6 repository at
 `a23e917cc674481d6ab1e33f50ab0da13d1f33ab`. It preserves separate content-
@@ -670,8 +671,20 @@ The additive provenance link remains outside content snapshots, AI context,
 and operational-review artifacts. Bulk values retain Workspace widget-wire
 compatibility (including decimal text values), so Cases reopen, edit, and
 validate through ordinary Workspace/Worklist flows. Review replacement or
-staleness clears confirmation and warning consent fail-closed. CP6 and CP7
-remain unimplemented.
+staleness clears confirmation and warning consent fail-closed.
+
+### Stage 7 CP6 — conditional `etc0`–`etc5` consolidation
+
+CP6's reviewed migration has been applied and browser-verified: active `etc`
+uses Bethesda II for its bare code and fixed `0/1/2/3/5` lookup suffixes;
+`etc0`, `etc1`, `etc2`, `etc3`, and `etc5` are archived; `etc_bi` and existing
+Cases remain unchanged. The one-off migration assistant and all associated
+runtime planner/evidence code were removed after use. The permanent product
+surface is therefore only the resulting content plus normal Quick Type,
+Content Studio, and reviewed-inverse machinery. Focused compatibility tests
+cover exact routing/report equivalence, archived pending reopening/fingerprint
+behavior, unchanged legacy Cases, generic rollback/stale review, and generic
+inverse/re-inverse/blocker behavior. CP7 remains unstarted.
 
 ## Where to find detail
 
