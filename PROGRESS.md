@@ -7,11 +7,21 @@ record from earlier rounds.
 
 ## Current status
 
+**PR1 — Permanent pending-Case deletion: complete and manually accepted
+(2026-09-16).** A single transactional deletion operation resolves the Case
+inside its write transaction, refuses missing/currently validated Cases,
+cleans Case-owned history/reference rows, and removes batch provenance only
+after its final referencing Case is gone. Worklist exposes deliberate,
+pending-only deletion with immediate disappearance after success. Isolated
+PR1 + Stage 2 safety coverage passed 26 tests; Stage 7 bulk-provenance
+regression coverage passed 23 tests; `py_compile` and `git diff --check`
+passed. No operational database was opened or modified. PR2 has not begun.
+
 **Stage 7 final acceptance is complete. The focused Stage 7 suite passed 96
 tests; the final full suite passed 597 tests in 351.87s; browser acceptance,
 `py_compile`, and `git diff --check` passed. Independent Sol review found no
 functional or safety violation; stale completion documentation was the sole
-remaining blocker. This final Stage 7 closure is ready to commit.**
+remaining blocker.**
 The authoritative architecture and seven-checkpoint contract is
 `STAGE7_IMPLEMENTATION_PLAN.md`, based on the completed Stage 6 repository at
 `a23e917cc674481d6ab1e33f50ab0da13d1f33ab`. It preserves separate content-

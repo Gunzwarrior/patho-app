@@ -1079,6 +1079,50 @@ def get_case_status_history(case_number):
     return [dict(row) for row in rows]
 
 
+def delete_pending_case(case_number):
+    """Permanently delete one currently pending Case and its owned records.
+
+    A validated Case must first take the existing audited return-to-pending
+    path.  Batch-import provenance belongs to an aggregate import, so its row
+    is removed only after the Case is gone and only when no Cases still refer
+    to it.
+    """
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        case = conn.execute(
+            "SELECT id, status, batch_import_id FROM Cases WHERE case_number = ?", (case_number,)
+        ).fetchone()
+        if not case or case["status"] != "pending":
+            conn.rollback()
+            return False
+
+        # These tables own Case-level audit/history records and have no
+        # cascading foreign keys.  Remove them before their parent Case.
+        conn.execute("DELETE FROM Case_Content_Reference_Changes WHERE case_id = ?", (case["id"],))
+        conn.execute("DELETE FROM Case_Validation_History WHERE case_id = ?", (case["id"],))
+        conn.execute("DELETE FROM Case_Status_History WHERE case_id = ?", (case["id"],))
+        conn.execute("DELETE FROM Cases WHERE id = ?", (case["id"],))
+
+        if case["batch_import_id"] is not None:
+            conn.execute(
+                """DELETE FROM Case_Batch_Imports
+                   WHERE id = ?
+                     AND NOT EXISTS (
+                         SELECT 1 FROM Cases WHERE batch_import_id = ?
+                     )""",
+                (case["batch_import_id"], case["batch_import_id"]),
+            )
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        if conn.in_transaction:
+            conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def return_case_to_pending(case_number, reason):
     """The only allowed validated -> pending transition, with an audit row.
 

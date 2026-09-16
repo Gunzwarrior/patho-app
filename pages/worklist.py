@@ -3,6 +3,9 @@ import database as db
 
 st.title("📋 Worklist")
 
+if delete_notice := st.session_state.pop("_worklist_delete_notice", None):
+    st.success(delete_notice)
+
 c1, c2 = st.columns([1, 2])
 with c1:
     status_filter = st.selectbox("Status", ["All", "Pending", "Validated"])
@@ -45,3 +48,27 @@ for case in cases:
                 "pages/workspace.py", label="Reopen", icon="🔓",
                 query_params={"reopen": case["case_number"]},
             )
+        if case["status"] == "pending":
+            with st.expander("Permanent deletion"):
+                st.warning(
+                    f"Permanently delete pending Case '{case['case_number']}'? "
+                    "Its saved report and Case history will be removed."
+                )
+                confirmed = st.checkbox(
+                    f"I understand that Case '{case['case_number']}' cannot be recovered",
+                    key=f"worklist_delete_confirm_{case['id']}",
+                )
+                if st.button(
+                    "🗑️ Delete permanently",
+                    key=f"worklist_delete_{case['id']}",
+                    disabled=not confirmed,
+                ):
+                    if db.delete_pending_case(case["case_number"]):
+                        st.session_state["_worklist_delete_notice"] = (
+                            f"Case '{case['case_number']}' was permanently deleted."
+                        )
+                        st.rerun()
+                    else:
+                        st.error(
+                            "Could not delete this Case. It may no longer be pending; refresh the Worklist."
+                        )
